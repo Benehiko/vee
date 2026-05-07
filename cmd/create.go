@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Benehiko/vee/images"
+	"github.com/Benehiko/vee/sshkeys"
 	"github.com/Benehiko/vee/templates"
 	"github.com/Benehiko/vee/vm"
 	"github.com/spf13/cobra"
@@ -67,6 +68,18 @@ Use --distro-version latest (default) or a specific version string.`,
 				}
 			}
 		}
+
+		// Always inject the vee-managed keypair so VMs are accessible without
+		// requiring the user to pass --ssh-keys on every create.
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("get home dir: %w", err)
+		}
+		veePubKey, _, err := sshkeys.EnsureVeeKeyPair(home)
+		if err != nil {
+			return fmt.Errorf("vee keypair: %w", err)
+		}
+		sshKeys = append(sshKeys, veePubKey)
 
 		var cfg *vm.VMConfig
 
