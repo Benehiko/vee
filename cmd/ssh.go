@@ -1,0 +1,234 @@
+package cmd
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"syscall"
+
+	"github.com/Benehiko/vee/provider"
+	"github.com/Benehiko/vee/vm"
+	"github.com/spf13/cobra"
+)
+
+var (
+	sshUser       string
+	sshIdentity   string
+	sshExtraFlags []string
+)
+
+var sshCmd = &cobra.Command{
+	Use:               "ssh <name>",
+	Short:             "Open an SSH session into a running VM",
+	ValidArgsFunction: completeVMNames,
+	Long: `Connects to a running VM via SSH.
+
+For headless VMs with a port-forward (--ssh-port), connects to 127.0.0.1 on
+that port. For bridge-mode VMs, resolves the guest IP from the ARP/neighbour
+table using the VM's MAC address.
+
+The username defaults to the cloud-init user configured at creation time.
+Override with --user. Pass extra ssh(1) flags after --.
+
+Examples:
+  vee ssh myvm
+  vee ssh myvm --user root
+  vee ssh myvm --identity ~/.ssh/id_ed25519
+  vee ssh myvm -- -L 8080:localhost:8080`,
+	Args: cobra.MinimumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		name := args[0]
+		extra := args[1:]
+
+		mgr := vm.NewManager(prov)
+		entries, err := mgr.List()
+		if err != nil {
+			return err
+		}
+
+		var entry *vm.ListEntry
+		for _, e := range entries {
+			if e.Config.Name == name {
+				entry = e
+				break
+			}
+		}
+		if entry == nil {
+			return fmt.Errorf("VM %q not found", name)
+		}
+		if !entry.State.Running {
+			return fmt.Errorf("VM %q is not running", name)
+		}
+
+		user := sshUser
+		if user == "" && entry.Config.CloudInit != nil && entry.Config.CloudInit.User != "" {
+			user = entry.Config.CloudInit.User
+		}
+
+		var host string
+		var port int
+
+		switch {
+		case entry.State.SSHPort > 0:
+			// Headless user-mode port-forward.
+			host = "127.0.0.1"
+			port = entry.State.SSHPort
+
+		case entry.Config.NIC.Mode == "bridge" || entry.Config.NIC.Mode == "":
+			// Bridge mode — try to resolve IP from neighbour table via MAC.
+			mac := entry.Config.NIC.MAC
+			if mac == "" {
+				return fmt.Errorf("VM %q has no MAC address recorded; cannot resolve IP", name)
+			}
+			ip, resolveErr := resolveIPFromMAC(mac)
+			if resolveErr != nil {
+				return fmt.Errorf("could not resolve IP for VM %q (MAC %s): %w\nTry: ssh %s@<ip>", name, mac, resolveErr, userPrefix(user))
+			}
+			host = ip
+			port = 22
+
+		default:
+			return fmt.Errorf("VM %q has no SSH port and is not on a bridge network; check --ssh-port or --nic-mode", name)
+		}
+
+		sshArgs := buildSSHArgs(user, host, port, sshIdentity, extra, sshExtraFlags)
+
+		sshBin, err := exec.LookPath("ssh")
+		if err != nil {
+			return fmt.Errorf("ssh not found in PATH: %w", err)
+		}
+
+		// Replace the current process with ssh so signals flow naturally.
+		return syscall.Exec(sshBin, append([]string{"ssh"}, sshArgs...), os.Environ())
+	},
+}
+
+func buildSSHArgs(user, host string, port int, identity string, positional, extra []string) []string {
+	var args []string
+	if port != 22 {
+		args = append(args, "-p", fmt.Sprintf("%d", port))
+	}
+	if identity != "" {
+		args = append(args, "-i", identity)
+	}
+	args = append(args, extra...)
+	args = append(args, positional...)
+
+	dest := host
+	if user != "" {
+		dest = user + "@" + host
+	}
+	args = append(args, dest)
+	return args
+}
+
+// resolveIPFromMAC scans the kernel neighbour table for a matching MAC address.
+func resolveIPFromMAC(mac string) (string, error) {
+	out, err := exec.Command("ip", "neigh").Output()
+	if err != nil {
+		return "", fmt.Errorf("ip neigh: %w", err)
+	}
+	return parseIPNeigh(string(out), mac)
+}
+
+// parseIPNeigh extracts the IP for the given MAC from `ip neigh` output.
+// Each line looks like: <ip> dev <iface> lladdr <mac> <state>
+func parseIPNeigh(output, wantMAC string) (string, error) {
+	for _, line := range splitLines(output) {
+		fields := splitFields(line)
+		// Minimum: ip dev iface lladdr mac state
+		for i, f := range fields {
+			if f == "lladdr" && i+1 < len(fields) {
+				if equalMAC(fields[i+1], wantMAC) && len(fields) > 0 {
+					return fields[0], nil
+				}
+			}
+		}
+	}
+	return "", fmt.Errorf("MAC %s not found in neighbour table", wantMAC)
+}
+
+func equalMAC(a, b string) bool {
+	normalize := func(s string) string {
+		out := make([]byte, 0, len(s))
+		for i := 0; i < len(s); i++ {
+			c := s[i]
+			if c != ':' && c != '-' {
+				if c >= 'A' && c <= 'F' {
+					c += 32
+				}
+				out = append(out, c)
+			}
+		}
+		return string(out)
+	}
+	return normalize(a) == normalize(b)
+}
+
+func userPrefix(user string) string {
+	if user == "" {
+		return ""
+	}
+	return user + "@"
+}
+
+func splitLines(s string) []string {
+	var lines []string
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\n' {
+			lines = append(lines, s[start:i])
+			start = i + 1
+		}
+	}
+	if start < len(s) {
+		lines = append(lines, s[start:])
+	}
+	return lines
+}
+
+func splitFields(s string) []string {
+	var fields []string
+	inField := false
+	start := 0
+	for i := 0; i < len(s); i++ {
+		isSpace := s[i] == ' ' || s[i] == '\t'
+		if !isSpace && !inField {
+			start = i
+			inField = true
+		} else if isSpace && inField {
+			fields = append(fields, s[start:i])
+			inField = false
+		}
+	}
+	if inField {
+		fields = append(fields, s[start:])
+	}
+	return fields
+}
+
+func completeVMNames(_ *cobra.Command, args []string, _ string) ([]string, cobra.ShellCompDirective) {
+	if len(args) > 0 {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	p, err := provider.NewProviderSilent()
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveError
+	}
+	mgr := vm.NewManager(p)
+	entries, err := mgr.List()
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveError
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Config.Name)
+	}
+	return names, cobra.ShellCompDirectiveNoFileComp
+}
+
+func init() {
+	sshCmd.Flags().StringVarP(&sshUser, "user", "u", "", "SSH username (default: cloud-init user)")
+	sshCmd.Flags().StringVarP(&sshIdentity, "identity", "i", "", "SSH identity file (private key)")
+	sshCmd.Flags().StringArrayVar(&sshExtraFlags, "ssh-flag", nil, "Extra flags passed to ssh(1) (repeatable)")
+}
