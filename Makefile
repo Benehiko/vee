@@ -6,7 +6,7 @@ GO        := go
 GOFLAGS   := -mod=vendor
 LDFLAGS   := -s -w
 
-.PHONY: all build install clean
+.PHONY: all build install clean e2e
 
 all: build
 
@@ -100,6 +100,9 @@ _add_to_path:
 	  echo "Added to $$RCFILE"; \
 	  echo "Reload with:  $$RELOAD"; \
 	fi
+
+e2e: build
+	VEE_E2E=1 VEE_BIN=$(CURDIR)/$(BINARY) $(GO) test $(GOFLAGS) -v -timeout 20m -tags e2e ./e2e/...
 
 clean:
 	rm -f $(BINARY)
