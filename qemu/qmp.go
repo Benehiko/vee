@@ -119,10 +119,18 @@ func (c *QMPClient) GuestPing() error {
 // QMPRawCounters holds cumulative I/O counters from a single QMP poll.
 type QMPRawCounters struct {
 	BalloonActual uint64
-	DiskRdBytes   uint64
-	DiskWrBytes   uint64
-	NetRxBytes    uint64
-	NetTxBytes    uint64
+	// CPUNs is total vCPU wall-clock nanoseconds across all vCPUs (query-vcpu-time).
+	// Zero if the guest does not support the command.
+	CPUNs       uint64
+	DiskRdBytes uint64
+	DiskWrBytes uint64
+	NetRxBytes  uint64
+	NetTxBytes  uint64
+}
+
+type vcpuTimeEntry struct {
+	// wall-clock time this vCPU has been scheduled, in nanoseconds
+	WallNs uint64 `json:"wall-time-ns"`
 }
 
 type balloonResp struct {
@@ -141,7 +149,7 @@ type netStatEntry struct {
 	TxBytes uint64 `json:"tx-bytes"`
 }
 
-// QueryRaw fetches balloon, block, and net stats and returns raw cumulative counters.
+// QueryRaw fetches balloon, block, net, and vCPU-time stats and returns raw cumulative counters.
 func (c *QMPClient) QueryRaw() (QMPRawCounters, error) {
 	var out QMPRawCounters
 
@@ -150,6 +158,16 @@ func (c *QMPClient) QueryRaw() (QMPRawCounters, error) {
 		var b balloonResp
 		if json.Unmarshal(balloonRaw, &b) == nil {
 			out.BalloonActual = b.Actual
+		}
+	}
+
+	vcpuRaw, err := c.execute("query-vcpu-time", nil)
+	if err == nil {
+		var vcpus []vcpuTimeEntry
+		if json.Unmarshal(vcpuRaw, &vcpus) == nil {
+			for _, v := range vcpus {
+				out.CPUNs += v.WallNs
+			}
 		}
 	}
 

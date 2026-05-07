@@ -68,6 +68,12 @@ func (m tuiModel) View() string {
 	sb.WriteString(styleDim.Render(fmt.Sprintf("  up %s", m.elapsed)))
 	sb.WriteString("\n\n")
 
+	sb.WriteString(styleLabel.Render("CPU"))
+	cpuPct := m.stats.CPUPercent * 100
+	sb.WriteString(bar(uint64(cpuPct*10), 1000))
+	fmt.Fprintf(&sb, "  %.1f%%", cpuPct)
+	sb.WriteString("\n\n")
+
 	sb.WriteString(styleLabel.Render("Memory"))
 	sb.WriteString(fmtBytes(m.stats.MemActual))
 	sb.WriteString("\n\n")

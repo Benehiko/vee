@@ -39,6 +39,7 @@ func (p *Poller) loop(ctx context.Context, ch chan<- Stats, interval time.Durati
 	defer ticker.Stop()
 
 	var prev qemu.QMPRawCounters
+	var prevTime time.Time
 	first := true
 
 	for {
@@ -46,24 +47,32 @@ func (p *Poller) loop(ctx context.Context, ch chan<- Stats, interval time.Durati
 		case <-ctx.Done():
 			close(ch)
 			return
-		case <-ticker.C:
+		case t := <-ticker.C:
 			cur, err := p.client.QueryRaw()
 			if err != nil {
 				continue
 			}
 			if first {
 				prev = cur
+				prevTime = t
 				first = false
 				continue
 			}
-			ch <- countersToStats(prev, cur)
+			ch <- countersToStats(prev, cur, t.Sub(prevTime))
 			prev = cur
+			prevTime = t
 		}
 	}
 }
 
-func countersToStats(prev, cur qemu.QMPRawCounters) Stats {
+func countersToStats(prev, cur qemu.QMPRawCounters, elapsed time.Duration) Stats {
+	var cpuPercent float64
+	if cur.CPUNs > 0 && elapsed > 0 {
+		deltaNs := float64(delta(prev.CPUNs, cur.CPUNs))
+		cpuPercent = deltaNs / float64(elapsed.Nanoseconds())
+	}
 	return Stats{
+		CPUPercent:     cpuPercent,
 		MemActual:      cur.BalloonActual,
 		DiskReadBytes:  delta(prev.DiskRdBytes, cur.DiskRdBytes),
 		DiskWriteBytes: delta(prev.DiskWrBytes, cur.DiskWrBytes),

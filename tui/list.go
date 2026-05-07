@@ -29,6 +29,7 @@ var (
 	colTemplate     = lipgloss.NewStyle().Width(14)
 	colStatus       = lipgloss.NewStyle().Width(10)
 	colPID          = lipgloss.NewStyle().Width(8)
+	colCPU          = lipgloss.NewStyle().Width(8)
 	colMem          = lipgloss.NewStyle().Width(10)
 	colDisk         = lipgloss.NewStyle().Width(16)
 	colNet          = lipgloss.NewStyle().Width(16)
@@ -36,9 +37,11 @@ var (
 )
 
 type listEntry struct {
-	config *vm.VMConfig
-	state  *vm.VMState
-	stats  monitor.Stats
+	config   *vm.VMConfig
+	state    *vm.VMState
+	stats    monitor.Stats
+	prevRaw  qemu.QMPRawCounters
+	prevPoll time.Time
 }
 
 type listModel struct {
@@ -55,8 +58,9 @@ type (
 	refreshMsg    []listEntry
 	refreshErrMsg string
 	statsMsg2     struct {
-		name  string
-		stats monitor.Stats
+		name     string
+		raw      qemu.QMPRawCounters
+		polledAt time.Time
 	}
 	tickMsg2  time.Time
 	actionErr string
@@ -140,9 +144,32 @@ func (m listModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case statsMsg2:
 		for i, e := range m.entries {
-			if e.config.Name == msg.name {
-				m.entries[i].stats = msg.stats
+			if e.config.Name != msg.name {
+				continue
 			}
+			cur := msg.raw
+			prev := e.prevRaw
+			var cpuPct float64
+			if cur.CPUNs > 0 && !e.prevPoll.IsZero() {
+				elapsed := msg.polledAt.Sub(e.prevPoll)
+				if elapsed > 0 {
+					deltaNs := float64(cur.CPUNs) - float64(prev.CPUNs)
+					if deltaNs < 0 {
+						deltaNs = float64(cur.CPUNs)
+					}
+					cpuPct = deltaNs / float64(elapsed.Nanoseconds())
+				}
+			}
+			m.entries[i].stats = monitor.Stats{
+				CPUPercent:     cpuPct,
+				MemActual:      cur.BalloonActual,
+				DiskReadBytes:  deltau(prev.DiskRdBytes, cur.DiskRdBytes),
+				DiskWriteBytes: deltau(prev.DiskWrBytes, cur.DiskWrBytes),
+				NetRxBytes:     deltau(prev.NetRxBytes, cur.NetRxBytes),
+				NetTxBytes:     deltau(prev.NetTxBytes, cur.NetTxBytes),
+			}
+			m.entries[i].prevRaw = cur
+			m.entries[i].prevPoll = msg.polledAt
 		}
 
 	case tickMsg2:
@@ -167,6 +194,7 @@ func (m listModel) View() string {
 		colTemplate.Render("TEMPLATE") +
 		colStatus.Render("STATUS") +
 		colPID.Render("PID") +
+		colCPU.Render("CPU%") +
 		colMem.Render("MEM") +
 		colDisk.Render("DISK R/W") +
 		colNet.Render("NET Rx/Tx") +
@@ -232,6 +260,12 @@ func renderRow(e listEntry) string {
 	}
 	pidCol := colPID.Render(pid)
 
+	cpuStr := "-"
+	if e.state.Running && e.stats.CPUPercent > 0 {
+		cpuStr = fmt.Sprintf("%.1f%%", e.stats.CPUPercent*100)
+	}
+	cpuCol := colCPU.Render(cpuStr)
+
 	mem := colMem.Render(fmtBytes2(e.stats.MemActual))
 
 	disk := colDisk.Render(
@@ -249,7 +283,7 @@ func renderRow(e listEntry) string {
 	}
 	sshCol := colSSH.Render(sshVal)
 
-	return name + tmpl + status + pidCol + mem + disk + net + sshCol
+	return name + tmpl + status + pidCol + cpuCol + mem + disk + net + sshCol
 }
 
 func (m listModel) selected() *listEntry {
@@ -297,13 +331,7 @@ func (m listModel) doStats() tea.Cmd {
 			if err != nil {
 				return nil
 			}
-			return statsMsg2{name: name, stats: monitor.Stats{
-				MemActual:      raw.BalloonActual,
-				DiskReadBytes:  raw.DiskRdBytes,
-				DiskWriteBytes: raw.DiskWrBytes,
-				NetRxBytes:     raw.NetRxBytes,
-				NetTxBytes:     raw.NetTxBytes,
-			}}
+			return statsMsg2{name: name, raw: raw, polledAt: time.Now()}
 		})
 	}
 	return tea.Batch(cmds...)
@@ -363,4 +391,11 @@ func truncate(s string, max int) string {
 		return s
 	}
 	return s[:max-1] + "…"
+}
+
+func deltau(prev, cur uint64) uint64 {
+	if cur >= prev {
+		return cur - prev
+	}
+	return cur
 }
