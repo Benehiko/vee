@@ -41,7 +41,7 @@ func Execute() {
 }
 
 func init() {
-	rootCmd.PersistentFlags().StringVar(&configPath, "config", "", "config file (default ~/.config/vee/config.yaml)")
+	rootCmd.PersistentFlags().StringVar(&configPath, "config", "", "config file (default ~/.vee/config.yaml)")
 	rootCmd.AddCommand(createCmd)
 	rootCmd.AddCommand(startCmd)
 	rootCmd.AddCommand(stopCmd)

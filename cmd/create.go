@@ -6,28 +6,33 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Benehiko/vee/images"
 	"github.com/Benehiko/vee/templates"
 	"github.com/Benehiko/vee/vm"
 	"github.com/spf13/cobra"
 )
 
 var (
-	createTemplate    string
-	createMemory      string
-	createCPUs        int
-	createDisk        string
-	createNicMode     string
-	createNicBridge   string
-	createSpicePort   int
-	createUEFI        bool
-	createGPUMode     string
-	createGPUPCI      string
-	createAntiDetect  bool
-	createVirtiofsDir string
-	createVirtiofsTag string
-	createSSHKeyFile  string
-	createUser        string
-	createSSHShare    bool
+	createTemplate      string
+	createMemory        string
+	createCPUs          int
+	createDisk          string
+	createNicMode       string
+	createNicBridge     string
+	createSpicePort     int
+	createUEFI          bool
+	createGPUMode       string
+	createGPUPCI        string
+	createAntiDetect    bool
+	createVirtiofsDir   string
+	createVirtiofsTag   string
+	createSSHKeyFile    string
+	createUser          string
+	createSSHShare      bool
+	createHeadless      bool
+	createSSHPort       int
+	createDistro        string
+	createDistroVersion string
 )
 
 var createCmd = &cobra.Command{
@@ -39,9 +44,12 @@ Templates apply sane defaults automatically:
   ubuntu-server  Ubuntu 24.04 Server, UEFI, user mode NIC
   gaming         GPU passthrough, 16G RAM, 6 CPUs, anti-detect, bridge NIC
   torrent        Lightweight 4G / 2 CPUs, SPICE, qbittorrent-nox via cloud-init
-  devbox         8G / 4 CPUs, Docker + zsh via cloud-init
-  server         8G / 2 CPUs, openssh + ufw + fail2ban via cloud-init
-  windows        24G / 4 CPUs, UEFI secboot, TPM 2.0`,
+  devbox         8G / 4 CPUs, Docker + zsh via cloud-init (supports --distro)
+  server         8G / 2 CPUs, openssh + ufw + fail2ban via cloud-init (supports --distro)
+  windows        24G / 4 CPUs, UEFI secboot, TPM 2.0
+
+Supported distros for devbox/server: ubuntu, arch, fedora
+Use --distro-version latest (default) or a specific version string.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
@@ -68,11 +76,29 @@ Templates apply sane defaults automatically:
 		case "torrent":
 			cfg = templates.NewTorrentConfig(prov, name, createSpicePort)
 		case "devbox":
-			cfg = templates.NewDevboxConfig(prov, name, sshKeys)
+			var err error
+			cfg, err = templates.NewDevboxConfig(cmd.Context(), prov, name, sshKeys, createDistro, createDistroVersion)
+			if err != nil {
+				return err
+			}
 		case "server":
-			cfg = templates.NewServerConfig(prov, name, sshKeys)
+			var err error
+			cfg, err = templates.NewServerConfig(cmd.Context(), prov, name, sshKeys, createDistro, createDistroVersion)
+			if err != nil {
+				return err
+			}
 		case "windows":
 			cfg = templates.NewWindowsConfig(prov, name)
+		case "ubuntu-server":
+			version := images.UbuntuVersion(createDistroVersion)
+			if createDistroVersion == "" || createDistroVersion == "latest" {
+				version = images.KnownUbuntuVersions[0]
+			}
+			var err error
+			cfg, err = templates.NewUbuntuServerConfig(cmd.Context(), prov, version, name)
+			if err != nil {
+				return err
+			}
 		default:
 			cfg = defaultConfig(name)
 		}
@@ -131,6 +157,12 @@ Templates apply sane defaults automatically:
 		if cmd.Flags().Changed("ssh-share") {
 			cfg.SSHShare = createSSHShare
 		}
+		if cmd.Flags().Changed("headless") {
+			cfg.Headless = createHeadless
+		}
+		if cmd.Flags().Changed("ssh-port") && createSSHPort > 0 {
+			cfg.SSHPort = createSSHPort
+		}
 
 		mgr := vm.NewManager(prov)
 		if err := mgr.Create(cmd.Context(), cfg); err != nil {
@@ -182,4 +214,8 @@ func init() {
 	createCmd.Flags().StringVar(&createSSHKeyFile, "ssh-keys", "", "Path to file containing SSH public keys (one per line)")
 	createCmd.Flags().StringVar(&createUser, "user", "", "Default cloud-init username (overrides template default)")
 	createCmd.Flags().BoolVar(&createSSHShare, "ssh-share", false, "Enable SSH agent sharing into VM via AF_VSOCK")
+	createCmd.Flags().BoolVar(&createHeadless, "headless", false, "Run VM headless (no display window); SSH-only access")
+	createCmd.Flags().IntVar(&createSSHPort, "ssh-port", 0, "Host port forwarded to VM port 22 (headless VMs only)")
+	createCmd.Flags().StringVar(&createDistro, "distro", "ubuntu", "Base OS distro for devbox/server templates: ubuntu, arch, fedora")
+	createCmd.Flags().StringVar(&createDistroVersion, "distro-version", "latest", "ISO version for the selected distro (e.g. 24.04, 2025.05.01, 42) or 'latest'")
 }

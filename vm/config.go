@@ -13,10 +13,11 @@ type DiskConfig struct {
 }
 
 type NICConfig struct {
-	Mode   string `yaml:"mode"`
-	Bridge string `yaml:"bridge,omitempty"`
-	Model  string `yaml:"model"`
-	MAC    string `yaml:"mac"`
+	Mode     string   `yaml:"mode"`
+	Bridge   string   `yaml:"bridge,omitempty"`
+	Model    string   `yaml:"model"`
+	MAC      string   `yaml:"mac"`
+	HostFwds []string `yaml:"host_fwds,omitempty"`
 }
 
 type GPUMode string
@@ -54,13 +55,21 @@ type TPMConfig struct {
 	Enabled bool `yaml:"enabled"`
 }
 
+// CloudInitWriteFile describes a file to drop on first boot.
+type CloudInitWriteFile struct {
+	Path        string `yaml:"path"`
+	Content     string `yaml:"content"`
+	Permissions string `yaml:"permissions,omitempty"`
+}
+
 // CloudInitConfig carries first-boot configuration rendered into a cidata ISO.
 type CloudInitConfig struct {
-	Hostname string   `yaml:"hostname,omitempty"`
-	User     string   `yaml:"user,omitempty"`
-	SSHKeys  []string `yaml:"ssh_keys,omitempty"`
-	Packages []string `yaml:"packages,omitempty"`
-	RunCmds  []string `yaml:"run_cmds,omitempty"`
+	Hostname   string               `yaml:"hostname,omitempty"`
+	User       string               `yaml:"user,omitempty"`
+	SSHKeys    []string             `yaml:"ssh_keys,omitempty"`
+	Packages   []string             `yaml:"packages,omitempty"`
+	RunCmds    []string             `yaml:"run_cmds,omitempty"`
+	WriteFiles []CloudInitWriteFile `yaml:"write_files,omitempty"`
 }
 
 type VMConfig struct {
@@ -83,5 +92,7 @@ type VMConfig struct {
 	TPM            *TPMConfig       `yaml:"tpm,omitempty"`
 	SSHShare       bool             `yaml:"ssh_share,omitempty"`
 	VsockCID       uint32           `yaml:"vsock_cid,omitempty"`
+	Headless       bool             `yaml:"headless,omitempty"`
+	SSHPort        int              `yaml:"ssh_port,omitempty"`
 	CreatedAt      time.Time        `yaml:"created_at"`
 }

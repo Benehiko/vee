@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/Benehiko/vee/images"
 	"github.com/Benehiko/vee/provider"
 	"github.com/Benehiko/vee/templates"
 	"github.com/Benehiko/vee/vm"
@@ -31,27 +32,37 @@ var templateNames = []string{
 	"windows",
 }
 
+// distroAwareTemplates are templates that support --distro selection.
+var distroAwareTemplates = map[string]bool{
+	"devbox": true,
+	"server": true,
+}
+
 // createField identifies which form field is focused.
 type createField int
 
 const (
 	fieldName createField = iota
 	fieldTemplate
+	fieldDistro
+	fieldDistroVersion
 	fieldMemory
 	fieldCPUs
 	fieldCount
 )
 
 type createModel struct {
-	mgr        *vm.Manager
-	prov       provider.Provider
-	field      createField
-	name       string
-	tmplIdx    int
-	memory     string
-	cpus       string
-	err        string
-	submitting bool
+	mgr          *vm.Manager
+	prov         provider.Provider
+	field        createField
+	name         string
+	tmplIdx      int
+	distroIdx    int
+	distroVerIdx int
+	memory       string
+	cpus         string
+	err          string
+	submitting   bool
 }
 
 type createDoneMsg struct{ err error }
@@ -65,6 +76,32 @@ func newCreateModel(mgr *vm.Manager, p provider.Provider) createModel {
 	}
 }
 
+func (m createModel) selectedDistro() string {
+	distros := images.SupportedDistros()
+	if m.distroIdx >= len(distros) {
+		return distros[0]
+	}
+	return distros[m.distroIdx]
+}
+
+func (m createModel) selectedDistroVersion() string {
+	versions := images.DistroVersions(m.selectedDistro())
+	if len(versions) == 0 {
+		return "latest"
+	}
+	if m.distroVerIdx >= len(versions) {
+		return versions[0]
+	}
+	return versions[m.distroVerIdx]
+}
+
+func (m createModel) isDistroAware() bool {
+	if m.tmplIdx >= len(templateNames) {
+		return false
+	}
+	return distroAwareTemplates[templateNames[m.tmplIdx]]
+}
+
 func (m createModel) Init() tea.Cmd { return nil }
 
 func (m createModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -74,19 +111,33 @@ func (m createModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.submitting {
 			return m, nil
 		}
+
+		// Skip distro/version fields for non-distro-aware templates.
+		nextField := func(cur createField, delta int) createField {
+			n := int(cur) + delta
+			for {
+				f := createField((n + int(fieldCount)) % int(fieldCount))
+				if (f == fieldDistro || f == fieldDistroVersion) && !m.isDistroAware() {
+					n += delta
+					continue
+				}
+				return f
+			}
+		}
+
 		switch msg.String() {
 		case "esc":
 			return m, gotoList()
 		case "tab", "down":
-			m.field = (m.field + 1) % fieldCount
+			m.field = nextField(m.field, 1)
 		case "shift+tab", "up":
-			m.field = (m.field - 1 + fieldCount) % fieldCount
+			m.field = nextField(m.field, -1)
 		case "enter":
-			if m.field == fieldCount-1 {
+			if m.field == fieldCPUs {
 				m.submitting = true
 				return m, m.doSubmit()
 			}
-			m.field = (m.field + 1) % fieldCount
+			m.field = nextField(m.field, 1)
 		case "backspace":
 			switch m.field {
 			case fieldName:
@@ -103,12 +154,42 @@ func (m createModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		case "left":
-			if m.field == fieldTemplate && m.tmplIdx > 0 {
-				m.tmplIdx--
+			switch m.field {
+			case fieldTemplate:
+				if m.tmplIdx > 0 {
+					m.tmplIdx--
+					m.distroIdx = 0
+					m.distroVerIdx = 0
+				}
+			case fieldDistro:
+				if m.distroIdx > 0 {
+					m.distroIdx--
+					m.distroVerIdx = 0
+				}
+			case fieldDistroVersion:
+				if m.distroVerIdx > 0 {
+					m.distroVerIdx--
+				}
 			}
 		case "right":
-			if m.field == fieldTemplate && m.tmplIdx < len(templateNames)-1 {
-				m.tmplIdx++
+			switch m.field {
+			case fieldTemplate:
+				if m.tmplIdx < len(templateNames)-1 {
+					m.tmplIdx++
+					m.distroIdx = 0
+					m.distroVerIdx = 0
+				}
+			case fieldDistro:
+				distros := images.SupportedDistros()
+				if m.distroIdx < len(distros)-1 {
+					m.distroIdx++
+					m.distroVerIdx = 0
+				}
+			case fieldDistroVersion:
+				versions := images.DistroVersions(m.selectedDistro())
+				if m.distroVerIdx < len(versions)-1 {
+					m.distroVerIdx++
+				}
 			}
 		default:
 			ch := msg.String()
@@ -142,18 +223,26 @@ func (m createModel) View() string {
 	sb.WriteString(styleFormTitle.Render("  Create VM  "))
 	sb.WriteString("\n\n")
 
-	fields := []struct {
+	type fieldDef struct {
 		label string
 		value string
 		f     createField
-	}{
-		{"Name", m.name + cursor(m.field == fieldName), fieldName},
-		{"Template", templateSelector(m.tmplIdx, m.field == fieldTemplate), fieldTemplate},
-		{"Memory", m.memory + cursor(m.field == fieldMemory), fieldMemory},
-		{"CPUs", m.cpus + cursor(m.field == fieldCPUs), fieldCPUs},
+		skip  bool
+	}
+
+	fields := []fieldDef{
+		{"Name", m.name + cursor(m.field == fieldName), fieldName, false},
+		{"Template", templateSelector(m.tmplIdx, m.field == fieldTemplate), fieldTemplate, false},
+		{"Distro", distroSelector(m.distroIdx, m.field == fieldDistro), fieldDistro, !m.isDistroAware()},
+		{"Version", versionSelector(m.selectedDistro(), m.distroVerIdx, m.field == fieldDistroVersion), fieldDistroVersion, !m.isDistroAware()},
+		{"Memory", m.memory + cursor(m.field == fieldMemory), fieldMemory, false},
+		{"CPUs", m.cpus + cursor(m.field == fieldCPUs), fieldCPUs, false},
 	}
 
 	for _, f := range fields {
+		if f.skip {
+			continue
+		}
 		label := styleFieldLabel.Render(f.label)
 		var val string
 		if m.field == f.f {
@@ -172,7 +261,7 @@ func (m createModel) View() string {
 		sb.WriteString(styleFieldFocus.Render("  Creating…") + "\n")
 	}
 
-	sb.WriteString(styleFormHelp.Render("tab/↑↓ navigate  ←/→ choose template  enter submit  esc cancel"))
+	sb.WriteString(styleFormHelp.Render("tab/↑↓ navigate  ←/→ choose option  enter submit  esc cancel"))
 	return sb.String()
 }
 
@@ -192,6 +281,43 @@ func templateSelector(idx int, focused bool) string {
 	return strings.Join(parts, " ")
 }
 
+func distroSelector(idx int, focused bool) string {
+	distros := images.SupportedDistros()
+	var parts []string
+	for i, d := range distros {
+		if i == idx {
+			if focused {
+				parts = append(parts, styleFieldFocus.Render("[ "+d+" ]"))
+			} else {
+				parts = append(parts, styleFieldValue.Render("[ "+d+" ]"))
+			}
+		} else {
+			parts = append(parts, styleFaint.Render(d))
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+func versionSelector(distro string, idx int, focused bool) string {
+	versions := images.DistroVersions(distro)
+	if len(versions) == 0 {
+		return "latest"
+	}
+	var parts []string
+	for i, v := range versions {
+		if i == idx {
+			if focused {
+				parts = append(parts, styleFieldFocus.Render("[ "+v+" ]"))
+			} else {
+				parts = append(parts, styleFieldValue.Render("[ "+v+" ]"))
+			}
+		} else {
+			parts = append(parts, styleFaint.Render(v))
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
 func cursor(focused bool) string {
 	if focused {
 		return "█"
@@ -204,12 +330,14 @@ func (m createModel) doSubmit() tea.Cmd {
 	tmpl := templateNames[m.tmplIdx]
 	memory := m.memory
 	cpus := m.cpus
+	distro := m.selectedDistro()
+	distroVer := m.selectedDistroVersion()
 
 	mgr := m.mgr
 	prov := m.prov
 
 	return func() tea.Msg {
-		cfg, err := buildConfig(context.Background(), prov, mgr, name, tmpl, memory, cpus)
+		cfg, err := buildConfig(context.Background(), prov, mgr, name, tmpl, memory, cpus, distro, distroVer)
 		if err != nil {
 			return createDoneMsg{err: err}
 		}
@@ -220,7 +348,7 @@ func (m createModel) doSubmit() tea.Cmd {
 	}
 }
 
-func buildConfig(ctx context.Context, p provider.Provider, mgr *vm.Manager, name, tmpl, memory, cpusStr string) (*vm.VMConfig, error) {
+func buildConfig(ctx context.Context, p provider.Provider, mgr *vm.Manager, name, tmpl, memory, cpusStr, distro, distroVer string) (*vm.VMConfig, error) {
 	if name == "" {
 		return nil, fmt.Errorf("name is required")
 	}
@@ -237,9 +365,17 @@ func buildConfig(ctx context.Context, p provider.Provider, mgr *vm.Manager, name
 	case "torrent":
 		cfg = templates.NewTorrentConfig(p, name, 0)
 	case "devbox":
-		cfg = templates.NewDevboxConfig(p, name, nil)
+		var err error
+		cfg, err = templates.NewDevboxConfig(ctx, p, name, nil, distro, distroVer)
+		if err != nil {
+			return nil, err
+		}
 	case "server":
-		cfg = templates.NewServerConfig(p, name, nil)
+		var err error
+		cfg, err = templates.NewServerConfig(ctx, p, name, nil, distro, distroVer)
+		if err != nil {
+			return nil, err
+		}
 	case "windows":
 		cfg = templates.NewWindowsConfig(p, name)
 	default:
@@ -270,7 +406,6 @@ func buildConfig(ctx context.Context, p provider.Provider, mgr *vm.Manager, name
 		cfg.Cores = cpus
 	}
 
-	_ = ctx
 	_ = mgr
 	return cfg, nil
 }

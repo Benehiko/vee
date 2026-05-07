@@ -8,6 +8,13 @@ import (
 	"strings"
 )
 
+// WriteFile describes a file to drop on the VM's first boot.
+type WriteFile struct {
+	Path        string
+	Content     string
+	Permissions string
+}
+
 // Config defines the cloud-init user-data for first-boot configuration.
 type Config struct {
 	Hostname string
@@ -18,6 +25,8 @@ type Config struct {
 	Packages []string
 	// RunCmds are shell commands run after package installation.
 	RunCmds []string
+	// WriteFiles are files to create on the VM before runcmd.
+	WriteFiles []WriteFile
 }
 
 // Generate writes a cloud-init cidata ISO to vmDir/cidata.iso.
@@ -67,6 +76,22 @@ func renderUserData(cfg *Config) (string, error) {
 			sb.WriteString("    ssh_authorized_keys:\n")
 			for _, k := range cfg.SSHKeys {
 				fmt.Fprintf(&sb, "      - %s\n", k)
+			}
+		}
+	}
+
+	if len(cfg.WriteFiles) > 0 {
+		sb.WriteString("write_files:\n")
+		for _, wf := range cfg.WriteFiles {
+			fmt.Fprintf(&sb, "  - path: %s\n", wf.Path)
+			perms := wf.Permissions
+			if perms == "" {
+				perms = "0644"
+			}
+			fmt.Fprintf(&sb, "    permissions: '%s'\n", perms)
+			sb.WriteString("    content: |\n")
+			for _, line := range strings.Split(wf.Content, "\n") {
+				fmt.Fprintf(&sb, "      %s\n", line)
 			}
 		}
 	}

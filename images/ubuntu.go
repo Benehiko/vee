@@ -33,7 +33,17 @@ const (
 	Ubuntu2204 UbuntuVersion = "22.04.4"
 	Ubuntu2310 UbuntuVersion = "23.10"
 	Ubuntu2404 UbuntuVersion = "24.04"
+	Ubuntu2410 UbuntuVersion = "24.10"
 )
+
+// KnownUbuntuVersions lists supported Ubuntu versions, newest first.
+var KnownUbuntuVersions = []UbuntuVersion{
+	Ubuntu2410,
+	Ubuntu2404,
+	Ubuntu2310,
+	Ubuntu2204,
+	Ubuntu2004,
+}
 
 type UbuntuImage struct {
 	*BaseImage
@@ -42,8 +52,8 @@ type UbuntuImage struct {
 	arch      string
 }
 
-func NewUbuntuImage(provider provider.Provider, imageType UbuntuImageType, version UbuntuVersion, arch string) *UbuntuImage {
-	baseImage := NewBaseImage(provider)
+func NewUbuntuImage(p provider.Provider, imageType UbuntuImageType, version UbuntuVersion, arch string) *UbuntuImage {
+	baseImage := NewBaseImage(p)
 	return &UbuntuImage{
 		BaseImage: baseImage,
 		imageType: imageType,
@@ -51,6 +61,9 @@ func NewUbuntuImage(provider provider.Provider, imageType UbuntuImageType, versi
 		arch:      arch,
 	}
 }
+
+func (u *UbuntuImage) Distro() string  { return "ubuntu" }
+func (u *UbuntuImage) Version() string { return string(u.version) }
 
 func (u *UbuntuImage) Name() string {
 	return "ubuntu-" + string(u.version) + "-" + string(u.imageType) + "-" + u.arch + ".iso"
@@ -91,10 +104,10 @@ func (u *UbuntuImage) Download(ctx context.Context) error {
 
 	var targetChecksum string
 	checksums := strings.Split(string(b), "\n")
-	for _, checksum := range checksums {
-		u.provider.Logger().Info("checksum", zap.String("line", checksum))
-		if strings.Contains(checksum, u.Name()) {
-			checksumParts := strings.Split(checksum, " ")
+	for _, c := range checksums {
+		u.provider.Logger().Info("checksum", zap.String("line", c))
+		if strings.Contains(c, u.Name()) {
+			checksumParts := strings.Split(c, " ")
 			targetChecksum = checksumParts[0]
 			break
 		}
@@ -118,7 +131,6 @@ func (u *UbuntuImage) Download(ctx context.Context) error {
 			return nil
 		}
 
-		// checksum mismatch - delete the file
 		u.provider.Logger().Warn("removing file due to checksum mismatch",
 			zap.String("file", u.AbsolutePath()),
 			zap.String("expected", targetChecksum),
@@ -139,7 +151,7 @@ func (u *UbuntuImage) Download(ctx context.Context) error {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if err := os.MkdirAll(u.BaseImage.AbsolutePath(), 0o755); err != nil {
+	if err := os.MkdirAll(u.basePath, 0o755); err != nil {
 		return err
 	}
 
@@ -170,5 +182,5 @@ func (u *UbuntuImage) Download(ctx context.Context) error {
 }
 
 func (u *UbuntuImage) AbsolutePath() string {
-	return filepath.Join(u.BaseImage.AbsolutePath(), u.Name())
+	return filepath.Join(u.basePath, u.Name())
 }

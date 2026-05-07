@@ -39,6 +39,7 @@ type BaseMachine struct {
 	memory       string
 	vga          string
 	display      string
+	headless     bool
 	extraDevices []string
 	disks        []*Disk
 	virtiofsd    *Virtiofsd
@@ -148,6 +149,13 @@ func WithDisplay(display string) QemuOptions {
 	}
 }
 
+// WithHeadless disables all graphical output (-display none -nographic).
+func WithHeadless() QemuOptions {
+	return func(q *BaseMachine) {
+		q.headless = true
+	}
+}
+
 func WithTPM(tpm *TPM) QemuOptions {
 	return func(q *BaseMachine) {
 		q.tpm = tpm
@@ -241,7 +249,9 @@ func (q *BaseMachine) Args() []string {
 		args = append(args, "-device", dev)
 	}
 
-	if q.display != "" {
+	if q.headless {
+		args = append(args, "-display", "none", "-nographic")
+	} else if q.display != "" {
 		args = append(args, "-display", q.display)
 	}
 

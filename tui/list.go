@@ -16,20 +16,23 @@ import (
 
 // styles
 var (
-	styleTitle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")).Padding(0, 1)
-	styleSelected = lipgloss.NewStyle().Background(lipgloss.Color("237")).Bold(true)
-	styleStopped  = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	styleRunning  = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
-	styleErr      = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
-	styleFaint    = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	styleHelp     = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Padding(0, 1)
-	colName       = lipgloss.NewStyle().Width(18)
-	colTemplate   = lipgloss.NewStyle().Width(14)
-	colStatus     = lipgloss.NewStyle().Width(10)
-	colPID        = lipgloss.NewStyle().Width(8)
-	colMem        = lipgloss.NewStyle().Width(10)
-	colDisk       = lipgloss.NewStyle().Width(16)
-	colNet        = lipgloss.NewStyle().Width(16)
+	styleTitle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")).Padding(0, 1)
+	styleSelected   = lipgloss.NewStyle().Background(lipgloss.Color("237")).Bold(true)
+	styleStopped    = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	styleRunning    = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+	styleInstalling = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+	styleReady      = lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
+	styleErr        = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+	styleFaint      = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	styleHelp       = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Padding(0, 1)
+	colName         = lipgloss.NewStyle().Width(18)
+	colTemplate     = lipgloss.NewStyle().Width(14)
+	colStatus       = lipgloss.NewStyle().Width(10)
+	colPID          = lipgloss.NewStyle().Width(8)
+	colMem          = lipgloss.NewStyle().Width(10)
+	colDisk         = lipgloss.NewStyle().Width(16)
+	colNet          = lipgloss.NewStyle().Width(16)
+	colSSH          = lipgloss.NewStyle().Width(22)
 )
 
 type listEntry struct {
@@ -166,7 +169,8 @@ func (m listModel) View() string {
 		colPID.Render("PID") +
 		colMem.Render("MEM") +
 		colDisk.Render("DISK R/W") +
-		colNet.Render("NET Rx/Tx")
+		colNet.Render("NET Rx/Tx") +
+		colSSH.Render("SSH")
 	sb.WriteString(styleFaint.Render(header))
 	sb.WriteString("\n")
 
@@ -205,10 +209,21 @@ func renderRow(e listEntry) string {
 	tmpl := colTemplate.Render(truncate(e.config.Template, 13))
 
 	var status string
-	if e.state.Running {
-		status = colStatus.Render(styleRunning.Render("running"))
-	} else {
-		status = colStatus.Render(styleStopped.Render("stopped"))
+	switch e.state.InstallState {
+	case vm.InstallStatePending:
+		status = colStatus.Render(styleInstalling.Render("installing"))
+	case vm.InstallStateReady:
+		if e.state.Running {
+			status = colStatus.Render(styleRunning.Render("running"))
+		} else {
+			status = colStatus.Render(styleReady.Render("ready"))
+		}
+	default:
+		if e.state.Running {
+			status = colStatus.Render(styleRunning.Render("running"))
+		} else {
+			status = colStatus.Render(styleStopped.Render("stopped"))
+		}
 	}
 
 	pid := "-"
@@ -226,7 +241,15 @@ func renderRow(e listEntry) string {
 		fmtBytes2(e.stats.NetRxBytes) + "/" + fmtBytes2(e.stats.NetTxBytes),
 	)
 
-	return name + tmpl + status + pidCol + mem + disk + net
+	sshVal := "-"
+	if e.state.SSHPort > 0 {
+		sshVal = fmt.Sprintf("127.0.0.1:%d", e.state.SSHPort)
+	} else if e.config.SSHPort > 0 {
+		sshVal = fmt.Sprintf("127.0.0.1:%d", e.config.SSHPort)
+	}
+	sshCol := colSSH.Render(sshVal)
+
+	return name + tmpl + status + pidCol + mem + disk + net + sshCol
 }
 
 func (m listModel) selected() *listEntry {

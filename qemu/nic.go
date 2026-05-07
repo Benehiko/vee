@@ -3,6 +3,7 @@ package qemu
 import (
 	"crypto/sha1"
 	"fmt"
+	"strings"
 )
 
 type NICMode string
@@ -13,20 +14,22 @@ const (
 )
 
 type NIC struct {
-	Mode   NICMode
-	Bridge string
-	Model  string
-	MAC    string
+	Mode     NICMode
+	Bridge   string
+	Model    string
+	MAC      string
+	HostFwds []string
 }
 
 var _ Builder = &NIC{}
 
-func NewNIC(mode NICMode, bridge, mac string) *NIC {
+func NewNIC(mode NICMode, bridge, mac string, hostfwds ...string) *NIC {
 	return &NIC{
-		Mode:   mode,
-		Bridge: bridge,
-		Model:  "virtio-net-pci",
-		MAC:    mac,
+		Mode:     mode,
+		Bridge:   bridge,
+		Model:    "virtio-net-pci",
+		MAC:      mac,
+		HostFwds: hostfwds,
 	}
 }
 
@@ -43,7 +46,10 @@ func (n *NIC) Args() []string {
 		val := fmt.Sprintf("bridge,br=%s,model=%s,mac=%s", n.Bridge, n.Model, n.MAC)
 		return []string{"-nic", val}
 	default:
-		val := fmt.Sprintf("user,model=%s,mac=%s", n.Model, n.MAC)
-		return []string{"-nic", val}
+		parts := []string{fmt.Sprintf("user,model=%s,mac=%s", n.Model, n.MAC)}
+		for _, fwd := range n.HostFwds {
+			parts = append(parts, "hostfwd="+fwd)
+		}
+		return []string{"-nic", strings.Join(parts, ",")}
 	}
 }

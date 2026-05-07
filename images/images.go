@@ -4,7 +4,6 @@ import (
 	"context"
 	"io"
 	"os"
-	"path/filepath"
 
 	"github.com/Benehiko/vee/provider"
 	"github.com/schollz/progressbar/v3"
@@ -15,6 +14,8 @@ type Image interface {
 	Delete() error
 	Download(context.Context) error
 	AbsolutePath() string
+	Distro() string
+	Version() string
 }
 
 type BaseImage struct {
@@ -38,9 +39,9 @@ func (b *BaseImage) CreateImage(f *os.File, src io.Reader, contentLength int64) 
 	return nil
 }
 
-func NewBaseImage(provider provider.Provider) *BaseImage {
+func NewBaseImage(p provider.Provider) *BaseImage {
 	return &BaseImage{
-		provider: provider,
-		basePath: filepath.Join(provider.Config().StoragePath, "iso"),
+		provider: p,
+		basePath: p.Config().ISOCachePath,
 	}
 }

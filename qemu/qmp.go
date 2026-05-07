@@ -108,3 +108,72 @@ func (c *QMPClient) QueryStatus() (*StatusResult, error) {
 func (c *QMPClient) Close() error {
 	return c.conn.Close()
 }
+
+// GuestPing sends a guest-ping command via the QEMU guest agent channel.
+// Returns nil if the guest agent responds successfully.
+func (c *QMPClient) GuestPing() error {
+	_, err := c.execute("guest-ping", nil)
+	return err
+}
+
+// QMPRawCounters holds cumulative I/O counters from a single QMP poll.
+type QMPRawCounters struct {
+	BalloonActual uint64
+	DiskRdBytes   uint64
+	DiskWrBytes   uint64
+	NetRxBytes    uint64
+	NetTxBytes    uint64
+}
+
+type balloonResp struct {
+	Actual uint64 `json:"actual"`
+}
+
+type blockStatEntry struct {
+	Stats struct {
+		RdBytes uint64 `json:"rd_bytes"`
+		WrBytes uint64 `json:"wr_bytes"`
+	} `json:"stats"`
+}
+
+type netStatEntry struct {
+	RxBytes uint64 `json:"rx-bytes"`
+	TxBytes uint64 `json:"tx-bytes"`
+}
+
+// QueryRaw fetches balloon, block, and net stats and returns raw cumulative counters.
+func (c *QMPClient) QueryRaw() (QMPRawCounters, error) {
+	var out QMPRawCounters
+
+	balloonRaw, err := c.execute("query-balloon", nil)
+	if err == nil {
+		var b balloonResp
+		if json.Unmarshal(balloonRaw, &b) == nil {
+			out.BalloonActual = b.Actual
+		}
+	}
+
+	blockRaw, err := c.execute("query-blockstats", nil)
+	if err == nil {
+		var list []blockStatEntry
+		if json.Unmarshal(blockRaw, &list) == nil {
+			for _, e := range list {
+				out.DiskRdBytes += e.Stats.RdBytes
+				out.DiskWrBytes += e.Stats.WrBytes
+			}
+		}
+	}
+
+	netRaw, err := c.execute("query-net", nil)
+	if err == nil {
+		var list []netStatEntry
+		if json.Unmarshal(netRaw, &list) == nil {
+			for _, e := range list {
+				out.NetRxBytes += e.RxBytes
+				out.NetTxBytes += e.TxBytes
+			}
+		}
+	}
+
+	return out, nil
+}

@@ -5,9 +5,11 @@ import (
 	"crypto/sha1"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -56,12 +58,21 @@ func (m *Manager) Create(ctx context.Context, cfg *VMConfig) error {
 
 	// Generate cloud-init cidata ISO if requested.
 	if cfg.CloudInit != nil {
+		writeFiles := make([]cloudinit.WriteFile, len(cfg.CloudInit.WriteFiles))
+		for i, wf := range cfg.CloudInit.WriteFiles {
+			writeFiles[i] = cloudinit.WriteFile{
+				Path:        wf.Path,
+				Content:     wf.Content,
+				Permissions: wf.Permissions,
+			}
+		}
 		ci := &cloudinit.Config{
-			Hostname: cfg.CloudInit.Hostname,
-			User:     cfg.CloudInit.User,
-			SSHKeys:  cfg.CloudInit.SSHKeys,
-			Packages: cfg.CloudInit.Packages,
-			RunCmds:  cfg.CloudInit.RunCmds,
+			Hostname:   cfg.CloudInit.Hostname,
+			User:       cfg.CloudInit.User,
+			SSHKeys:    cfg.CloudInit.SSHKeys,
+			Packages:   cfg.CloudInit.Packages,
+			RunCmds:    cfg.CloudInit.RunCmds,
+			WriteFiles: writeFiles,
 		}
 		isoPath, err := cloudinit.Generate(dir, ci)
 		if err != nil {
@@ -97,6 +108,37 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 		}
 		// Stale state — clean it up.
 		_ = ClearState(m.storagePath(), name)
+		state = &VMState{}
+	}
+
+	// Determine if an installer ISO cdrom is present.
+	hasISO := false
+	for _, d := range cfg.Disks {
+		if d.Media == "cdrom" && strings.HasSuffix(d.Path, ".iso") {
+			hasISO = true
+			break
+		}
+	}
+
+	switch state.InstallState {
+	case "":
+		// First boot: mark install as pending if there's an ISO.
+		if hasISO {
+			state.InstallState = InstallStatePending
+			if err := SaveStateForVM(m.storagePath(), name, state); err != nil {
+				return fmt.Errorf("save install state: %w", err)
+			}
+		}
+	case InstallStateReady:
+		// OS already installed — strip installer ISO cdroms so we boot from disk.
+		filtered := cfg.Disks[:0]
+		for _, d := range cfg.Disks {
+			if d.Media == "cdrom" && strings.HasSuffix(d.Path, ".iso") {
+				continue
+			}
+			filtered = append(filtered, d)
+		}
+		cfg.Disks = filtered
 	}
 
 	machine, virtiofsdPID, err := m.buildMachine(ctx, cfg)
@@ -119,11 +161,92 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 		VirtiofsdPID: virtiofsdPID,
 		StartedAt:    time.Now(),
 		Running:      true,
+		InstallState: state.InstallState,
+		InstalledAt:  state.InstalledAt,
 	}
 	if cfg.SPICE != nil {
 		newState.SPICEPort = cfg.SPICE.Port
 	}
+	if cfg.Headless && cfg.SSHPort > 0 {
+		newState.SSHPort = cfg.SSHPort
+	}
 	return SaveStateForVM(m.storagePath(), name, newState)
+}
+
+// WaitReady polls until SSH is accepting connections or QMP guest-agent responds,
+// then marks the VM as ready (InstallState = "ready").
+// timeout is how long to wait total. Polls every 5s.
+func (m *Manager) WaitReady(ctx context.Context, name string, timeout time.Duration) error {
+	state, err := LoadState(m.storagePath(), name)
+	if err != nil {
+		return err
+	}
+	if !state.Running || state.PID == 0 {
+		return fmt.Errorf("VM %q is not running", name)
+	}
+
+	deadline := time.Now().Add(timeout)
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	probe := func() bool {
+		// SSH probe (headless VMs with port forwarding).
+		if state.SSHPort > 0 {
+			addr := fmt.Sprintf("127.0.0.1:%d", state.SSHPort)
+			conn, dialErr := net.DialTimeout("tcp", addr, 2*time.Second)
+			if dialErr == nil {
+				_ = conn.Close()
+				return true
+			}
+		}
+
+		// QMP guest-agent probe (works for non-headless too).
+		if state.QMPSocket != "" {
+			client, qmpErr := qemu.NewQMPClient(state.QMPSocket, 2*time.Second)
+			if qmpErr == nil {
+				pingErr := client.GuestPing()
+				_ = client.Close()
+				if pingErr == nil {
+					return true
+				}
+			}
+		}
+
+		return false
+	}
+
+	// Check immediately before first tick.
+	if probe() {
+		return m.markReady(name)
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case t := <-ticker.C:
+			if t.After(deadline) {
+				return fmt.Errorf("VM %q did not become ready within %s", name, timeout)
+			}
+			// Reload state in case SSH port changed.
+			if s, lerr := LoadState(m.storagePath(), name); lerr == nil {
+				state = s
+			}
+			if probe() {
+				return m.markReady(name)
+			}
+		}
+	}
+}
+
+func (m *Manager) markReady(name string) error {
+	state, err := LoadState(m.storagePath(), name)
+	if err != nil {
+		return err
+	}
+	state.InstallState = InstallStateReady
+	state.InstalledAt = time.Now()
+	return SaveStateForVM(m.storagePath(), name, state)
 }
 
 // Stop sends a graceful QMP powerdown and waits for the process to exit.
@@ -167,7 +290,12 @@ func (m *Manager) Stop(ctx context.Context, name string) error {
 		}
 	}
 
-	return ClearState(m.storagePath(), name)
+	// Preserve install state across stop.
+	preserved := &VMState{
+		InstallState: state.InstallState,
+		InstalledAt:  state.InstalledAt,
+	}
+	return SaveStateForVM(m.storagePath(), name, preserved)
 }
 
 // Delete removes a VM directory. Refuses if the VM is running.
@@ -242,7 +370,11 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 	if cfg.NIC.MAC == "" {
 		cfg.NIC.MAC = qemu.DeterministicMAC(cfg.Name)
 	}
-	nic := qemu.NewNIC(qemu.NICMode(cfg.NIC.Mode), cfg.NIC.Bridge, cfg.NIC.MAC)
+	nicHostFwds := cfg.NIC.HostFwds
+	if cfg.Headless && cfg.SSHPort > 0 {
+		nicHostFwds = append(nicHostFwds, fmt.Sprintf("tcp:127.0.0.1:%d-:22", cfg.SSHPort))
+	}
+	nic := qemu.NewNIC(qemu.NICMode(cfg.NIC.Mode), cfg.NIC.Bridge, cfg.NIC.MAC, nicHostFwds...)
 	opts = append(opts, qemu.WithNIC(nic))
 
 	// Disks
@@ -272,6 +404,11 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 		opts = append(opts, qemu.WithVGA("none"))
 		opts = append(opts, qemu.WithDevice("virtio-vga-gl"))
 		opts = append(opts, qemu.WithDisplay("gtk,gl=on"))
+	}
+
+	// Headless
+	if cfg.Headless {
+		opts = append(opts, qemu.WithHeadless())
 	}
 
 	// SPICE

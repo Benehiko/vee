@@ -1,21 +1,49 @@
 package templates
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/Benehiko/vee/cloudinit"
+	"github.com/Benehiko/vee/images"
 	"github.com/Benehiko/vee/provider"
 	"github.com/Benehiko/vee/vm"
 )
 
 // NewDevboxConfig returns a VMConfig for a developer workstation VM.
+// distro selects the base OS (ubuntu, arch, fedora); version selects the ISO version ("latest" for newest).
 // sshKeys are injected into the default user's authorized_keys via cloud-init.
-func NewDevboxConfig(p provider.Provider, name string, sshKeys []string) *vm.VMConfig {
+func NewDevboxConfig(ctx context.Context, p provider.Provider, name string, sshKeys []string, distro, version string) (*vm.VMConfig, error) {
+	if distro == "" {
+		distro = images.DistroUbuntu
+	}
+	if version == "" {
+		version = "latest"
+	}
+
+	img, err := images.NewImage(p, distro, version)
+	if err != nil {
+		return nil, fmt.Errorf("devbox image: %w", err)
+	}
+	if err := img.Download(ctx); err != nil {
+		return nil, fmt.Errorf("devbox image download: %w", err)
+	}
+
 	conf := p.Config()
+	vmDir := filepath.Join(conf.StoragePath, name)
 
-	pkgs := cloudinit.PackagesFor(cloudinit.Ubuntu, cloudinit.CategoryDevbox)
+	pkgs := cloudinit.PackagesFor(cloudinit.Distro(distro), cloudinit.CategoryDevbox)
+	user := "dev"
 
-	return &vm.VMConfig{
+	runCmds, writeFiles, err := devboxRunCmds(distro, user, name, pkgs)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg := &vm.VMConfig{
 		Name:     name,
 		Template: "devbox",
 		Memory:   "8G",
@@ -28,25 +56,111 @@ func NewDevboxConfig(p provider.Provider, name string, sshKeys []string) *vm.VMC
 			Mode:  "user",
 			Model: "virtio-net-pci",
 		},
-		GPU: vm.GPUConfig{Mode: vm.GPUNone},
+		GPU:      vm.GPUConfig{Mode: vm.GPUNone},
+		Headless: true,
+		SSHPort:  deterministicSSHPort(name),
 		UEFI: vm.UEFIConfig{
 			Enabled: true,
 		},
+		Disks: []vm.DiskConfig{
+			{
+				Path:      img.AbsolutePath(),
+				Interface: "virtio",
+				Media:     "cdrom",
+				Cache:     "none",
+				Readonly:  true,
+			},
+			{
+				Path:      filepath.Join(vmDir, "storage", "disk-os.qcow2"),
+				Size:      conf.DefaultDiskSize,
+				Format:    "qcow2",
+				Interface: "virtio",
+				Media:     "disk",
+				Cache:     "writeback",
+			},
+		},
 		CloudInit: &vm.CloudInitConfig{
-			Hostname: name,
-			User:     "dev",
-			SSHKeys:  sshKeys,
-			Packages: pkgs,
-			RunCmds: []string{
-				// Install Docker engine via official script.
-				"curl -fsSL https://get.docker.com | sh",
-				"usermod -aG docker dev",
-				// Set zsh as default shell.
-				"chsh -s /bin/zsh dev",
-				// Install socat for vsock SSH agent forwarding (vee ssh-share).
-				"apt-get install -y socat",
-				// Create a systemd user service that bridges vsock port 2222 → SSH_AUTH_SOCK.
-				`mkdir -p /etc/systemd/system && cat >/etc/systemd/system/vee-ssh-agent.service <<'EOF'
+			Hostname:   name,
+			User:       user,
+			SSHKeys:    sshKeys,
+			Packages:   pkgs,
+			RunCmds:    runCmds,
+			WriteFiles: writeFiles,
+		},
+		CreatedAt: time.Now(),
+	}
+
+	return cfg, nil
+}
+
+func devboxRunCmds(distro, user, hostname string, pkgs []string) ([]string, []vm.CloudInitWriteFile, error) {
+	vsockService := vsockSSHAgentService()
+
+	switch distro {
+	case images.DistroUbuntu:
+		return []string{
+			"curl -fsSL https://get.docker.com | sh",
+			"usermod -aG docker " + user,
+			"chsh -s /bin/zsh " + user,
+			"apt-get install -y socat",
+			vsockServiceInstall,
+			"systemctl enable --now vee-ssh-agent",
+		}, nil, nil
+
+	case images.DistroArch:
+		archCfg, err := archinstallConfig(hostname, user, pkgs)
+		if err != nil {
+			return nil, nil, fmt.Errorf("archinstall config: %w", err)
+		}
+		writeFiles := []vm.CloudInitWriteFile{
+			{
+				Path:        "/tmp/archinstall.json",
+				Content:     archCfg,
+				Permissions: "0644",
+			},
+			{
+				Path:        "/etc/systemd/system/vee-ssh-agent.service",
+				Content:     vsockService,
+				Permissions: "0644",
+			},
+		}
+		runCmds := []string{
+			"archinstall --config /tmp/archinstall.json --silent",
+			"pacman -Syu --noconfirm",
+			"pacman -S --noconfirm docker zsh socat",
+			"systemctl enable --now docker",
+			"usermod -aG docker " + user,
+			"chsh -s /bin/zsh " + user,
+			"systemctl enable --now vee-ssh-agent",
+		}
+		return runCmds, writeFiles, nil
+
+	case images.DistroFedora:
+		writeFiles := []vm.CloudInitWriteFile{
+			{
+				Path:        "/etc/systemd/system/vee-ssh-agent.service",
+				Content:     vsockService,
+				Permissions: "0644",
+			},
+		}
+		runCmds := []string{
+			"dnf install -y dnf-plugins-core",
+			"dnf config-manager --add-repo https://download.docker.com/linux/fedora/docker-ce.repo",
+			"dnf install -y docker-ce docker-ce-cli containerd.io zsh socat",
+			"systemctl enable --now docker",
+			"usermod -aG docker " + user,
+			"chsh -s /bin/zsh " + user,
+			"systemctl enable --now vee-ssh-agent",
+		}
+		return runCmds, writeFiles, nil
+
+	default:
+		return nil, nil, fmt.Errorf("unsupported distro for devbox: %s", distro)
+	}
+}
+
+// vsockServiceInstall is the heredoc command that writes the systemd unit inline (Ubuntu only).
+const vsockServiceInstall = `mkdir -p /etc/systemd/system && cat >/etc/systemd/system/vee-ssh-agent.service <<'EOF'
 [Unit]
 Description=vee SSH agent vsock bridge
 After=network.target
@@ -59,10 +173,50 @@ Restart=on-failure
 
 [Install]
 WantedBy=multi-user.target
-EOF`,
-				"systemctl enable --now vee-ssh-agent",
+EOF`
+
+// vsockSSHAgentService returns the systemd unit content for write_files.
+func vsockSSHAgentService() string {
+	return `[Unit]
+Description=vee SSH agent vsock bridge
+After=network.target
+
+[Service]
+Type=simple
+ExecStartPre=/bin/mkdir -p /run/vee
+ExecStart=/usr/bin/socat UNIX-LISTEN:/run/vee/ssh_agent.sock,fork,mode=0600 VSOCK-CONNECT:2:2222
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target`
+}
+
+// archinstallConfig builds a minimal archinstall JSON configuration.
+func archinstallConfig(hostname, user string, pkgs []string) (string, error) {
+	cfg := map[string]any{
+		"hostname":   hostname,
+		"bootloader": "grub",
+		"profile":    map[string]any{"main": "minimal"},
+		"packages":   pkgs,
+		"users": []map[string]any{
+			{
+				"username":  user,
+				"!password": "vee",
+				"sudo":      true,
 			},
 		},
-		CreatedAt: time.Now(),
+		"audio":         nil,
+		"kernels":       []string{"linux"},
+		"mirror-region": map[string]any{},
+		"disk_layouts": map[string]any{
+			"main_disk_layout": map[string]any{
+				"type": "default_layout",
+			},
+		},
 	}
+	b, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }

@@ -1,19 +1,48 @@
 package templates
 
 import (
+	"context"
+	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/Benehiko/vee/cloudinit"
+	"github.com/Benehiko/vee/images"
 	"github.com/Benehiko/vee/provider"
 	"github.com/Benehiko/vee/vm"
 )
 
-// NewServerConfig returns a VMConfig for a minimal Ubuntu server VM.
+// NewServerConfig returns a VMConfig for a minimal server VM.
+// distro selects the base OS (ubuntu, arch, fedora); version selects the ISO version ("latest" for newest).
 // sshKeys are injected into the default user's authorized_keys.
-func NewServerConfig(p provider.Provider, name string, sshKeys []string) *vm.VMConfig {
-	conf := p.Config()
+func NewServerConfig(ctx context.Context, p provider.Provider, name string, sshKeys []string, distro, version string) (*vm.VMConfig, error) {
+	if distro == "" {
+		distro = images.DistroUbuntu
+	}
+	if version == "" {
+		version = "latest"
+	}
 
-	return &vm.VMConfig{
+	img, err := images.NewImage(p, distro, version)
+	if err != nil {
+		return nil, fmt.Errorf("server image: %w", err)
+	}
+	if err := img.Download(ctx); err != nil {
+		return nil, fmt.Errorf("server image download: %w", err)
+	}
+
+	conf := p.Config()
+	vmDir := filepath.Join(conf.StoragePath, name)
+
+	pkgs := cloudinit.PackagesFor(cloudinit.Distro(distro), cloudinit.CategoryServer)
+	user := "admin"
+
+	runCmds, writeFiles, err := serverRunCmds(distro, user)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg := &vm.VMConfig{
 		Name:     name,
 		Template: "server",
 		Memory:   "8G",
@@ -26,38 +55,94 @@ func NewServerConfig(p provider.Provider, name string, sshKeys []string) *vm.VMC
 			Mode:  "user",
 			Model: "virtio-net-pci",
 		},
-		GPU: vm.GPUConfig{Mode: vm.GPUNone},
+		GPU:      vm.GPUConfig{Mode: vm.GPUNone},
+		Headless: true,
+		SSHPort:  deterministicSSHPort(name),
 		UEFI: vm.UEFIConfig{
 			Enabled: true,
 		},
-		CloudInit: &vm.CloudInitConfig{
-			Hostname: name,
-			User:     "admin",
-			SSHKeys:  sshKeys,
-			Packages: cloudinit.PackagesFor(cloudinit.Ubuntu, cloudinit.CategoryServer),
-			RunCmds: []string{
-				"ufw allow OpenSSH",
-				"ufw --force enable",
-				"systemctl enable --now fail2ban",
-				// Install socat for vsock SSH agent forwarding (vee ssh-share).
-				"apt-get install -y socat",
-				`mkdir -p /etc/systemd/system && cat >/etc/systemd/system/vee-ssh-agent.service <<'EOF'
-[Unit]
-Description=vee SSH agent vsock bridge
-After=network.target
-
-[Service]
-Type=simple
-ExecStartPre=/bin/mkdir -p /run/vee
-ExecStart=/usr/bin/socat UNIX-LISTEN:/run/vee/ssh_agent.sock,fork,mode=0600 VSOCK-CONNECT:2:2222
-Restart=on-failure
-
-[Install]
-WantedBy=multi-user.target
-EOF`,
-				"systemctl enable --now vee-ssh-agent",
+		Disks: []vm.DiskConfig{
+			{
+				Path:      img.AbsolutePath(),
+				Interface: "virtio",
+				Media:     "cdrom",
+				Cache:     "none",
+				Readonly:  true,
+			},
+			{
+				Path:      filepath.Join(vmDir, "storage", "disk-os.qcow2"),
+				Size:      conf.DefaultDiskSize,
+				Format:    "qcow2",
+				Interface: "virtio",
+				Media:     "disk",
+				Cache:     "writeback",
 			},
 		},
+		CloudInit: &vm.CloudInitConfig{
+			Hostname:   name,
+			User:       user,
+			SSHKeys:    sshKeys,
+			Packages:   pkgs,
+			RunCmds:    runCmds,
+			WriteFiles: writeFiles,
+		},
 		CreatedAt: time.Now(),
+	}
+
+	return cfg, nil
+}
+
+func serverRunCmds(distro, user string) ([]string, []vm.CloudInitWriteFile, error) {
+	vsockService := vsockSSHAgentService()
+
+	switch distro {
+	case images.DistroUbuntu:
+		return []string{
+			"ufw allow OpenSSH",
+			"ufw --force enable",
+			"systemctl enable --now fail2ban",
+			"apt-get install -y socat",
+			vsockServiceInstall,
+			"systemctl enable --now vee-ssh-agent",
+		}, nil, nil
+
+	case images.DistroArch:
+		writeFiles := []vm.CloudInitWriteFile{
+			{
+				Path:        "/etc/systemd/system/vee-ssh-agent.service",
+				Content:     vsockService,
+				Permissions: "0644",
+			},
+		}
+		runCmds := []string{
+			"pacman -Syu --noconfirm",
+			"pacman -S --noconfirm ufw socat",
+			"systemctl enable --now sshd",
+			"ufw allow SSH",
+			"ufw --force enable",
+			"systemctl enable --now vee-ssh-agent",
+		}
+		return runCmds, writeFiles, nil
+
+	case images.DistroFedora:
+		writeFiles := []vm.CloudInitWriteFile{
+			{
+				Path:        "/etc/systemd/system/vee-ssh-agent.service",
+				Content:     vsockService,
+				Permissions: "0644",
+			},
+		}
+		runCmds := []string{
+			"dnf install -y socat fail2ban",
+			"systemctl enable --now sshd",
+			"firewall-cmd --permanent --add-service=ssh",
+			"firewall-cmd --reload",
+			"systemctl enable --now fail2ban",
+			"systemctl enable --now vee-ssh-agent",
+		}
+		return runCmds, writeFiles, nil
+
+	default:
+		return nil, nil, fmt.Errorf("unsupported distro for server: %s", distro)
 	}
 }

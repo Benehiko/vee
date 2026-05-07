@@ -12,6 +12,7 @@ import (
 
 type Config struct {
 	StoragePath         string `koanf:"storage_path"`
+	ISOCachePath        string `koanf:"iso_cache_path"`
 	VirtiofsdPath       string `koanf:"virtiofsd_path"`
 	QemuBinaryPath      string `koanf:"qemu_binary_path"`
 	OVMFCodePath        string `koanf:"ovmf_code_path"`
@@ -32,7 +33,8 @@ func newDefaultConfig() (*Config, error) {
 		return nil, err
 	}
 	return &Config{
-		StoragePath:         filepath.Join(home, ".config/vee/vms"),
+		StoragePath:         filepath.Join(home, ".vee/vms"),
+		ISOCachePath:        filepath.Join(home, ".vee/iso"),
 		VirtiofsdPath:       "/usr/bin/virtiofsd",
 		QemuBinaryPath:      "qemu-system-x86_64",
 		OVMFCodePath:        "/usr/share/OVMF/x64/OVMF_CODE.4m.fd",
@@ -68,7 +70,7 @@ func loadConfig(defaults *Config) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	configFilePath := filepath.Join(home, ".config", "vee", "config.yaml")
+	configFilePath := filepath.Join(home, ".vee", "config.yaml")
 
 	if _, err := os.Stat(configFilePath); os.IsNotExist(err) {
 		if err := os.MkdirAll(filepath.Dir(configFilePath), 0o755); err != nil {
