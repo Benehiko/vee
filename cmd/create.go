@@ -9,14 +9,19 @@ import (
 )
 
 var (
-	createTemplate  string
-	createMemory    string
-	createCPUs      int
-	createDisk      string
-	createNicMode   string
-	createNicBridge string
-	createSpicePort int
-	createUEFI      bool
+	createTemplate    string
+	createMemory      string
+	createCPUs        int
+	createDisk        string
+	createNicMode     string
+	createNicBridge   string
+	createSpicePort   int
+	createUEFI        bool
+	createGPUMode     string
+	createGPUPCI      string
+	createAntiDetect  bool
+	createVirtiofsDir string
+	createVirtiofsTag string
 )
 
 var createCmd = &cobra.Command{
@@ -26,6 +31,13 @@ var createCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
 		conf := prov.Config()
+
+		gpuMode := vm.GPUMode(createGPUMode)
+		switch gpuMode {
+		case vm.GPUNone, vm.GPUVirtio, vm.GPUPassthrough:
+		default:
+			return fmt.Errorf("invalid --gpu-mode %q (use: none, virtio, passthrough)", createGPUMode)
+		}
 
 		cfg := &vm.VMConfig{
 			Name:     name,
@@ -41,7 +53,11 @@ var createCmd = &cobra.Command{
 				Bridge: createNicBridge,
 				Model:  "virtio-net-pci",
 			},
-			GPU: vm.GPUConfig{Mode: vm.GPUNone},
+			GPU: vm.GPUConfig{
+				Mode:       gpuMode,
+				PCIAddr:    createGPUPCI,
+				AntiDetect: createAntiDetect,
+			},
 			UEFI: vm.UEFIConfig{
 				Enabled: createUEFI,
 			},
@@ -65,6 +81,17 @@ var createCmd = &cobra.Command{
 			}
 		}
 
+		if createVirtiofsDir != "" {
+			tag := createVirtiofsTag
+			if tag == "" {
+				tag = "share"
+			}
+			cfg.VirtiofsMounts = append(cfg.VirtiofsMounts, vm.VirtiofsMount{
+				SharedDir: createVirtiofsDir,
+				Tag:       tag,
+			})
+		}
+
 		mgr := vm.NewManager(prov)
 		if err := mgr.Create(cmd.Context(), cfg); err != nil {
 			return err
@@ -83,4 +110,9 @@ func init() {
 	createCmd.Flags().StringVar(&createNicBridge, "nic-bridge", "br0", "Bridge interface (when nic-mode=bridge)")
 	createCmd.Flags().IntVar(&createSpicePort, "spice-port", 0, "SPICE port (0 = disabled)")
 	createCmd.Flags().BoolVar(&createUEFI, "uefi", false, "Enable UEFI boot (OVMF)")
+	createCmd.Flags().StringVar(&createGPUMode, "gpu-mode", "none", "GPU mode: none, virtio, passthrough")
+	createCmd.Flags().StringVar(&createGPUPCI, "gpu-pci", "", "PCI address for GPU passthrough (e.g. 08:00.0)")
+	createCmd.Flags().BoolVar(&createAntiDetect, "anti-detect", false, "Apply anti-hypervisor-detection CPU flags (gaming passthrough)")
+	createCmd.Flags().StringVar(&createVirtiofsDir, "virtiofs-dir", "", "Host directory to share via virtiofsd")
+	createCmd.Flags().StringVar(&createVirtiofsTag, "virtiofs-tag", "share", "Mount tag for the virtiofs share")
 }

@@ -191,11 +191,15 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 		qemu.WithMemory(cfg.Memory),
 	}
 
-	// CPU
+	// CPU — gaming passthrough merges GamingCPUFlags before building.
+	cpuFlags := cfg.CPUFlags
+	if cfg.GPU.Mode == GPUPassthrough && cfg.GPU.AntiDetect {
+		cpuFlags = append(cpuFlags, qemu.GamingCPUFlags...)
+	}
 	cpu := qemu.NewCPU(m.provider,
 		qemu.WithCPUModel(qemu.CPUModel(cfg.CPUModel)),
 		qemu.WithSMP(cfg.CPUs, cfg.Sockets, cfg.Threads, cfg.Cores),
-		qemu.WithCPUFlags(cfg.CPUFlags),
+		qemu.WithCPUFlags(cpuFlags),
 	)
 	opts = append(opts, qemu.WithCPU(cpu))
 
@@ -228,6 +232,20 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 		)
 		_ = i
 		opts = append(opts, qemu.AddDisk(disk))
+	}
+
+	// GPU
+	switch cfg.GPU.Mode {
+	case GPUPassthrough:
+		if cfg.GPU.PCIAddr != "" {
+			opts = append(opts, qemu.WithVFIO(qemu.NewVFIODevice(cfg.GPU.PCIAddr)))
+		}
+		// Passthrough VMs need shared memory for the vhost-user protocol.
+		opts = append(opts, qemu.WithMemfd(qemu.NewMemfdBackend(cfg.Memory)))
+	case GPUVirtio:
+		opts = append(opts, qemu.WithVGA("none"))
+		opts = append(opts, qemu.WithDevice("virtio-vga-gl"))
+		opts = append(opts, qemu.WithDisplay("gtk,gl=on"))
 	}
 
 	// SPICE

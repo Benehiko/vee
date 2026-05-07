@@ -38,6 +38,8 @@ type BaseMachine struct {
 	machineType  string
 	memory       string
 	vga          string
+	display      string
+	extraDevices []string
 	disks        []*Disk
 	virtiofsd    *Virtiofsd
 	spice        *Spice
@@ -45,6 +47,7 @@ type BaseMachine struct {
 	uefi         *UEFI
 	qmpSocket    string
 	memfd        *MemfdBackend
+	vfioDevices  []*VFIODevice
 }
 
 var (
@@ -123,6 +126,26 @@ func WithSpice(spice *Spice) QemuOptions {
 	}
 }
 
+func WithVFIO(dev *VFIODevice) QemuOptions {
+	return func(q *BaseMachine) {
+		q.vfioDevices = append(q.vfioDevices, dev)
+	}
+}
+
+// WithDevice appends a raw -device argument (e.g. "virtio-vga-gl").
+func WithDevice(device string) QemuOptions {
+	return func(q *BaseMachine) {
+		q.extraDevices = append(q.extraDevices, device)
+	}
+}
+
+// WithDisplay sets the -display argument (e.g. "gtk,gl=on").
+func WithDisplay(display string) QemuOptions {
+	return func(q *BaseMachine) {
+		q.display = display
+	}
+}
+
 func NewEmptyMachine(provider provider.Provider) (*BaseMachine, error) {
 	return &BaseMachine{
 		provider:     provider,
@@ -186,6 +209,18 @@ func (q *BaseMachine) Args() []string {
 
 	if q.spice != nil {
 		args = append(args, q.spice.Args()...)
+	}
+
+	for _, vfio := range q.vfioDevices {
+		args = append(args, vfio.Args()...)
+	}
+
+	for _, dev := range q.extraDevices {
+		args = append(args, "-device", dev)
+	}
+
+	if q.display != "" {
+		args = append(args, "-display", q.display)
 	}
 
 	if q.qmpSocket != "" {
