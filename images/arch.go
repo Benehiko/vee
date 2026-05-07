@@ -24,9 +24,9 @@ type ArchVersion string
 
 // KnownArchVersions lists supported release strings, newest first.
 var KnownArchVersions = []ArchVersion{
-	"2025.05.01",
-	"2025.04.01",
-	"2025.03.01",
+	"2026.05.01",
+	"2026.04.01",
+	"2026.03.01",
 }
 
 type ArchImage struct {

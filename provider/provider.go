@@ -19,12 +19,22 @@ type provider struct {
 }
 
 func NewProvider() (Provider, error) {
+	return newProvider(false)
+}
+
+// NewProviderSilent returns a Provider that logs only to file, not stderr.
+// Use this when a TUI owns the terminal.
+func NewProviderSilent() (Provider, error) {
+	return newProvider(true)
+}
+
+func newProvider(silent bool) (Provider, error) {
 	config, err := NewConfig()
 	if err != nil {
 		return nil, err
 	}
 
-	logger, err := newLogger(config.LogPath)
+	logger, err := newLogger(config.LogPath, silent)
 	if err != nil {
 		return nil, err
 	}
@@ -36,7 +46,7 @@ func NewProvider() (Provider, error) {
 	return &provider{config: config, logger: logger}, nil
 }
 
-func newLogger(logPath string) (*zap.Logger, error) {
+func newLogger(logPath string, silent bool) (*zap.Logger, error) {
 	if err := os.MkdirAll(logPath, 0o755); err != nil {
 		return nil, err
 	}
@@ -47,21 +57,23 @@ func newLogger(logPath string) (*zap.Logger, error) {
 		return nil, err
 	}
 
-	fileSink := zapcore.AddSync(f)
-	stderrSink := zapcore.AddSync(os.Stderr)
-
 	encCfg := zap.NewProductionEncoderConfig()
 	encCfg.TimeKey = "ts"
 	encCfg.EncodeTime = zapcore.ISO8601TimeEncoder
 
 	fileCore := zapcore.NewCore(
 		zapcore.NewJSONEncoder(encCfg),
-		fileSink,
+		zapcore.AddSync(f),
 		zapcore.InfoLevel,
 	)
+
+	if silent {
+		return zap.New(fileCore, zap.AddCaller()), nil
+	}
+
 	consoleCore := zapcore.NewCore(
 		zapcore.NewConsoleEncoder(encCfg),
-		stderrSink,
+		zapcore.AddSync(os.Stderr),
 		zapcore.InfoLevel,
 	)
 

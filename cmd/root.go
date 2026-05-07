@@ -26,7 +26,7 @@ var rootCmd = &cobra.Command{
 		return nil
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
-		p, err := provider.NewProvider()
+		p, err := provider.NewProviderSilent()
 		if err != nil {
 			return err
 		}
