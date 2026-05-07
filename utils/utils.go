@@ -2,8 +2,9 @@ package utils
 
 import (
 	"crypto/rand"
-	"github.com/dustinkirkland/golang-petname"
 	"math/big"
+
+	"github.com/dustinkirkland/golang-petname"
 )
 
 // taken from https://gist.github.com/dopey/c69559607800d2f2f90b1b1ed4e550fb

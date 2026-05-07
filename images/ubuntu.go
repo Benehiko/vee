@@ -82,7 +82,7 @@ func (u *UbuntuImage) Download(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	b, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -137,9 +137,9 @@ func (u *UbuntuImage) Download(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
-	if err := os.MkdirAll(u.BaseImage.AbsolutePath(), 0755); err != nil {
+	if err := os.MkdirAll(u.BaseImage.AbsolutePath(), 0o755); err != nil {
 		return err
 	}
 
@@ -147,9 +147,9 @@ func (u *UbuntuImage) Download(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
-	if err := u.BaseImage.CreateImage(f, resp.Body, resp.ContentLength); err != nil {
+	if err := u.CreateImage(f, resp.Body, resp.ContentLength); err != nil {
 		return err
 	}
 

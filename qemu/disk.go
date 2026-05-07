@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/Benehiko/vee/provider"
-	"github.com/Benehiko/vee/utils"
 	"go.uber.org/zap"
 )
 
@@ -56,8 +55,10 @@ type Disk struct {
 	// the absolute path to the disk image
 	// can also be a URL to a remote disk (e.g. http://example.com/disk.iso)
 	Path string
-	// index of the disk
+	// Index of the disk for boot order
 	Index int
+	// diskIndex is set by BaseMachine.Args() to generate a deterministic drive ID.
+	diskIndex int
 	// format of the disk image (qcow2, raw, vmdk, vdi, vhd, iso)
 	Format DiskFormat
 	// if true the disk is read-only
@@ -175,7 +176,7 @@ func (q *Disk) Create(ctx context.Context) error {
 		}
 	}
 
-	if err := os.MkdirAll(q.Path, 0755); err != nil {
+	if err := os.MkdirAll(q.Path, 0o755); err != nil {
 		return err
 	}
 
@@ -186,7 +187,7 @@ func (q *Disk) Create(ctx context.Context) error {
 	reader, writer := io.Pipe()
 	cmd.Stdout = writer
 	cmd.Stderr = writer
-	defer writer.Close()
+	defer func() { _ = writer.Close() }()
 
 	go func() {
 		scanner := bufio.NewScanner(reader)
@@ -246,7 +247,7 @@ func (q *Disk) Args() []string {
 	q.FixOptions()
 
 	var args []string
-	id := fmt.Sprintf("disk-%s", utils.GeneratePetname())
+	id := fmt.Sprintf("disk%d", q.diskIndex)
 
 	driveArgs := []string{
 		"file=" + q.AbsolutePath(),

@@ -2,60 +2,73 @@ package templates
 
 import (
 	"context"
+	"path/filepath"
+	"time"
 
 	"github.com/Benehiko/vee/images"
 	"github.com/Benehiko/vee/provider"
-	"github.com/Benehiko/vee/qemu"
+	"github.com/Benehiko/vee/utils"
+	"github.com/Benehiko/vee/vm"
 )
 
-type Ubuntu struct {
-	*qemu.BaseMachine
-	*images.UbuntuImage
-}
+// NewUbuntuServerConfig returns a VMConfig for an Ubuntu Server VM, downloading
+// the ISO if necessary. The caller can persist and start it via vm.Manager.
+func NewUbuntuServerConfig(ctx context.Context, p provider.Provider, version images.UbuntuVersion, name string) (*vm.VMConfig, error) {
+	if name == "" {
+		name = utils.GeneratePetname()
+	}
 
-func NewUbuntu(ctx context.Context, provider provider.Provider, version images.UbuntuVersion, imageType images.UbuntuImageType, arch string) (*Ubuntu, error) {
-	img := images.NewUbuntuImage(provider, imageType, version, arch)
+	img := images.NewUbuntuImage(p, images.UbuntuServer, version, "amd64")
 	if err := img.Download(ctx); err != nil {
 		return nil, err
 	}
-	opts := []qemu.QemuOptions{
-		qemu.WithMemory("2G"),
-		qemu.WithVGA("virtio"),
-	}
-	m, err := qemu.NewEmptyMachine(provider)
-	if err != nil {
-		return nil, err
-	}
-	iso := qemu.NewDisk(provider, m,
-		qemu.WithCustomPath(img.AbsolutePath()),
-		qemu.WithMedia(qemu.DiskMediaCdrom),
-		qemu.WithInterface(qemu.InterfaceVirtio),
-		qemu.WithReadonly(true))
 
-	osDisk := qemu.NewDisk(provider, m,
-		qemu.WithSize("20G"),
-		qemu.WithFormat(qemu.QCOW2),
-		qemu.WithInterface(qemu.InterfaceVirtio),
-		qemu.WithCache(qemu.CacheWriteback),
-	)
-	opts = append(opts, qemu.AddDisk(iso))
-	opts = append(opts, qemu.AddDisk(osDisk))
+	conf := p.Config()
+	vmDir := filepath.Join(conf.StoragePath, name)
 
-	m, err = m.BuildMachine(opts...)
-	if err != nil {
-		return nil, err
+	cfg := &vm.VMConfig{
+		Name:     name,
+		Template: "ubuntu-server",
+		Memory:   conf.DefaultMemory,
+		CPUs:     conf.DefaultCPUs,
+		Sockets:  1,
+		Cores:    conf.DefaultCPUs,
+		Threads:  1,
+		CPUModel: conf.DefaultCPUModel,
+		NIC: vm.NICConfig{
+			Mode:  "user",
+			Model: "virtio-net-pci",
+		},
+		GPU: vm.GPUConfig{Mode: vm.GPUNone},
+		UEFI: vm.UEFIConfig{
+			Enabled:  true,
+			CodePath: conf.OVMFCodePath,
+		},
+		Disks: []vm.DiskConfig{
+			{
+				Path:      img.AbsolutePath(),
+				Format:    "",
+				Interface: "virtio",
+				Media:     "cdrom",
+				Cache:     "none",
+				Readonly:  true,
+			},
+			{
+				Path:      filepath.Join(vmDir, "storage", "disk-os.qcow2"),
+				Size:      conf.DefaultDiskSize,
+				Format:    "qcow2",
+				Interface: "virtio",
+				Media:     "disk",
+				Cache:     "writeback",
+			},
+		},
+		CreatedAt: time.Now(),
 	}
 
-	return &Ubuntu{
-		BaseMachine: m,
-		UbuntuImage: img,
-	}, nil
+	return cfg, nil
 }
 
-func NewUbuntuServer24(ctx context.Context, provider provider.Provider) (*Ubuntu, error) {
-	return NewUbuntu(ctx, provider, images.Ubuntu2404, images.UbuntuServer, "amd64")
-}
-
-func (u *Ubuntu) Start(ctx context.Context) error {
-	return u.BaseMachine.Start(ctx)
+// NewUbuntuServer24Config returns a VMConfig for Ubuntu 24.04 Server.
+func NewUbuntuServer24Config(ctx context.Context, p provider.Provider) (*vm.VMConfig, error) {
+	return NewUbuntuServerConfig(ctx, p, images.Ubuntu2404, "")
 }

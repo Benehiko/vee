@@ -3,10 +3,13 @@ package qemu
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"io"
-	"log"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
+	"time"
 
 	"github.com/Benehiko/vee/provider"
 	"github.com/Benehiko/vee/utils"
@@ -38,10 +41,16 @@ type BaseMachine struct {
 	disks        []*Disk
 	virtiofsd    *Virtiofsd
 	spice        *Spice
+	nics         []*NIC
+	uefi         *UEFI
+	qmpSocket    string
+	memfd        *MemfdBackend
 }
 
-var _ Builder = &BaseMachine{}
-var _ Machine = &BaseMachine{}
+var (
+	_ Builder = &BaseMachine{}
+	_ Machine = &BaseMachine{}
+)
 
 type QemuOptions func(*BaseMachine)
 
@@ -84,6 +93,36 @@ func WithCPU(cpu *CPU) QemuOptions {
 	}
 }
 
+func WithNIC(nic *NIC) QemuOptions {
+	return func(q *BaseMachine) {
+		q.nics = append(q.nics, nic)
+	}
+}
+
+func WithUEFI(uefi *UEFI) QemuOptions {
+	return func(q *BaseMachine) {
+		q.uefi = uefi
+	}
+}
+
+func WithQMPSocket(path string) QemuOptions {
+	return func(q *BaseMachine) {
+		q.qmpSocket = path
+	}
+}
+
+func WithMemfd(memfd *MemfdBackend) QemuOptions {
+	return func(q *BaseMachine) {
+		q.memfd = memfd
+	}
+}
+
+func WithSpice(spice *Spice) QemuOptions {
+	return func(q *BaseMachine) {
+		q.spice = spice
+	}
+}
+
 func NewEmptyMachine(provider provider.Provider) (*BaseMachine, error) {
 	return &BaseMachine{
 		provider:     provider,
@@ -118,14 +157,27 @@ func (q *BaseMachine) Args() []string {
 	args = append(args, "-machine", q.machineType)
 	args = append(args, "-m", q.memory)
 
+	if q.memfd != nil {
+		args = append(args, q.memfd.Args()...)
+	}
+
 	args = append(args, q.cpu.Args()...)
 
-	for _, disk := range q.disks {
+	if q.uefi != nil {
+		args = append(args, q.uefi.Args()...)
+	}
+
+	for i, disk := range q.disks {
+		disk.diskIndex = i
 		args = append(args, disk.Args()...)
 	}
 
 	if q.vga != "" {
 		args = append(args, "-vga", string(q.vga))
+	}
+
+	for _, nic := range q.nics {
+		args = append(args, nic.Args()...)
 	}
 
 	if q.virtiofsd != nil {
@@ -136,24 +188,89 @@ func (q *BaseMachine) Args() []string {
 		args = append(args, q.spice.Args()...)
 	}
 
+	if q.qmpSocket != "" {
+		args = append(args, "-qmp", fmt.Sprintf("unix:%s,server,nowait", q.qmpSocket))
+	}
+
 	return args
 }
 
+// StartResult holds the outcome of a detached VM start.
+type StartResult struct {
+	PID       int
+	QMPSocket string
+}
+
+// Start runs QEMU in the foreground (blocks until the VM exits).
 func (q *BaseMachine) Start(ctx context.Context) error {
+	if _, err := q.start(ctx, false); err != nil {
+		return err
+	}
+	return nil
+}
+
+// StartDetached launches QEMU as a detached process (survives terminal close).
+// It polls the QMP socket to confirm QEMU is alive before returning.
+func (q *BaseMachine) StartDetached(ctx context.Context) (*StartResult, error) {
+	return q.start(ctx, true)
+}
+
+func (q *BaseMachine) start(ctx context.Context, detach bool) (*StartResult, error) {
 	for _, disk := range q.disks {
 		if err := disk.Create(ctx); err != nil {
-			return err
+			return nil, err
 		}
 	}
 
-	// qemu-system-x86_64 -m 2G -drive file=debian.qcow2,format=qcow2 -device virtiofsd-pci,chardev=chardev0,tag=tag0 -chardev socket,id=chardev0,path=/path/to/socket
+	binary := q.provider.Config().QemuBinaryPath
 	args := q.Args()
-	log.Printf("qemu-system-x86_64 %v", args)
-	cmd := exec.CommandContext(ctx, "qemu-system-x86_64", args...)
+	q.provider.Logger().Info("starting QEMU",
+		zap.String("machine", q.name),
+		zap.String("binary", binary),
+		zap.Strings("args", args))
+
+	cmd := exec.CommandContext(ctx, binary, args...)
+
+	if detach {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		// Redirect output to a log file so it is not lost.
+		logPath := filepath.Join(q.AbsolutePath(), "qemu.log")
+		if err := os.MkdirAll(q.AbsolutePath(), 0o755); err != nil {
+			return nil, err
+		}
+		logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if err != nil {
+			return nil, err
+		}
+		cmd.Stdout = logFile
+		cmd.Stderr = logFile
+		if err := cmd.Start(); err != nil {
+			_ = logFile.Close()
+			return nil, err
+		}
+		_ = logFile.Close()
+
+		pid := cmd.Process.Pid
+
+		// If a QMP socket was configured, wait for it to appear.
+		if q.qmpSocket != "" {
+			deadline := time.Now().Add(10 * time.Second)
+			for time.Now().Before(deadline) {
+				if _, err := os.Stat(q.qmpSocket); err == nil {
+					break
+				}
+				time.Sleep(200 * time.Millisecond)
+			}
+		}
+
+		return &StartResult{PID: pid, QMPSocket: q.qmpSocket}, nil
+	}
+
+	// Foreground mode: pipe output through the logger.
 	reader, writer := io.Pipe()
 	cmd.Stdout = writer
 	cmd.Stderr = writer
-	defer writer.Close()
+	defer func() { _ = writer.Close() }()
 
 	go func() {
 		scanner := bufio.NewScanner(reader)
@@ -162,7 +279,10 @@ func (q *BaseMachine) Start(ctx context.Context) error {
 		}
 	}()
 
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		return nil, err
+	}
+	return &StartResult{PID: 0}, nil
 }
 
 func (q *BaseMachine) AbsolutePath() string {
