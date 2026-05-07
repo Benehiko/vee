@@ -86,7 +86,7 @@ func (fi *FedoraImage) Download(ctx context.Context) error {
 
 	// CHECKSUM file format: SHA256 (filename) = hash
 	var targetChecksum string
-	for _, line := range strings.Split(string(b), "\n") {
+	for line := range strings.SplitSeq(string(b), "\n") {
 		if strings.Contains(line, fi.Name()) && strings.HasPrefix(strings.TrimSpace(line), "SHA256") {
 			parts := strings.Split(line, "=")
 			if len(parts) == 2 {

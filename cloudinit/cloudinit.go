@@ -90,7 +90,7 @@ func renderUserData(cfg *Config) (string, error) {
 			}
 			fmt.Fprintf(&sb, "    permissions: '%s'\n", perms)
 			sb.WriteString("    content: |\n")
-			for _, line := range strings.Split(wf.Content, "\n") {
+			for line := range strings.SplitSeq(wf.Content, "\n") {
 				fmt.Fprintf(&sb, "      %s\n", line)
 			}
 		}

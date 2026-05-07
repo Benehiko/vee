@@ -37,7 +37,7 @@ func NewServerConfig(ctx context.Context, p provider.Provider, name string, sshK
 	pkgs := cloudinit.PackagesFor(cloudinit.Distro(distro), cloudinit.CategoryServer)
 	user := "admin"
 
-	runCmds, writeFiles, err := serverRunCmds(distro, user)
+	runCmds, writeFiles, err := serverRunCmds(distro)
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +92,7 @@ func NewServerConfig(ctx context.Context, p provider.Provider, name string, sshK
 	return cfg, nil
 }
 
-func serverRunCmds(distro, user string) ([]string, []vm.CloudInitWriteFile, error) {
+func serverRunCmds(distro string) ([]string, []vm.CloudInitWriteFile, error) {
 	vsockService := vsockSSHAgentService()
 
 	switch distro {

@@ -60,7 +60,7 @@ Use --distro-version latest (default) or a specific version string.`,
 			if err != nil {
 				return fmt.Errorf("read SSH key file: %w", err)
 			}
-			for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+			for line := range strings.SplitSeq(strings.TrimSpace(string(data)), "\n") {
 				line = strings.TrimSpace(line)
 				if line != "" && !strings.HasPrefix(line, "#") {
 					sshKeys = append(sshKeys, line)

@@ -159,7 +159,7 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 		PID:          result.PID,
 		QMPSocket:    result.QMPSocket,
 		VirtiofsdPID: virtiofsdPID,
-		StartedAt:    time.Now(),
+		StartedAt:    ptr(time.Now()),
 		Running:      true,
 		InstallState: state.InstallState,
 		InstalledAt:  state.InstalledAt,
@@ -245,9 +245,11 @@ func (m *Manager) markReady(name string) error {
 		return err
 	}
 	state.InstallState = InstallStateReady
-	state.InstalledAt = time.Now()
+	state.InstalledAt = ptr(time.Now())
 	return SaveStateForVM(m.storagePath(), name, state)
 }
+
+func ptr[T any](v T) *T { return &v }
 
 // Stop sends a graceful QMP powerdown and waits for the process to exit.
 func (m *Manager) Stop(ctx context.Context, name string) error {

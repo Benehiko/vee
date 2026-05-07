@@ -83,7 +83,7 @@ func (a *ArchImage) Download(ctx context.Context) error {
 	}
 
 	var targetChecksum string
-	for _, line := range strings.Split(string(b), "\n") {
+	for line := range strings.SplitSeq(string(b), "\n") {
 		if strings.Contains(line, a.Name()) {
 			parts := strings.Fields(line)
 			if len(parts) >= 1 {

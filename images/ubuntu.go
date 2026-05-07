@@ -103,8 +103,7 @@ func (u *UbuntuImage) Download(ctx context.Context) error {
 	}
 
 	var targetChecksum string
-	checksums := strings.Split(string(b), "\n")
-	for _, c := range checksums {
+	for c := range strings.SplitSeq(string(b), "\n") {
 		u.provider.Logger().Info("checksum", zap.String("line", c))
 		if strings.Contains(c, u.Name()) {
 			checksumParts := strings.Split(c, " ")
