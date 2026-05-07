@@ -15,11 +15,12 @@ import (
 
 // VMStats holds the latest polled stats for one VM.
 type VMStats struct {
-	Name     string        `json:"name"`
-	Template string        `json:"template"`
-	Running  bool          `json:"running"`
-	PID      int           `json:"pid,omitempty"`
-	Stats    monitor.Stats `json:"stats"`
+	Name         string        `json:"name"`
+	Template     string        `json:"template"`
+	Running      bool          `json:"running"`
+	InstallState string        `json:"install_state,omitempty"`
+	PID          int           `json:"pid,omitempty"`
+	Stats        monitor.Stats `json:"stats"`
 }
 
 // Dashboard serves a JSON API and a simple HTML page for all VMs.
@@ -56,10 +57,11 @@ func (d *Dashboard) refresh() {
 	defer d.mu.Unlock()
 	for _, e := range entries {
 		vs := &VMStats{
-			Name:     e.Config.Name,
-			Template: e.Config.Template,
-			Running:  e.State.Running,
-			PID:      e.State.PID,
+			Name:         e.Config.Name,
+			Template:     e.Config.Template,
+			Running:      e.State.Running,
+			InstallState: e.State.InstallState,
+			PID:          e.State.PID,
 		}
 		if e.State.Running && e.State.QMPSocket != "" {
 			client, err := qemu.NewQMPClient(e.State.QMPSocket, 2*time.Second)
@@ -123,6 +125,7 @@ th,td{padding:.4rem .8rem;text-align:left;border-bottom:1px solid #222}
 th{color:#888}
 .running{color:#5f5}
 .stopped{color:#f55}
+.installing{color:#ff5}
 </style>
 </head>
 <body>
@@ -136,7 +139,7 @@ async function load(){
   const fmt=b=>{if(b>=1<<30)return(b/(1<<30)).toFixed(1)+'G';if(b>=1<<20)return(b/(1<<20)).toFixed(1)+'M';if(b>=1<<10)return(b/(1<<10)).toFixed(1)+'K';return b+'B'};
   let h='<table><thead><tr><th>Name</th><th>Template</th><th>Status</th><th>PID</th><th>Mem</th><th>Disk R/W</th><th>Net Rx/Tx</th></tr></thead><tbody>';
   for(const v of vms){
-    const s=v.running?'<span class="running">running</span>':'<span class="stopped">stopped</span>';
+    const s=v.install_state==='pending'?'<span class="installing">installing</span>':v.running?'<span class="running">running</span>':'<span class="stopped">stopped</span>';
     const st=v.stats||{};
     h+=` + "`" + `<tr><td>${v.name}</td><td>${v.template}</td><td>${s}</td><td>${v.pid||'-'}</td><td>${fmt(st.mem_actual||0)}</td><td>${fmt(st.disk_read_bytes||0)}/${fmt(st.disk_write_bytes||0)}</td><td>${fmt(st.net_rx_bytes||0)}/${fmt(st.net_tx_bytes||0)}</td></tr>` + "`" + `;
   }
