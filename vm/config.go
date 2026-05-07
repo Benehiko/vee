@@ -50,23 +50,37 @@ type VirtiofsMount struct {
 	Tag        string `yaml:"tag"`
 }
 
+type TPMConfig struct {
+	Enabled bool `yaml:"enabled"`
+}
+
+// CloudInitConfig carries first-boot configuration rendered into a cidata ISO.
+type CloudInitConfig struct {
+	Hostname string   `yaml:"hostname,omitempty"`
+	User     string   `yaml:"user,omitempty"`
+	SSHKeys  []string `yaml:"ssh_keys,omitempty"`
+	Packages []string `yaml:"packages,omitempty"`
+	RunCmds  []string `yaml:"run_cmds,omitempty"`
+}
+
 type VMConfig struct {
-	Name           string          `yaml:"name"`
-	Template       string          `yaml:"template"`
-	Memory         string          `yaml:"memory"`
-	CPUs           int             `yaml:"cpus"`
-	Sockets        int             `yaml:"sockets"`
-	Cores          int             `yaml:"cores"`
-	Threads        int             `yaml:"threads"`
-	CPUModel       string          `yaml:"cpu_model"`
-	CPUFlags       []string        `yaml:"cpu_flags,omitempty"`
-	Disks          []DiskConfig    `yaml:"disks"`
-	NIC            NICConfig       `yaml:"nic"`
-	GPU            GPUConfig       `yaml:"gpu,omitempty"`
-	UEFI           UEFIConfig      `yaml:"uefi,omitempty"`
-	SPICE          *SPICEConfig    `yaml:"spice,omitempty"`
-	VirtiofsMounts []VirtiofsMount `yaml:"virtiofs_mounts,omitempty"`
-	CloudInit      bool            `yaml:"cloud_init"`
-	SSHShare       bool            `yaml:"ssh_share,omitempty"`
-	CreatedAt      time.Time       `yaml:"created_at"`
+	Name           string           `yaml:"name"`
+	Template       string           `yaml:"template"`
+	Memory         string           `yaml:"memory"`
+	CPUs           int              `yaml:"cpus"`
+	Sockets        int              `yaml:"sockets"`
+	Cores          int              `yaml:"cores"`
+	Threads        int              `yaml:"threads"`
+	CPUModel       string           `yaml:"cpu_model"`
+	CPUFlags       []string         `yaml:"cpu_flags,omitempty"`
+	Disks          []DiskConfig     `yaml:"disks"`
+	NIC            NICConfig        `yaml:"nic"`
+	GPU            GPUConfig        `yaml:"gpu,omitempty"`
+	UEFI           UEFIConfig       `yaml:"uefi,omitempty"`
+	SPICE          *SPICEConfig     `yaml:"spice,omitempty"`
+	VirtiofsMounts []VirtiofsMount  `yaml:"virtiofs_mounts,omitempty"`
+	CloudInit      *CloudInitConfig `yaml:"cloud_init,omitempty"`
+	TPM            *TPMConfig       `yaml:"tpm,omitempty"`
+	SSHShare       bool             `yaml:"ssh_share,omitempty"`
+	CreatedAt      time.Time        `yaml:"created_at"`
 }

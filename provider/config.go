@@ -11,18 +11,19 @@ import (
 )
 
 type Config struct {
-	StoragePath        string `koanf:"storage_path"`
-	VirtiofsdPath      string `koanf:"virtiofsd_path"`
-	QemuBinaryPath     string `koanf:"qemu_binary_path"`
-	OVMFCodePath       string `koanf:"ovmf_code_path"`
-	OVMFVarsPath       string `koanf:"ovmf_vars_path"`
-	LogPath            string `koanf:"log_path"`
-	DefaultMemory      string `koanf:"default_memory"`
-	DefaultCPUs        int    `koanf:"default_cpus"`
-	DefaultDiskSize    string `koanf:"default_disk_size"`
-	DefaultCPUModel    string `koanf:"default_cpu_model"`
-	DefaultMachineType string `koanf:"default_machine_type"`
-	RecreateDisks      bool   `koanf:"recreate_disks"`
+	StoragePath         string `koanf:"storage_path"`
+	VirtiofsdPath       string `koanf:"virtiofsd_path"`
+	QemuBinaryPath      string `koanf:"qemu_binary_path"`
+	OVMFCodePath        string `koanf:"ovmf_code_path"`
+	OVMFVarsPath        string `koanf:"ovmf_vars_path"`
+	OVMFSecbootCodePath string `koanf:"ovmf_secboot_code_path"`
+	LogPath             string `koanf:"log_path"`
+	DefaultMemory       string `koanf:"default_memory"`
+	DefaultCPUs         int    `koanf:"default_cpus"`
+	DefaultDiskSize     string `koanf:"default_disk_size"`
+	DefaultCPUModel     string `koanf:"default_cpu_model"`
+	DefaultMachineType  string `koanf:"default_machine_type"`
+	RecreateDisks       bool   `koanf:"recreate_disks"`
 }
 
 func newDefaultConfig() (*Config, error) {
@@ -31,18 +32,19 @@ func newDefaultConfig() (*Config, error) {
 		return nil, err
 	}
 	return &Config{
-		StoragePath:        filepath.Join(home, ".config/vee/vms"),
-		VirtiofsdPath:      "/usr/bin/virtiofsd",
-		QemuBinaryPath:     "qemu-system-x86_64",
-		OVMFCodePath:       "/usr/share/OVMF/x64/OVMF_CODE.4m.fd",
-		OVMFVarsPath:       "/usr/share/OVMF/x64/OVMF_VARS.4m.fd",
-		LogPath:            filepath.Join(home, ".float/state/logs"),
-		DefaultMachineType: "q35",
-		DefaultCPUs:        2,
-		DefaultMemory:      "2G",
-		DefaultDiskSize:    "20G",
-		DefaultCPUModel:    "host",
-		RecreateDisks:      false,
+		StoragePath:         filepath.Join(home, ".config/vee/vms"),
+		VirtiofsdPath:       "/usr/bin/virtiofsd",
+		QemuBinaryPath:      "qemu-system-x86_64",
+		OVMFCodePath:        "/usr/share/OVMF/x64/OVMF_CODE.4m.fd",
+		OVMFVarsPath:        "/usr/share/OVMF/x64/OVMF_VARS.4m.fd",
+		OVMFSecbootCodePath: "/usr/share/OVMF/x64/OVMF_CODE.secboot.4m.fd",
+		LogPath:             filepath.Join(home, ".float/state/logs"),
+		DefaultMachineType:  "q35",
+		DefaultCPUs:         2,
+		DefaultMemory:       "2G",
+		DefaultDiskSize:     "20G",
+		DefaultCPUModel:     "host",
+		RecreateDisks:       false,
 	}, nil
 }
 

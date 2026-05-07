@@ -48,6 +48,7 @@ type BaseMachine struct {
 	qmpSocket    string
 	memfd        *MemfdBackend
 	vfioDevices  []*VFIODevice
+	tpm          *TPM
 }
 
 var (
@@ -146,6 +147,12 @@ func WithDisplay(display string) QemuOptions {
 	}
 }
 
+func WithTPM(tpm *TPM) QemuOptions {
+	return func(q *BaseMachine) {
+		q.tpm = tpm
+	}
+}
+
 func NewEmptyMachine(provider provider.Provider) (*BaseMachine, error) {
 	return &BaseMachine{
 		provider:     provider,
@@ -213,6 +220,10 @@ func (q *BaseMachine) Args() []string {
 
 	for _, vfio := range q.vfioDevices {
 		args = append(args, vfio.Args()...)
+	}
+
+	if q.tpm != nil {
+		args = append(args, q.tpm.Args()...)
 	}
 
 	for _, dev := range q.extraDevices {

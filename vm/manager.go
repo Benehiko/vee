@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"syscall"
 	"time"
 
+	"github.com/Benehiko/vee/cloudinit"
 	"github.com/Benehiko/vee/provider"
 	"github.com/Benehiko/vee/qemu"
 	"github.com/Benehiko/vee/virtiofs"
@@ -49,6 +51,29 @@ func (m *Manager) Create(ctx context.Context, cfg *VMConfig) error {
 			return fmt.Errorf("copy OVMF_VARS: %w", err)
 		}
 		cfg.UEFI.VarsPath = dst
+	}
+
+	// Generate cloud-init cidata ISO if requested.
+	if cfg.CloudInit != nil {
+		ci := &cloudinit.Config{
+			Hostname: cfg.CloudInit.Hostname,
+			User:     cfg.CloudInit.User,
+			SSHKeys:  cfg.CloudInit.SSHKeys,
+			Packages: cfg.CloudInit.Packages,
+			RunCmds:  cfg.CloudInit.RunCmds,
+		}
+		isoPath, err := cloudinit.Generate(dir, ci)
+		if err != nil {
+			return fmt.Errorf("cloud-init: %w", err)
+		}
+		// Append cidata ISO as an extra disk entry stored in the config.
+		cfg.Disks = append(cfg.Disks, DiskConfig{
+			Path:      isoPath,
+			Interface: "virtio",
+			Media:     "cdrom",
+			Cache:     "none",
+			Readonly:  true,
+		})
 	}
 
 	return SaveConfig(m.storagePath(), cfg)
@@ -284,12 +309,53 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 		opts = append(opts, qemu.WithVirtiofsd(sockPath, mount.Tag))
 	}
 
+	// TPM — start swtpm daemon before QEMU.
+	if cfg.TPM != nil && cfg.TPM.Enabled {
+		tpmDir := filepath.Join(m.vmDir(cfg.Name), "tpm")
+		tpmSock := filepath.Join(m.vmDir(cfg.Name), "tpm.sock")
+		if err := startSwtpm(tpmDir, tpmSock); err != nil {
+			return nil, 0, fmt.Errorf("swtpm: %w", err)
+		}
+		opts = append(opts, qemu.WithTPM(qemu.NewTPM(tpmSock)))
+	}
+
 	built, err := machine.BuildMachine(opts...)
 	if err != nil {
 		return nil, 0, err
 	}
 
 	return built, virtiofsdPID, nil
+}
+
+// startSwtpm launches a swtpm daemon for the given VM TPM state directory.
+// swtpm must be installed on the host.
+func startSwtpm(stateDir, socketPath string) error {
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		return err
+	}
+	// swtpm socket --tpmstate dir=<dir> --ctrl type=unixio,path=<sock> --tpm2 --daemon
+	cmd := newSwtpmCmd(stateDir, socketPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("%w: %s", err, out)
+	}
+	// Give swtpm a moment to create the socket.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(socketPath); err == nil {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("swtpm socket not created at %s", socketPath)
+}
+
+func newSwtpmCmd(stateDir, socketPath string) *exec.Cmd {
+	return exec.Command("swtpm", "socket",
+		"--tpmstate", "dir="+stateDir,
+		"--ctrl", "type=unixio,path="+socketPath,
+		"--tpm2",
+		"--daemon",
+	)
 }
 
 func isAlive(pid int) bool {
