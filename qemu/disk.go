@@ -74,6 +74,9 @@ type Disk struct {
 	Size string
 	// recreate the disk image if it already exists
 	Recreate bool
+	// BackingFile is the path to a base image for a qcow2 overlay disk.
+	// When set, Create() makes a thin COW overlay instead of a blank image.
+	BackingFile string
 }
 
 var _ Builder = &Disk{}
@@ -135,6 +138,12 @@ func WithReadonly(readonly bool) DiskOptions {
 	}
 }
 
+func WithBackingFile(path string) DiskOptions {
+	return func(disk *Disk) {
+		disk.BackingFile = path
+	}
+}
+
 // NewDisk creates a new Disk with the given path and index
 // index is used for boot order
 // default format is qcow2
@@ -162,6 +171,23 @@ func NewDisk(provider provider.Provider, machine Machine, opts ...DiskOptions) *
 	return d
 }
 
+// detectImageFormat returns the format string ("qcow2", "raw", etc.) of an image
+// file by running qemu-img info. Falls back to "raw" on error.
+// detectImageFormat returns the format of an image file using qemu-img info.
+// It parses the human-readable "file format:" line which appears once at the top level.
+func detectImageFormat(path string) (string, error) {
+	out, err := exec.Command("qemu-img", "info", path).Output()
+	if err != nil {
+		return "raw", fmt.Errorf("qemu-img info: %w", err)
+	}
+	for line := range strings.SplitSeq(string(out), "\n") {
+		if val, ok := strings.CutPrefix(line, "file format:"); ok {
+			return strings.TrimSpace(val), nil
+		}
+	}
+	return "raw", nil
+}
+
 func (q *Disk) Create(ctx context.Context) error {
 	if q.Media == DiskMediaCdrom {
 		q.provider.Logger().Info("skipping disk creation", zap.String("reason", "iso disk"))
@@ -176,14 +202,31 @@ func (q *Disk) Create(ctx context.Context) error {
 		}
 	}
 
-	if err := os.MkdirAll(q.Path, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(q.AbsolutePath()), 0o755); err != nil {
 		return err
 	}
 
 	if _, err := os.Stat(q.AbsolutePath()); err == nil {
 		return errors.New("disk already exists")
 	}
-	cmd := exec.CommandContext(ctx, "qemu-img", "create", "-f", string(q.Format), q.AbsolutePath(), q.Size)
+
+	var cmd *exec.Cmd
+	if q.BackingFile != "" {
+		// Detect the backing file format so the overlay is created correctly.
+		backingFmt, err := detectImageFormat(q.BackingFile)
+		if err != nil {
+			return fmt.Errorf("detect backing file format: %w", err)
+		}
+		cmd = exec.CommandContext(ctx, "qemu-img", "create",
+			"-f", string(q.Format),
+			"-b", q.BackingFile,
+			"-F", backingFmt,
+			q.AbsolutePath(),
+			q.Size,
+		)
+	} else {
+		cmd = exec.CommandContext(ctx, "qemu-img", "create", "-f", string(q.Format), q.AbsolutePath(), q.Size)
+	}
 	reader, writer := io.Pipe()
 	cmd.Stdout = writer
 	cmd.Stderr = writer
@@ -212,7 +255,7 @@ func (q *Disk) Delete() error {
 }
 
 func (q *Disk) AbsolutePath() string {
-	suffixes := []string{"qcow", "raw", "iso", "vmdk", "vdi", "vhd"}
+	suffixes := []string{"qcow2", "qcow", "img", "raw", "iso", "vmdk", "vdi", "vhd"}
 	for _, suffix := range suffixes {
 		if strings.HasSuffix(q.Path, string(suffix)) {
 			return q.Path

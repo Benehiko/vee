@@ -17,6 +17,10 @@ import (
 const (
 	UbuntuDownloadURL         = "https://releases.ubuntu.com/%s/ubuntu-%s-%s-%s.iso"
 	UbuntuDownloadChecksumURL = "https://releases.ubuntu.com/%s/SHA256SUMS"
+
+	// UbuntuCloudImageURL is the base URL for pre-installed cloud images.
+	UbuntuCloudImageURL         = "https://cloud-images.ubuntu.com/releases/%s/release/ubuntu-%s-server-cloudimg-amd64.img"
+	UbuntuCloudImageChecksumURL = "https://cloud-images.ubuntu.com/releases/%s/release/SHA256SUMS"
 )
 
 type UbuntuImageType string
@@ -36,11 +40,11 @@ const (
 	Ubuntu2410 UbuntuVersion = "24.10"
 )
 
-// KnownUbuntuVersions lists supported Ubuntu versions, newest first.
+// KnownUbuntuVersions lists supported Ubuntu versions, newest LTS first.
+// 24.10 (oracular) is excluded from the default list — it reached EOL in July 2025
+// and its package repos no longer serve a Release file.
 var KnownUbuntuVersions = []UbuntuVersion{
-	Ubuntu2410,
 	Ubuntu2404,
-	Ubuntu2310,
 	Ubuntu2204,
 	Ubuntu2004,
 }
@@ -182,4 +186,136 @@ func (u *UbuntuImage) Download(ctx context.Context) error {
 
 func (u *UbuntuImage) AbsolutePath() string {
 	return filepath.Join(u.basePath, u.Name())
+}
+
+// UbuntuCloudImage is a pre-installed Ubuntu cloud image (.img) that supports
+// standard cloud-init user-data on first boot, unlike the live-server ISO which
+// requires subiquity autoinstall format.
+type UbuntuCloudImage struct {
+	*BaseImage
+	version UbuntuVersion
+}
+
+func NewUbuntuCloudImage(p provider.Provider, version UbuntuVersion) *UbuntuCloudImage {
+	return &UbuntuCloudImage{
+		BaseImage: NewBaseImage(p),
+		version:   version,
+	}
+}
+
+func (u *UbuntuCloudImage) Distro() string  { return "ubuntu" }
+func (u *UbuntuCloudImage) Version() string { return string(u.version) }
+
+func (u *UbuntuCloudImage) Name() string {
+	return fmt.Sprintf("ubuntu-%s-server-cloudimg-amd64.img", u.version)
+}
+
+func (u *UbuntuCloudImage) AbsolutePath() string {
+	return filepath.Join(u.basePath, u.Name())
+}
+
+func (u *UbuntuCloudImage) Delete() error {
+	if _, err := os.Stat(u.AbsolutePath()); os.IsNotExist(err) {
+		return nil
+	}
+	return os.Remove(u.AbsolutePath())
+}
+
+func (u *UbuntuCloudImage) checksum() (string, error) {
+	return checksum.SHA256sum(u.AbsolutePath())
+}
+
+func (u *UbuntuCloudImage) Download(ctx context.Context) error {
+	u.provider.Logger().Info("downloading", zap.String("file", u.Name()))
+
+	checksumURL := fmt.Sprintf(UbuntuCloudImageChecksumURL, u.version)
+	httpClient := &http.Client{}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", checksumURL, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+
+	var targetChecksum string
+	for line := range strings.SplitSeq(string(b), "\n") {
+		if strings.Contains(line, u.Name()) {
+			parts := strings.Fields(line)
+			if len(parts) >= 1 {
+				targetChecksum = parts[0]
+			}
+			break
+		}
+	}
+	if targetChecksum == "" {
+		return fmt.Errorf("checksum not found for %s", u.Name())
+	}
+
+	if _, err := os.Stat(u.AbsolutePath()); err == nil {
+		sha256, err := u.checksum()
+		if err != nil {
+			return err
+		}
+		if sha256 == targetChecksum {
+			u.provider.Logger().Info("skipping download",
+				zap.String("file", u.AbsolutePath()),
+				zap.String("reason", "already downloaded"))
+			return nil
+		}
+		u.provider.Logger().Warn("removing file due to checksum mismatch",
+			zap.String("file", u.AbsolutePath()),
+			zap.String("expected", targetChecksum),
+			zap.String("actual", sha256))
+		if err := os.Remove(u.AbsolutePath()); err != nil {
+			return err
+		}
+	}
+
+	imgURL := fmt.Sprintf(UbuntuCloudImageURL, u.version, u.version)
+	req, err = http.NewRequestWithContext(ctx, "GET", imgURL, nil)
+	if err != nil {
+		return err
+	}
+	resp, err = httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if err := os.MkdirAll(u.basePath, 0o755); err != nil {
+		return err
+	}
+
+	f, err := os.Create(u.AbsolutePath())
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+
+	if err := u.CreateImage(f, resp.Body, resp.ContentLength); err != nil {
+		return err
+	}
+
+	sha256, err := u.checksum()
+	if err != nil {
+		return err
+	}
+	if sha256 != targetChecksum {
+		u.provider.Logger().Error("checksum mismatch",
+			zap.String("file", u.AbsolutePath()),
+			zap.String("expected", targetChecksum),
+			zap.String("actual", sha256))
+		return fmt.Errorf("checksum mismatch: expected %s, got %s", targetChecksum, sha256)
+	}
+
+	return nil
 }

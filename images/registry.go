@@ -43,6 +43,20 @@ func DistroVersions(distro string) []string {
 	}
 }
 
+// DefaultUser returns the default cloud image username for a distro.
+func DefaultUser(distro string) string {
+	switch distro {
+	case DistroUbuntu:
+		return "ubuntu"
+	case DistroArch:
+		return "arch"
+	case DistroFedora:
+		return "fedora"
+	default:
+		return ""
+	}
+}
+
 // NewImage constructs the Image for (distro, version).
 // version "latest" resolves to the newest known version for the distro.
 func NewImage(p provider.Provider, distro, version string) (Image, error) {
@@ -56,7 +70,8 @@ func NewImage(p provider.Provider, distro, version string) (Image, error) {
 
 	switch distro {
 	case DistroUbuntu:
-		return NewUbuntuImage(p, UbuntuServer, UbuntuVersion(version), "amd64"), nil
+		// Cloud image: pre-installed, cloud-init-ready. Used by devbox/server templates.
+		return NewUbuntuCloudImage(p, UbuntuVersion(version)), nil
 	case DistroArch:
 		return NewArchImage(p, ArchVersion(version)), nil
 	case DistroFedora:
