@@ -4,6 +4,7 @@ import (
 	"os"
 
 	"github.com/Benehiko/vee/provider"
+	"github.com/Benehiko/vee/tui"
 	"github.com/spf13/cobra"
 )
 
@@ -23,6 +24,13 @@ var rootCmd = &cobra.Command{
 		}
 		prov = p
 		return nil
+	},
+	RunE: func(cmd *cobra.Command, args []string) error {
+		p, err := provider.NewProvider()
+		if err != nil {
+			return err
+		}
+		return tui.Run(cmd.Context(), p)
 	},
 }
 
