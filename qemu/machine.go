@@ -49,6 +49,7 @@ type BaseMachine struct {
 	memfd        *MemfdBackend
 	vfioDevices  []*VFIODevice
 	tpm          *TPM
+	vsock        *VSockDevice
 }
 
 var (
@@ -153,6 +154,12 @@ func WithTPM(tpm *TPM) QemuOptions {
 	}
 }
 
+func WithVSock(dev *VSockDevice) QemuOptions {
+	return func(q *BaseMachine) {
+		q.vsock = dev
+	}
+}
+
 func NewEmptyMachine(provider provider.Provider) (*BaseMachine, error) {
 	return &BaseMachine{
 		provider:     provider,
@@ -224,6 +231,10 @@ func (q *BaseMachine) Args() []string {
 
 	if q.tpm != nil {
 		args = append(args, q.tpm.Args()...)
+	}
+
+	if q.vsock != nil {
+		args = append(args, q.vsock.Args()...)
 	}
 
 	for _, dev := range q.extraDevices {

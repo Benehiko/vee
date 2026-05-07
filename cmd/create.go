@@ -27,6 +27,7 @@ var (
 	createVirtiofsTag string
 	createSSHKeyFile  string
 	createUser        string
+	createSSHShare    bool
 )
 
 var createCmd = &cobra.Command{
@@ -127,6 +128,9 @@ Templates apply sane defaults automatically:
 				Cache:     "none",
 			}}, cfg.Disks...)
 		}
+		if cmd.Flags().Changed("ssh-share") {
+			cfg.SSHShare = createSSHShare
+		}
 
 		mgr := vm.NewManager(prov)
 		if err := mgr.Create(cmd.Context(), cfg); err != nil {
@@ -177,4 +181,5 @@ func init() {
 	createCmd.Flags().StringVar(&createVirtiofsTag, "virtiofs-tag", "share", "Mount tag for the virtiofs share")
 	createCmd.Flags().StringVar(&createSSHKeyFile, "ssh-keys", "", "Path to file containing SSH public keys (one per line)")
 	createCmd.Flags().StringVar(&createUser, "user", "", "Default cloud-init username (overrides template default)")
+	createCmd.Flags().BoolVar(&createSSHShare, "ssh-share", false, "Enable SSH agent sharing into VM via AF_VSOCK")
 }

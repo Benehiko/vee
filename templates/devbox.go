@@ -43,6 +43,24 @@ func NewDevboxConfig(p provider.Provider, name string, sshKeys []string) *vm.VMC
 				"usermod -aG docker dev",
 				// Set zsh as default shell.
 				"chsh -s /bin/zsh dev",
+				// Install socat for vsock SSH agent forwarding (vee ssh-share).
+				"apt-get install -y socat",
+				// Create a systemd user service that bridges vsock port 2222 → SSH_AUTH_SOCK.
+				`mkdir -p /etc/systemd/system && cat >/etc/systemd/system/vee-ssh-agent.service <<'EOF'
+[Unit]
+Description=vee SSH agent vsock bridge
+After=network.target
+
+[Service]
+Type=simple
+ExecStartPre=/bin/mkdir -p /run/vee
+ExecStart=/usr/bin/socat UNIX-LISTEN:/run/vee/ssh_agent.sock,fork,mode=0600 VSOCK-CONNECT:2:2222
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+EOF`,
+				"systemctl enable --now vee-ssh-agent",
 			},
 		},
 		CreatedAt: time.Now(),

@@ -82,5 +82,6 @@ type VMConfig struct {
 	CloudInit      *CloudInitConfig `yaml:"cloud_init,omitempty"`
 	TPM            *TPMConfig       `yaml:"tpm,omitempty"`
 	SSHShare       bool             `yaml:"ssh_share,omitempty"`
+	VsockCID       uint32           `yaml:"vsock_cid,omitempty"`
 	CreatedAt      time.Time        `yaml:"created_at"`
 }

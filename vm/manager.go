@@ -2,6 +2,7 @@ package vm
 
 import (
 	"context"
+	"crypto/sha1"
 	"fmt"
 	"io"
 	"os"
@@ -319,6 +320,15 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 		opts = append(opts, qemu.WithTPM(qemu.NewTPM(tpmSock)))
 	}
 
+	// VSock — add vhost-vsock-pci device when SSH sharing is enabled.
+	if cfg.SSHShare {
+		cid := cfg.VsockCID
+		if cid == 0 {
+			cid = deterministicCID(cfg.Name)
+		}
+		opts = append(opts, qemu.WithVSock(qemu.NewVSockDevice(cid)))
+	}
+
 	built, err := machine.BuildMachine(opts...)
 	if err != nil {
 		return nil, 0, err
@@ -356,6 +366,17 @@ func newSwtpmCmd(stateDir, socketPath string) *exec.Cmd {
 		"--tpm2",
 		"--daemon",
 	)
+}
+
+// deterministicCID returns a stable guest CID (>= 3) derived from the VM name.
+// CIDs 0-2 are reserved: hypervisor, local, host.
+func deterministicCID(name string) uint32 {
+	h := sha1.Sum([]byte(name))
+	cid := uint32(h[0])<<24 | uint32(h[1])<<16 | uint32(h[2])<<8 | uint32(h[3])
+	if cid < 3 {
+		cid += 3
+	}
+	return cid
 }
 
 func isAlive(pid int) bool {
