@@ -49,4 +49,5 @@ func init() {
 	rootCmd.AddCommand(deleteCmd)
 	rootCmd.AddCommand(sshShareCmd)
 	rootCmd.AddCommand(sshCmd)
+	rootCmd.AddCommand(logsCmd)
 }
