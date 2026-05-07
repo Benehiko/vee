@@ -46,6 +46,9 @@ const (
 	InterfacePflash DiskInterface = "pflash"
 	InterfaceVirtio DiskInterface = "virtio"
 	InterfaceNone   DiskInterface = "none"
+	// InterfaceAHCI emits an ahci controller + ide-hd device, matching the
+	// SATA bus arrangement that TrueNAS (ZFS) expects for its boot pool.
+	InterfaceAHCI DiskInterface = "ahci"
 )
 
 type Disk struct {
@@ -77,6 +80,13 @@ type Disk struct {
 	// BackingFile is the path to a base image for a qcow2 overlay disk.
 	// When set, Create() makes a thin COW overlay instead of a blank image.
 	BackingFile string
+	// Serial is emitted as serial=<value> on the virtio-blk-pci device.
+	// Useful for passthrough disks so ZFS can identify physical drives.
+	Serial string
+	// Passthrough marks this disk as a raw host block device passthrough.
+	// The Path must be a host device (e.g. /dev/disk/by-id/...).
+	// Sets format=raw, cache=none, aio=native automatically.
+	Passthrough bool
 }
 
 var _ Builder = &Disk{}
@@ -144,6 +154,18 @@ func WithBackingFile(path string) DiskOptions {
 	}
 }
 
+func WithSerial(serial string) DiskOptions {
+	return func(disk *Disk) {
+		disk.Serial = serial
+	}
+}
+
+func WithPassthrough(passthrough bool) DiskOptions {
+	return func(disk *Disk) {
+		disk.Passthrough = passthrough
+	}
+}
+
 // NewDisk creates a new Disk with the given path and index
 // index is used for boot order
 // default format is qcow2
@@ -191,6 +213,10 @@ func detectImageFormat(path string) (string, error) {
 func (q *Disk) Create(ctx context.Context) error {
 	if q.Media == DiskMediaCdrom {
 		q.provider.Logger().Info("skipping disk creation", zap.String("reason", "iso disk"))
+		return nil
+	}
+	if q.Passthrough {
+		q.provider.Logger().Info("skipping disk creation", zap.String("reason", "passthrough disk"))
 		return nil
 	}
 	if _, err := exec.LookPath("qemu-img"); err != nil {
@@ -289,8 +315,54 @@ func (q *Disk) FixOptions() {
 func (q *Disk) Args() []string {
 	q.FixOptions()
 
-	var args []string
 	id := fmt.Sprintf("disk%d", q.diskIndex)
+
+	// AHCI disks: emit -device ahci controller (once, tracked externally by
+	// the machine) + -drive if=none + -device ide-hd,bus=ahci0.<slot>.
+	// The ahci controller itself is added by BaseMachine.Args() before disks.
+	if q.Interface == InterfaceAHCI {
+		driveArgs := []string{
+			"file=" + q.AbsolutePath(),
+			"if=none",
+			"id=" + id,
+			"format=" + string(q.Format),
+			"cache=" + string(q.Cache),
+			"aio=native",
+			"discard=unmap",
+		}
+		deviceArgs := []string{
+			"ide-hd",
+			"drive=" + id,
+			fmt.Sprintf("bus=ahci0.%d", q.diskIndex),
+		}
+		return []string{
+			"-drive", strings.Join(driveArgs, ","),
+			"-device", strings.Join(deviceArgs, ","),
+		}
+	}
+
+	// Passthrough disks: raw host device via virtio-blk-pci with optional serial.
+	if q.Passthrough {
+		driveArgs := []string{
+			"file=" + q.AbsolutePath(),
+			"format=raw",
+			"if=none",
+			"id=" + id,
+			"cache=none",
+			"aio=native",
+		}
+		deviceArgs := []string{
+			"virtio-blk-pci",
+			"drive=" + id,
+		}
+		if q.Serial != "" {
+			deviceArgs = append(deviceArgs, "serial="+q.Serial)
+		}
+		return []string{
+			"-drive", strings.Join(driveArgs, ","),
+			"-device", strings.Join(deviceArgs, ","),
+		}
+	}
 
 	driveArgs := []string{
 		"file=" + q.AbsolutePath(),
@@ -305,5 +377,5 @@ func (q *Disk) Args() []string {
 	if q.Media == DiskMediaDisk {
 		driveArgs = append(driveArgs, "format="+string(q.Format))
 	}
-	return append(args, "-drive", strings.Join(driveArgs, ","))
+	return []string{"-drive", strings.Join(driveArgs, ",")}
 }

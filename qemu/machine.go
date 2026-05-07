@@ -212,6 +212,13 @@ func (q *BaseMachine) Args() []string {
 		args = append(args, q.uefi.Args()...)
 	}
 
+	// Emit AHCI controller once if any disk uses InterfaceAHCI.
+	for _, disk := range q.disks {
+		if disk.Interface == InterfaceAHCI {
+			args = append(args, "-device", "ahci,id=ahci0")
+			break
+		}
+	}
 	for i, disk := range q.disks {
 		disk.diskIndex = i
 		args = append(args, disk.Args()...)

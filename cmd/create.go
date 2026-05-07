@@ -34,6 +34,7 @@ var (
 	createSSHPort       int
 	createDistro        string
 	createDistroVersion string
+	createDataDisks     []string
 )
 
 var createCmd = &cobra.Command{
@@ -48,9 +49,15 @@ Templates apply sane defaults automatically:
   devbox         8G / 4 CPUs, Docker + zsh via cloud-init (supports --distro)
   server         8G / 2 CPUs, openssh + ufw + fail2ban via cloud-init (supports --distro)
   windows        24G / 4 CPUs, UEFI secboot, TPM 2.0
+  truenas        8G / 2 CPUs, UEFI, AHCI OS disk, bridge NIC, SPICE display
 
 Supported distros for devbox/server: ubuntu, arch, fedora
-Use --distro-version latest (default) or a specific version string.`,
+Use --distro-version latest (default) or a specific version string.
+
+TrueNAS data disk passthrough:
+  vee create nas --template truenas \
+    --data-disk /dev/disk/by-id/ata-ST22000NM000C_ZXA0S3H6 \
+    --data-disk /dev/disk/by-id/ata-ST22000NM000C_ZXA0WD9J`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
@@ -97,6 +104,12 @@ Use --distro-version latest (default) or a specific version string.`,
 		case "server":
 			var err error
 			cfg, err = templates.NewServerConfig(cmd.Context(), prov, name, sshKeys, createDistro, createDistroVersion)
+			if err != nil {
+				return err
+			}
+		case "truenas":
+			var err error
+			cfg, err = templates.NewTruenasConfig(cmd.Context(), prov, name, createDistroVersion, createNicBridge, createSpicePort, createDataDisks)
 			if err != nil {
 				return err
 			}
@@ -231,4 +244,5 @@ func init() {
 	createCmd.Flags().IntVar(&createSSHPort, "ssh-port", 0, "Host port forwarded to VM port 22 (headless VMs only)")
 	createCmd.Flags().StringVar(&createDistro, "distro", "ubuntu", "Base OS distro for devbox/server templates: ubuntu, arch, fedora")
 	createCmd.Flags().StringVar(&createDistroVersion, "distro-version", "latest", "ISO version for the selected distro (e.g. 24.04, 2025.05.01, 42) or 'latest'")
+	createCmd.Flags().StringArrayVar(&createDataDisks, "data-disk", nil, "Host block device path for passthrough data disk (repeatable, e.g. /dev/disk/by-id/ata-...)")
 }

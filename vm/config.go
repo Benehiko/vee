@@ -11,6 +11,11 @@ type DiskConfig struct {
 	Cache       string `yaml:"cache"`
 	Readonly    bool   `yaml:"readonly"`
 	BackingFile string `yaml:"backing_file,omitempty"`
+	// Serial is passed to the virtio-blk-pci device (passthrough disks).
+	Serial string `yaml:"serial,omitempty"`
+	// Passthrough marks this as a raw host block device (e.g. /dev/disk/by-id/...).
+	// Path must point to the host device. Format, cache, aio are set automatically.
+	Passthrough bool `yaml:"passthrough,omitempty"`
 }
 
 type NICConfig struct {
