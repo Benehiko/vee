@@ -54,10 +54,10 @@ Templates apply sane defaults automatically:
 Supported distros for devbox/server: ubuntu, arch, fedora
 Use --distro-version latest (default) or a specific version string.
 
-TrueNAS data disk passthrough:
+TrueNAS data disk passthrough (serial optional, auto-derived from path if omitted):
   vee create nas --template truenas \
-    --data-disk /dev/disk/by-id/ata-ST22000NM000C_ZXA0S3H6 \
-    --data-disk /dev/disk/by-id/ata-ST22000NM000C_ZXA0WD9J`,
+    --data-disk /dev/disk/by-id/ata-ST22000NM000C_ZXA0S3H6:EXOS22TB-A \
+    --data-disk /dev/disk/by-id/ata-ST22000NM000C_ZXA0WD9J:EXOS22TB-B`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
@@ -244,5 +244,5 @@ func init() {
 	createCmd.Flags().IntVar(&createSSHPort, "ssh-port", 0, "Host port forwarded to VM port 22 (headless VMs only)")
 	createCmd.Flags().StringVar(&createDistro, "distro", "ubuntu", "Base OS distro for devbox/server templates: ubuntu, arch, fedora")
 	createCmd.Flags().StringVar(&createDistroVersion, "distro-version", "latest", "ISO version for the selected distro (e.g. 24.04, 2025.05.01, 42) or 'latest'")
-	createCmd.Flags().StringArrayVar(&createDataDisks, "data-disk", nil, "Host block device path for passthrough data disk (repeatable, e.g. /dev/disk/by-id/ata-...)")
+	createCmd.Flags().StringArrayVar(&createDataDisks, "data-disk", nil, "Host block device for passthrough data disk, optionally with serial: path[:serial] (repeatable)")
 }

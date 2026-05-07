@@ -12,19 +12,34 @@ import (
 	"github.com/Benehiko/vee/vm"
 )
 
+// DataDisk represents a host block device to pass through as a ZFS data drive.
+// Serial is optional; if empty it is derived from the disk-by-id path.
+type DataDisk struct {
+	Path   string
+	Serial string
+}
+
+// ParseDataDisk parses a "path" or "path:serial" string into a DataDisk.
+func ParseDataDisk(s string) DataDisk {
+	if idx := strings.LastIndex(s, ":"); idx > 0 {
+		return DataDisk{Path: s[:idx], Serial: s[idx+1:]}
+	}
+	return DataDisk{Path: s}
+}
+
 // NewTruenasConfig returns a VMConfig for a TrueNAS SCALE VM.
 //
 // version selects the TrueNAS SCALE ISO version ("latest" for newest).
 // bridge is the host bridge interface for LAN access to the web UI (default "br0").
 // spicePort is the local SPICE display port (default 5933).
-// dataDiskPaths are host block device paths to pass through as ZFS data drives
-// (e.g. /dev/disk/by-id/ata-ST22000NM000C_ZXA0S3H6). Leave nil for no data disks.
+// dataDisks are host block devices to pass through as ZFS data drives.
+// Each entry is "path" or "path:serial"; serial defaults to auto-derived from path.
 //
 // TrueNAS requires UEFI, bridge networking (to reach the web UI at port 80/443
 // on the VM's LAN IP), and SATA/AHCI for its OS boot pool disks. Data drives
 // are passed through as virtio-blk-pci with serials derived from the disk-by-id
 // name so ZFS can identify physical drives after reboots.
-func NewTruenasConfig(ctx context.Context, p provider.Provider, name, version string, bridge string, spicePort int, dataDiskPaths []string) (*vm.VMConfig, error) {
+func NewTruenasConfig(ctx context.Context, p provider.Provider, name, version string, bridge string, spicePort int, dataDisks []string) (*vm.VMConfig, error) {
 	if version == "" {
 		version = "latest"
 	}
@@ -67,15 +82,20 @@ func NewTruenasConfig(ctx context.Context, p provider.Provider, name, version st
 		},
 	}
 
-	for _, devPath := range dataDiskPaths {
+	for _, raw := range dataDisks {
+		dd := ParseDataDisk(raw)
+		serial := dd.Serial
+		if serial == "" {
+			serial = truenasSerialFromPath(dd.Path)
+		}
 		disks = append(disks, vm.DiskConfig{
-			Path:        devPath,
+			Path:        dd.Path,
 			Format:      "raw",
 			Interface:   "virtio",
 			Media:       "disk",
 			Cache:       "none",
 			Passthrough: true,
-			Serial:      truenasSerialFromPath(devPath),
+			Serial:      serial,
 		})
 	}
 

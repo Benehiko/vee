@@ -71,31 +71,18 @@ func (t *TrueNASImage) checksum() (string, error) {
 func (t *TrueNASImage) Download(ctx context.Context) error {
 	t.provider.Logger().Info("downloading", zap.String("file", t.Name()))
 
-	checksumURL := fmt.Sprintf(TrueNASDownloadChecksumURL, t.version, t.version)
-	httpClient := &http.Client{}
-
-	req, err := http.NewRequestWithContext(ctx, "GET", checksumURL, nil)
-	if err != nil {
-		return err
-	}
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	b, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-
-	// The .sha256 file may be just the hex hash, or "hash  filename" format.
-	targetChecksum := strings.TrimSpace(strings.Fields(string(b))[0])
-	if targetChecksum == "" {
-		return fmt.Errorf("checksum not found for %s", t.Name())
-	}
-
+	// If the file already exists, try to verify against the remote checksum.
+	// If the checksum endpoint is unavailable (404, network error), trust the
+	// existing file and skip the download.
 	if _, err := os.Stat(t.AbsolutePath()); err == nil {
+		httpClient := &http.Client{}
+		targetChecksum, err := t.fetchRemoteChecksum(ctx, httpClient)
+		if err != nil {
+			t.provider.Logger().Warn("skipping checksum verification — remote unavailable",
+				zap.String("file", t.AbsolutePath()),
+				zap.Error(err))
+			return nil
+		}
 		sha256, err := t.checksum()
 		if err != nil {
 			return err
@@ -115,16 +102,27 @@ func (t *TrueNASImage) Download(ctx context.Context) error {
 		}
 	}
 
-	isoURL := fmt.Sprintf(TrueNASDownloadURL, t.version, t.version)
-	req, err = http.NewRequestWithContext(ctx, "GET", isoURL, nil)
+	httpClient := &http.Client{}
+
+	// Fetch remote checksum before downloading.
+	targetChecksum, err := t.fetchRemoteChecksum(ctx, httpClient)
 	if err != nil {
 		return err
 	}
-	resp, err = httpClient.Do(req)
+
+	isoURL := fmt.Sprintf(TrueNASDownloadURL, t.version, t.version)
+	req, err := http.NewRequestWithContext(ctx, "GET", isoURL, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("downloading ISO: unexpected status %s", resp.Status)
+	}
 
 	if err := os.MkdirAll(t.basePath, 0o755); err != nil {
 		return err
@@ -153,4 +151,30 @@ func (t *TrueNASImage) Download(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (t *TrueNASImage) fetchRemoteChecksum(ctx context.Context, httpClient *http.Client) (string, error) {
+	checksumURL := fmt.Sprintf(TrueNASDownloadChecksumURL, t.version, t.version)
+	req, err := http.NewRequestWithContext(ctx, "GET", checksumURL, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("fetching checksum: unexpected status %s from %s", resp.Status, checksumURL)
+	}
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	// The .sha256 file may be just the hex hash, or "hash  filename" format.
+	fields := strings.Fields(string(b))
+	if len(fields) == 0 {
+		return "", fmt.Errorf("checksum not found for %s", t.Name())
+	}
+	return fields[0], nil
 }
