@@ -374,7 +374,9 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 	}
 	nicHostFwds := cfg.NIC.HostFwds
 	if cfg.Headless && cfg.SSHPort > 0 {
-		nicHostFwds = append(nicHostFwds, fmt.Sprintf("tcp:127.0.0.1:%d-:22", cfg.SSHPort))
+		port := availablePort(cfg.SSHPort, 2200, 2299)
+		cfg.SSHPort = port
+		nicHostFwds = append(nicHostFwds, fmt.Sprintf("tcp:127.0.0.1:%d-:22", port))
 	}
 	nic := qemu.NewNIC(qemu.NICMode(cfg.NIC.Mode), cfg.NIC.Bridge, cfg.NIC.MAC, nicHostFwds...)
 	opts = append(opts, qemu.WithNIC(nic))
@@ -516,6 +518,29 @@ func deterministicCID(name string) uint32 {
 		cid += 3
 	}
 	return cid
+}
+
+// availablePort returns preferred if it is free, otherwise scans [min, max] for
+// the first free port. Falls back to preferred if none found (QEMU will error).
+func availablePort(preferred, min, max int) int {
+	if isPortFree(preferred) {
+		return preferred
+	}
+	for p := min; p <= max; p++ {
+		if p != preferred && isPortFree(p) {
+			return p
+		}
+	}
+	return preferred
+}
+
+func isPortFree(port int) bool {
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		return false
+	}
+	_ = ln.Close()
+	return true
 }
 
 func isAlive(pid int) bool {
