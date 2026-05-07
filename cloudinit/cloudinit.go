@@ -13,12 +13,19 @@ type WriteFile struct {
 	Path        string
 	Content     string
 	Permissions string
+	Owner       string
+	// Defer defers write_files to the final modules stage so the target user
+	// already exists (e.g. when injecting into a user created by cloud-init).
+	Defer bool
 }
 
 // Config defines the cloud-init user-data for first-boot configuration.
 type Config struct {
 	Hostname string
 	User     string
+	// DefaultUser is the distro's built-in cloud image user (e.g. "ubuntu").
+	// When set, SSH keys are injected into this user in addition to User.
+	DefaultUser string
 	// SSHKeys are added to the user's authorized_keys.
 	SSHKeys []string
 	// Packages to install on first boot.
@@ -67,8 +74,35 @@ func renderUserData(cfg *Config) (string, error) {
 		fmt.Fprintf(&sb, "hostname: %s\n", cfg.Hostname)
 	}
 
-	if cfg.User != "" {
+	// cloud-init v25+ ignores top-level ssh_authorized_keys when a users: block
+	// is present. Keys for the default user are injected via runcmd instead (see below).
+	hasUsersBlock := cfg.User != "" && cfg.User != cfg.DefaultUser
+	if len(cfg.SSHKeys) > 0 && !hasUsersBlock {
+		// Simple case: no custom user, so top-level directive works fine.
+		sb.WriteString("ssh_authorized_keys:\n")
+		for _, k := range cfg.SSHKeys {
+			fmt.Fprintf(&sb, "  - %s\n", k)
+		}
+	}
+
+	if hasUsersBlock {
 		sb.WriteString("users:\n")
+		// Emit the default cloud-image user entry with SSH keys so they are set
+		// during the config stage (cloud-init v25+ ignores top-level
+		// ssh_authorized_keys when any users: block is present).
+		// Preserve the typical default-user capabilities: sudo and docker groups.
+		if cfg.DefaultUser != "" && len(cfg.SSHKeys) > 0 {
+			fmt.Fprintf(&sb, "  - name: %s\n", cfg.DefaultUser)
+			sb.WriteString("    sudo: ALL=(ALL) NOPASSWD:ALL\n")
+			sb.WriteString("    groups: [adm, cdrom, dip, lxd, sudo, plugdev]\n")
+			sb.WriteString("    shell: /bin/bash\n")
+			sb.WriteString("    ssh_authorized_keys:\n")
+			for _, k := range cfg.SSHKeys {
+				fmt.Fprintf(&sb, "      - %s\n", k)
+			}
+		} else {
+			sb.WriteString("  - default\n")
+		}
 		fmt.Fprintf(&sb, "  - name: %s\n", cfg.User)
 		sb.WriteString("    sudo: ALL=(ALL) NOPASSWD:ALL\n")
 		sb.WriteString("    shell: /bin/bash\n")
@@ -80,15 +114,24 @@ func renderUserData(cfg *Config) (string, error) {
 		}
 	}
 
-	if len(cfg.WriteFiles) > 0 {
+	writeFiles := cfg.WriteFiles
+	runCmds := cfg.RunCmds
+
+	if len(writeFiles) > 0 {
 		sb.WriteString("write_files:\n")
-		for _, wf := range cfg.WriteFiles {
+		for _, wf := range writeFiles {
 			fmt.Fprintf(&sb, "  - path: %s\n", wf.Path)
 			perms := wf.Permissions
 			if perms == "" {
 				perms = "0644"
 			}
 			fmt.Fprintf(&sb, "    permissions: '%s'\n", perms)
+			if wf.Owner != "" {
+				fmt.Fprintf(&sb, "    owner: '%s'\n", wf.Owner)
+			}
+			if wf.Defer {
+				sb.WriteString("    defer: true\n")
+			}
 			sb.WriteString("    content: |\n")
 			for line := range strings.SplitSeq(wf.Content, "\n") {
 				fmt.Fprintf(&sb, "      %s\n", line)
@@ -105,10 +148,18 @@ func renderUserData(cfg *Config) (string, error) {
 		sb.WriteString("package_upgrade: false\n")
 	}
 
-	if len(cfg.RunCmds) > 0 {
+	if len(runCmds) > 0 {
 		sb.WriteString("runcmd:\n")
-		for _, c := range cfg.RunCmds {
-			fmt.Fprintf(&sb, "  - %s\n", c)
+		for _, c := range runCmds {
+			if !strings.Contains(c, "\n") {
+				fmt.Fprintf(&sb, "  - %s\n", c)
+				continue
+			}
+			// Multi-line command: emit as a YAML literal block scalar.
+			sb.WriteString("  - |\n")
+			for line := range strings.SplitSeq(c, "\n") {
+				fmt.Fprintf(&sb, "    %s\n", line)
+			}
 		}
 	}
 

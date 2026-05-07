@@ -3,13 +3,14 @@ package vm
 import "time"
 
 type DiskConfig struct {
-	Path      string `yaml:"path"`
-	Size      string `yaml:"size"`
-	Format    string `yaml:"format"`
-	Interface string `yaml:"interface"`
-	Media     string `yaml:"media"`
-	Cache     string `yaml:"cache"`
-	Readonly  bool   `yaml:"readonly"`
+	Path        string `yaml:"path"`
+	Size        string `yaml:"size"`
+	Format      string `yaml:"format"`
+	Interface   string `yaml:"interface"`
+	Media       string `yaml:"media"`
+	Cache       string `yaml:"cache"`
+	Readonly    bool   `yaml:"readonly"`
+	BackingFile string `yaml:"backing_file,omitempty"`
 }
 
 type NICConfig struct {
@@ -60,16 +61,18 @@ type CloudInitWriteFile struct {
 	Path        string `yaml:"path"`
 	Content     string `yaml:"content"`
 	Permissions string `yaml:"permissions,omitempty"`
+	Defer       bool   `yaml:"defer,omitempty"`
 }
 
 // CloudInitConfig carries first-boot configuration rendered into a cidata ISO.
 type CloudInitConfig struct {
-	Hostname   string               `yaml:"hostname,omitempty"`
-	User       string               `yaml:"user,omitempty"`
-	SSHKeys    []string             `yaml:"ssh_keys,omitempty"`
-	Packages   []string             `yaml:"packages,omitempty"`
-	RunCmds    []string             `yaml:"run_cmds,omitempty"`
-	WriteFiles []CloudInitWriteFile `yaml:"write_files,omitempty"`
+	Hostname    string               `yaml:"hostname,omitempty"`
+	User        string               `yaml:"user,omitempty"`
+	DefaultUser string               `yaml:"default_user,omitempty"`
+	SSHKeys     []string             `yaml:"ssh_keys,omitempty"`
+	Packages    []string             `yaml:"packages,omitempty"`
+	RunCmds     []string             `yaml:"run_cmds,omitempty"`
+	WriteFiles  []CloudInitWriteFile `yaml:"write_files,omitempty"`
 }
 
 type VMConfig struct {

@@ -58,33 +58,28 @@ func NewServerConfig(ctx context.Context, p provider.Provider, name string, sshK
 		GPU:      vm.GPUConfig{Mode: vm.GPUNone},
 		Headless: true,
 		SSHPort:  deterministicSSHPort(name),
-		UEFI: vm.UEFIConfig{
-			Enabled: true,
-		},
+		// Cloud images use legacy BIOS boot; UEFI is not needed here.
+		UEFI: vm.UEFIConfig{Enabled: false},
 		Disks: []vm.DiskConfig{
 			{
-				Path:      img.AbsolutePath(),
-				Interface: "virtio",
-				Media:     "cdrom",
-				Cache:     "none",
-				Readonly:  true,
-			},
-			{
-				Path:      filepath.Join(vmDir, "storage", "disk-os.qcow2"),
-				Size:      conf.DefaultDiskSize,
-				Format:    "qcow2",
-				Interface: "virtio",
-				Media:     "disk",
-				Cache:     "writeback",
+				// COW overlay on the cloud image — each VM gets its own writable layer.
+				Path:        filepath.Join(vmDir, "storage", "disk-os.img"),
+				Size:        conf.DefaultDiskSize,
+				Format:      "qcow2",
+				Interface:   "virtio",
+				Media:       "disk",
+				Cache:       "writeback",
+				BackingFile: img.AbsolutePath(),
 			},
 		},
 		CloudInit: &vm.CloudInitConfig{
-			Hostname:   name,
-			User:       user,
-			SSHKeys:    sshKeys,
-			Packages:   pkgs,
-			RunCmds:    runCmds,
-			WriteFiles: writeFiles,
+			Hostname:    name,
+			User:        user,
+			DefaultUser: images.DefaultUser(distro),
+			SSHKeys:     sshKeys,
+			Packages:    pkgs,
+			RunCmds:     runCmds,
+			WriteFiles:  writeFiles,
 		},
 		CreatedAt: time.Now(),
 	}
@@ -97,14 +92,21 @@ func serverRunCmds(distro string) ([]string, []vm.CloudInitWriteFile, error) {
 
 	switch distro {
 	case images.DistroUbuntu:
-		return []string{
+		writeFiles := []vm.CloudInitWriteFile{
+			{
+				Path:        "/etc/systemd/system/vee-ssh-agent.service",
+				Content:     vsockService,
+				Permissions: "0644",
+			},
+		}
+		runCmds := []string{
 			"ufw allow OpenSSH",
 			"ufw --force enable",
 			"systemctl enable --now fail2ban",
 			"apt-get install -y socat",
-			vsockServiceInstall,
 			"systemctl enable --now vee-ssh-agent",
-		}, nil, nil
+		}
+		return runCmds, writeFiles, nil
 
 	case images.DistroArch:
 		writeFiles := []vm.CloudInitWriteFile{

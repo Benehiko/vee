@@ -64,15 +64,17 @@ func (m *Manager) Create(ctx context.Context, cfg *VMConfig) error {
 				Path:        wf.Path,
 				Content:     wf.Content,
 				Permissions: wf.Permissions,
+				Defer:       wf.Defer,
 			}
 		}
 		ci := &cloudinit.Config{
-			Hostname:   cfg.CloudInit.Hostname,
-			User:       cfg.CloudInit.User,
-			SSHKeys:    cfg.CloudInit.SSHKeys,
-			Packages:   cfg.CloudInit.Packages,
-			RunCmds:    cfg.CloudInit.RunCmds,
-			WriteFiles: writeFiles,
+			Hostname:    cfg.CloudInit.Hostname,
+			User:        cfg.CloudInit.User,
+			DefaultUser: cfg.CloudInit.DefaultUser,
+			SSHKeys:     cfg.CloudInit.SSHKeys,
+			Packages:    cfg.CloudInit.Packages,
+			RunCmds:     cfg.CloudInit.RunCmds,
+			WriteFiles:  writeFiles,
 		}
 		isoPath, err := cloudinit.Generate(dir, ci)
 		if err != nil {
@@ -391,6 +393,7 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 			qemu.WithMedia(qemu.DiskMedia(d.Media)),
 			qemu.WithCache(qemu.DiskCache(d.Cache)),
 			qemu.WithReadonly(d.Readonly),
+			qemu.WithBackingFile(d.BackingFile),
 		)
 		_ = i
 		opts = append(opts, qemu.AddDisk(disk))

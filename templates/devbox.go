@@ -59,33 +59,28 @@ func NewDevboxConfig(ctx context.Context, p provider.Provider, name string, sshK
 		GPU:      vm.GPUConfig{Mode: vm.GPUNone},
 		Headless: true,
 		SSHPort:  deterministicSSHPort(name),
-		UEFI: vm.UEFIConfig{
-			Enabled: true,
-		},
+		// Cloud images use legacy BIOS boot; UEFI is not needed here.
+		UEFI: vm.UEFIConfig{Enabled: false},
 		Disks: []vm.DiskConfig{
 			{
-				Path:      img.AbsolutePath(),
-				Interface: "virtio",
-				Media:     "cdrom",
-				Cache:     "none",
-				Readonly:  true,
-			},
-			{
-				Path:      filepath.Join(vmDir, "storage", "disk-os.qcow2"),
-				Size:      conf.DefaultDiskSize,
-				Format:    "qcow2",
-				Interface: "virtio",
-				Media:     "disk",
-				Cache:     "writeback",
+				// Cloud image copied per-VM so each VM gets its own writable disk.
+				Path:        filepath.Join(vmDir, "storage", "disk-os.img"),
+				Size:        conf.DefaultDiskSize,
+				Format:      "qcow2",
+				Interface:   "virtio",
+				Media:       "disk",
+				Cache:       "writeback",
+				BackingFile: img.AbsolutePath(),
 			},
 		},
 		CloudInit: &vm.CloudInitConfig{
-			Hostname:   name,
-			User:       user,
-			SSHKeys:    sshKeys,
-			Packages:   pkgs,
-			RunCmds:    runCmds,
-			WriteFiles: writeFiles,
+			Hostname:    name,
+			User:        user,
+			DefaultUser: images.DefaultUser(distro),
+			SSHKeys:     sshKeys,
+			Packages:    pkgs,
+			RunCmds:     runCmds,
+			WriteFiles:  writeFiles,
 		},
 		CreatedAt: time.Now(),
 	}
@@ -98,14 +93,21 @@ func devboxRunCmds(distro, user, hostname string, pkgs []string) ([]string, []vm
 
 	switch distro {
 	case images.DistroUbuntu:
-		return []string{
+		writeFiles := []vm.CloudInitWriteFile{
+			{
+				Path:        "/etc/systemd/system/vee-ssh-agent.service",
+				Content:     vsockService,
+				Permissions: "0644",
+			},
+		}
+		runCmds := []string{
 			"curl -fsSL https://get.docker.com | sh",
 			"usermod -aG docker " + user,
 			"chsh -s /bin/zsh " + user,
 			"apt-get install -y socat",
-			vsockServiceInstall,
 			"systemctl enable --now vee-ssh-agent",
-		}, nil, nil
+		}
+		return runCmds, writeFiles, nil
 
 	case images.DistroArch:
 		archCfg, err := archinstallConfig(hostname, user, pkgs)
@@ -158,22 +160,6 @@ func devboxRunCmds(distro, user, hostname string, pkgs []string) ([]string, []vm
 		return nil, nil, fmt.Errorf("unsupported distro for devbox: %s", distro)
 	}
 }
-
-// vsockServiceInstall is the heredoc command that writes the systemd unit inline (Ubuntu only).
-const vsockServiceInstall = `mkdir -p /etc/systemd/system && cat >/etc/systemd/system/vee-ssh-agent.service <<'EOF'
-[Unit]
-Description=vee SSH agent vsock bridge
-After=network.target
-
-[Service]
-Type=simple
-ExecStartPre=/bin/mkdir -p /run/vee
-ExecStart=/usr/bin/socat UNIX-LISTEN:/run/vee/ssh_agent.sock,fork,mode=0600 VSOCK-CONNECT:2:2222
-Restart=on-failure
-
-[Install]
-WantedBy=multi-user.target
-EOF`
 
 // vsockSSHAgentService returns the systemd unit content for write_files.
 func vsockSSHAgentService() string {
