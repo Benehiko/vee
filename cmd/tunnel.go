@@ -79,7 +79,12 @@ func runTCPProxy(vmName string, localPort int, vmIP string, remotePort int) erro
 		return fmt.Errorf("listen: %w", err)
 	}
 
+	scheme := "http"
+	if remotePort == 443 {
+		scheme = "https"
+	}
 	fmt.Printf("tunnelling localhost:%d → %s:%d\n", localPort, vmName, remotePort)
+	fmt.Printf("%s://localhost:%d\n", scheme, localPort)
 	fmt.Println("press Ctrl+C to close")
 
 	quit := make(chan os.Signal, 1)
@@ -158,7 +163,12 @@ func runSSHTunnel(vmName string, localPort int, sshHost string, sshPort int, rem
 		return fmt.Errorf("open tunnel: %w", err)
 	}
 
+	sshScheme := "http"
+	if remotePort == 443 {
+		sshScheme = "https"
+	}
 	fmt.Printf("tunnelling localhost:%d → %s:%d\n", localPort, vmName, remotePort)
+	fmt.Printf("%s://localhost:%d\n", sshScheme, localPort)
 	fmt.Println("press Ctrl+C to close")
 
 	quit := make(chan os.Signal, 1)
