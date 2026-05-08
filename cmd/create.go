@@ -99,11 +99,11 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
 			if mountErr != nil {
 				return fmt.Errorf("prompt share mounts: %w", mountErr)
 			}
-			wgConf, vpnProvider, err := promptVPN()
-			if err != nil {
-				return fmt.Errorf("VPN setup: %w", err)
+			nordConf, wgConf, vpnProvider, vpnErr := promptVPN()
+			if vpnErr != nil {
+				return fmt.Errorf("VPN setup: %w", vpnErr)
 			}
-			cfg, err = templates.NewTorrentConfig(cmd.Context(), prov, name, sshKeys, mounts, wgConf, vpnProvider, createSpicePort)
+			cfg, err = templates.NewTorrentConfig(cmd.Context(), prov, name, sshKeys, mounts, nordConf, wgConf, vpnProvider, createSpicePort)
 			if err != nil {
 				return err
 			}

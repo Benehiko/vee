@@ -109,6 +109,6 @@ type VMConfig struct {
 	TrueNASAPIKey  string           `yaml:"truenas_api_key,omitempty"`
 	TrueNASUser    string           `yaml:"truenas_user,omitempty"`
 	// VPNProvider records which VPN provider was configured (e.g. "nordvpn", "generic").
-	VPNProvider    string           `yaml:"vpn_provider,omitempty"`
-	CreatedAt      time.Time        `yaml:"created_at"`
+	VPNProvider string    `yaml:"vpn_provider,omitempty"`
+	CreatedAt   time.Time `yaml:"created_at"`
 }

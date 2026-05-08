@@ -23,9 +23,11 @@ type ShareMount struct {
 // NewTorrentConfig returns a VMConfig for a lightweight torrent VM with SPICE display.
 // spicePort defaults to 5934 if 0. sshKeys are injected into the VM's authorized_keys.
 // mounts is an optional list of host→guest directory mappings shared via virtiofs.
-// wgConf is an optional WireGuard config injected as /etc/wireguard/wg0.conf with a kill-switch.
+// nordConf, if non-nil, installs the nordvpn snap and connects via NordLynx on first boot.
+// wgConf, if non-nil, injects a generic WireGuard config with a ufw kill-switch.
 // vpnProvider records the provider name (e.g. "nordvpn", "generic") for display/monitoring.
-func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, sshKeys []string, mounts []ShareMount, wgConf *vpn.WireGuardConfig, vpnProvider string, spicePort int) (*vm.VMConfig, error) {
+// Only one of nordConf or wgConf should be set; nordConf takes precedence.
+func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, sshKeys []string, mounts []ShareMount, nordConf *vpn.NordVPNConfig, wgConf *vpn.WireGuardConfig, vpnProvider string, spicePort int) (*vm.VMConfig, error) {
 	conf := p.Config()
 	if spicePort == 0 {
 		spicePort = 5934
@@ -65,26 +67,45 @@ func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, ssh
 		"systemctl enable --now qbittorrent-nox@vee",
 	}
 
-	if wgConf != nil {
+	packages := cloudinit.PackagesFor(cloudinit.Ubuntu, cloudinit.CategoryTorrent)
+
+	switch {
+	case nordConf != nil:
+		// NordVPN snap approach: install snap, login with token, enable NordLynx kill-switch.
+		connectCmd := "nordvpn connect"
+		if nordConf.Country != "" {
+			connectCmd = fmt.Sprintf("nordvpn connect %q", nordConf.Country)
+		}
+		nordCmds := []string{
+			"snap install nordvpn",
+			fmt.Sprintf("nordvpn login --token %s", nordConf.Token),
+			"nordvpn set technology nordlynx",
+			"nordvpn set killswitch on",
+			"nordvpn set autoconnect on",
+			connectCmd,
+		}
+		runCmds = append(nordCmds, runCmds...)
+
+	case wgConf != nil:
 		writeFiles = append(writeFiles, vm.CloudInitWriteFile{
 			Path:        "/etc/wireguard/wg0.conf",
 			Content:     vpn.RenderWireGuardConf(wgConf),
 			Permissions: "0600",
 		})
 		// Kill-switch: default-deny outbound/forward, allow only on wg0 + loopback.
-		runCmds = append([]string{
+		wgCmds := []string{
 			"ufw default deny outgoing",
 			"ufw default deny forward",
 			"ufw allow out on wg0",
 			"ufw allow out on lo",
 			"systemctl enable --now wg-quick@wg0",
-		}, runCmds...)
+		}
+		runCmds = append(wgCmds, runCmds...)
+		packages = append(packages, "wireguard", "resolvconf")
 	}
 
 	var virtiofsMounts []vm.VirtiofsMount
 	for i, m := range mounts {
-		// Derive a stable virtiofs tag from the guest path (strip leading slash,
-		// replace separators with dashes). Tags must be unique per VM.
 		tag := fmt.Sprintf("share%d", i)
 		if m.GuestPath != "" {
 			tag = strings.NewReplacer("/", "-", " ", "_").Replace(strings.TrimPrefix(m.GuestPath, "/"))
@@ -102,11 +123,6 @@ func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, ssh
 			fmt.Sprintf("mount -t virtiofs %s %s", tag, guestPath),
 			fmt.Sprintf("chown vee:vee %s", guestPath),
 		}, runCmds...)
-	}
-
-	packages := cloudinit.PackagesFor(cloudinit.Ubuntu, cloudinit.CategoryTorrent)
-	if wgConf != nil {
-		packages = append(packages, "wireguard", "resolvconf")
 	}
 
 	return &vm.VMConfig{

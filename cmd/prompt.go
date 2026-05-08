@@ -12,7 +12,6 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"golang.org/x/term"
 )
 
 var ghostStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
@@ -115,20 +114,19 @@ func promptShareMounts(prefillHostDir string) ([]templates.ShareMount, error) {
 	return mounts, nil
 }
 
-// promptVPN interactively asks the user whether to configure a VPN for the
-// torrent VM, and if so, which provider. Returns the WireGuard config and
-// provider name, or nil/"" to skip.
-func promptVPN() (*vpn.WireGuardConfig, string, error) {
+// promptVPN interactively asks whether to configure a VPN for the torrent VM.
+// Returns (nordConf, wgConf, providerName, error). At most one of nordConf/wgConf is non-nil.
+func promptVPN() (*vpn.NordVPNConfig, *vpn.WireGuardConfig, string, error) {
 	stdin := bufio.NewReader(os.Stdin)
 
 	fmt.Fprint(os.Stderr, "Configure VPN? [y/N]: ")
 	answer, _ := stdin.ReadString('\n')
 	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(answer)), "y") {
-		return nil, "", nil
+		return nil, nil, "", nil
 	}
 
 	fmt.Fprintln(os.Stderr, "Provider:")
-	fmt.Fprintln(os.Stderr, "  1) NordVPN")
+	fmt.Fprintln(os.Stderr, "  1) NordVPN (access token — from my.nordaccount.com/dashboard/nordvpn/access-tokens/)")
 	fmt.Fprintln(os.Stderr, "  2) Generic WireGuard config file")
 	fmt.Fprint(os.Stderr, "Choice [1]: ")
 	choice, _ := stdin.ReadString('\n')
@@ -136,85 +134,51 @@ func promptVPN() (*vpn.WireGuardConfig, string, error) {
 
 	switch choice {
 	case "", "1":
-		return promptNordVPN(stdin)
+		nord, err := promptNordVPN(stdin)
+		return nord, nil, "nordvpn", err
 	case "2":
-		return promptGenericWireGuard()
+		wg, err := promptGenericWireGuard()
+		return nil, wg, "generic", err
 	default:
-		return nil, "", fmt.Errorf("invalid choice %q", choice)
+		return nil, nil, "", fmt.Errorf("invalid choice %q", choice)
 	}
 }
 
-func promptNordVPN(stdin *bufio.Reader) (*vpn.WireGuardConfig, string, error) {
-	fmt.Fprint(os.Stderr, "NordVPN username (email): ")
-	username, _ := stdin.ReadString('\n')
-	username = strings.TrimSpace(username)
-
-	fmt.Fprint(os.Stderr, "NordVPN password: ")
-	pw, err := term.ReadPassword(int(os.Stdin.Fd()))
-	fmt.Fprintln(os.Stderr)
-	if err != nil {
-		return nil, "", fmt.Errorf("read password: %w", err)
+func promptNordVPN(stdin *bufio.Reader) (*vpn.NordVPNConfig, error) {
+	fmt.Fprintln(os.Stderr, "Generate a token at: my.nordaccount.com/dashboard/nordvpn/access-tokens/")
+	fmt.Fprint(os.Stderr, "NordVPN access token: ")
+	token, _ := stdin.ReadString('\n')
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return nil, fmt.Errorf("NordVPN access token is required")
 	}
 
-	fmt.Fprintln(os.Stderr, "Authenticating with NordVPN...")
-	client, err := vpn.NewNordVPNClient(username, string(pw))
-	if err != nil {
-		return nil, "", fmt.Errorf("NordVPN auth: %w", err)
+	fmt.Fprintln(os.Stderr, "Validating token...")
+	if err := vpn.ValidateToken(token); err != nil {
+		return nil, err
 	}
 
-	countries, err := vpn.Countries()
-	if err != nil {
-		return nil, "", fmt.Errorf("fetch countries: %w", err)
-	}
+	fmt.Fprint(os.Stderr, "Country to connect to (leave blank for auto): ")
+	country, _ := stdin.ReadString('\n')
+	country = strings.TrimSpace(country)
 
-	fmt.Fprint(os.Stderr, "Country (leave blank for recommended): ")
-	countryInput, _ := stdin.ReadString('\n')
-	countryInput = strings.TrimSpace(countryInput)
-
-	var countryID int
-	if countryInput != "" {
-		lower := strings.ToLower(countryInput)
-		for _, c := range countries {
-			if strings.ToLower(c.Name) == lower || strings.ToLower(c.Code) == lower {
-				countryID = c.ID
-				break
-			}
-		}
-		if countryID == 0 {
-			return nil, "", fmt.Errorf("unknown country %q", countryInput)
-		}
-	}
-
-	fmt.Fprintln(os.Stderr, "Finding best server...")
-	server, err := vpn.RecommendedServer(countryID)
-	if err != nil {
-		return nil, "", fmt.Errorf("find server: %w", err)
-	}
-	fmt.Fprintf(os.Stderr, "Selected: %s (%s, load %d%%)\n", server.Hostname, server.Country, server.Load)
-
-	fmt.Fprintln(os.Stderr, "Generating WireGuard keys and registering with NordVPN...")
-	wgConf, err := client.GenerateConfig(server)
-	if err != nil {
-		return nil, "", fmt.Errorf("generate WireGuard config: %w", err)
-	}
-
-	return wgConf, "nordvpn", nil
+	return &vpn.NordVPNConfig{Token: token, Country: country}, nil
 }
 
-func promptGenericWireGuard() (*vpn.WireGuardConfig, string, error) {
+func promptGenericWireGuard() (*vpn.WireGuardConfig, error) {
 	confPath, err := promptPath("Path to WireGuard .conf file: ")
 	if err != nil || confPath == "" {
-		return nil, "", err
+		return nil, err
 	}
 	data, err := os.ReadFile(confPath)
 	if err != nil {
-		return nil, "", fmt.Errorf("read WireGuard config: %w", err)
+		return nil, fmt.Errorf("read WireGuard config: %w", err)
 	}
 	wgConf, err := vpn.ParseWireGuardConf(string(data))
 	if err != nil {
-		return nil, "", fmt.Errorf("parse WireGuard config: %w", err)
+		return nil, fmt.Errorf("parse WireGuard config: %w", err)
 	}
-	return wgConf, "generic", nil
+	return wgConf, nil
 }
 
 // pathSuggestions returns filesystem completions for the current input value.
