@@ -1,8 +1,10 @@
 package cmd
 
 import (
+	"bufio"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/Benehiko/vee/vm"
@@ -23,11 +25,17 @@ var startCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
 		mgr := vm.NewManager(prov)
+		stdinReader := bufio.NewReader(os.Stdin)
 		mgr.PromptFn = func(prompt string) (string, error) {
 			fmt.Fprint(os.Stderr, prompt)
-			pw, err := term.ReadPassword(int(os.Stdin.Fd()))
-			fmt.Fprintln(os.Stderr)
-			return string(pw), err
+			// Use hidden input for password prompts, plain readline for username.
+			if strings.Contains(strings.ToLower(prompt), "password") {
+				pw, err := term.ReadPassword(int(os.Stdin.Fd()))
+				fmt.Fprintln(os.Stderr)
+				return string(pw), err
+			}
+			line, err := stdinReader.ReadString('\n')
+			return strings.TrimRight(line, "\r\n"), err
 		}
 		if err := mgr.Start(cmd.Context(), name, startForeground); err != nil {
 			return err

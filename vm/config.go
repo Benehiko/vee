@@ -106,5 +106,6 @@ type VMConfig struct {
 	ExtraDevices   []string         `yaml:"extra_devices,omitempty"`
 	Hostname       string           `yaml:"hostname,omitempty"`
 	TrueNASAPIKey  string           `yaml:"truenas_api_key,omitempty"`
+	TrueNASUser    string           `yaml:"truenas_user,omitempty"`
 	CreatedAt      time.Time        `yaml:"created_at"`
 }

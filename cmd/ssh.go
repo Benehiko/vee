@@ -64,10 +64,10 @@ Examples:
 			user = entry.Config.CloudInit.User
 		}
 
-		// For TrueNAS, default to truenas_admin and use the vee SSH keypair.
+		// For TrueNAS, default to stored admin user and use the vee SSH keypair.
 		if entry.Config.Template == "truenas" {
 			if user == "" {
-				user = "truenas_admin"
+				user = entry.Config.TrueNASUser
 			}
 			if sshIdentity == "" {
 				home, herr := os.UserHomeDir()

@@ -209,10 +209,10 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 				} else if m.PromptFn == nil && cfg.TrueNASAPIKey == "" {
 					m.provider.Logger().Warn("skipping TrueNAS SSH key injection: no API key and no prompt available")
 				} else {
-					apiKey, ensureErr := EnsureTrueNASAPIKey(cfg, ip, m.storagePath(), m.PromptFn)
+					apiKey, adminUser, ensureErr := EnsureTrueNASAPIKey(cfg, ip, m.storagePath(), m.PromptFn)
 					if ensureErr != nil {
 						m.provider.Logger().Warn("TrueNAS API key setup failed", zap.Error(ensureErr))
-					} else if injectErr := InjectVeeSSHKey(ip, apiKey, pubKey); injectErr != nil {
+					} else if injectErr := InjectVeeSSHKey(ip, apiKey, adminUser, pubKey); injectErr != nil {
 						m.provider.Logger().Warn("TrueNAS SSH key injection failed", zap.Error(injectErr))
 					}
 				}
