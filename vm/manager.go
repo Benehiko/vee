@@ -108,8 +108,8 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 		if isAlive(state.PID) {
 			return fmt.Errorf("VM %q is already running (PID %d)", name, state.PID)
 		}
-		// Stale state — clean it up.
-		_ = ClearState(m.storagePath(), name)
+		// Stale state — VM shut itself down; run cleanup.
+		m.cleanupStaleVM(name, cfg, state)
 		state = &VMState{}
 	}
 
@@ -425,6 +425,23 @@ func (m *Manager) Stop(ctx context.Context, name string) error {
 	return SaveStateForVM(m.storagePath(), name, preserved)
 }
 
+// cleanupStaleVM runs post-stop cleanup for a VM whose process died on its own
+// (e.g. guest OS shutdown). Unregisters hostname and clears state.
+func (m *Manager) cleanupStaleVM(name string, cfg *VMConfig, state *VMState) {
+	if cfg != nil && cfg.Hostname != "" {
+		if err := UnregisterHostname(cfg.Hostname); err != nil {
+			m.provider.Logger().Warn("hostname unregistration failed",
+				zap.String("hostname", cfg.Hostname), zap.Error(err))
+		}
+	}
+	preserved := &VMState{}
+	if state != nil {
+		preserved.InstallState = state.InstallState
+		preserved.InstalledAt = state.InstalledAt
+	}
+	_ = SaveStateForVM(m.storagePath(), name, preserved)
+}
+
 // Delete removes a VM directory. Refuses if the VM is running.
 func (m *Manager) Delete(name string) error {
 	state, err := LoadState(m.storagePath(), name)
@@ -451,8 +468,9 @@ func (m *Manager) List() ([]*ListEntry, error) {
 		if state == nil {
 			state = &VMState{}
 		}
-		// Verify the PID is still alive.
+		// Verify the PID is still alive; clean up if VM shut itself down.
 		if state.Running && !isAlive(state.PID) {
+			m.cleanupStaleVM(cfg.Name, cfg, state)
 			state.Running = false
 		}
 		entries = append(entries, &ListEntry{Config: cfg, State: state})
