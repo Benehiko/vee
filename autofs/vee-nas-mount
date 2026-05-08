@@ -1,0 +1,8 @@
+#!/bin/bash
+# Wrapper called by autofs before mounting a bindfs NAS share.
+# Ensures the underlying NFS automount is triggered first.
+# Usage: vee-nas-mount <nfs-path>
+set -e
+nfs_path="$1"
+# Access the NFS path to trigger the autofs NFS mount.
+ls "$nfs_path" > /dev/null 2>&1 || true

@@ -363,7 +363,11 @@ func buildConfig(ctx context.Context, p provider.Provider, mgr *vm.Manager, name
 	case "gaming":
 		cfg = templates.NewGamingConfig(p, name, "", "")
 	case "torrent":
-		cfg = templates.NewTorrentConfig(p, name, 0)
+		var err error
+		cfg, err = templates.NewTorrentConfig(ctx, p, name, nil, "", nil, "", 0)
+		if err != nil {
+			return nil, err
+		}
 	case "devbox":
 		var err error
 		cfg, err = templates.NewDevboxConfig(ctx, p, name, nil, distro, distroVer)

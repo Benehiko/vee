@@ -1,0 +1,5 @@
+backups  -fstype=nfs4,rw,soft,timeo=5,retrans=2  truenas:/mnt/Data/Backups
+carman   -fstype=nfs4,rw,soft,timeo=5,retrans=2  truenas:/mnt/Data/Carman
+games    -fstype=nfs4,rw,soft,timeo=5,retrans=2  truenas:/mnt/Data/Games
+movies   -fstype=nfs4,rw,soft,timeo=5,retrans=2  truenas:/mnt/Data/Movies
+shows    -fstype=nfs4,rw,soft,timeo=5,retrans=2  truenas:/mnt/Data/Shows

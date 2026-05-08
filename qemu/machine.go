@@ -336,7 +336,12 @@ func (q *BaseMachine) start(ctx context.Context, detach bool) (*StartResult, err
 			_ = logFile.Close()
 			return nil, err
 		}
-		_ = logFile.Close()
+		// logFile is inherited by the detached child; close our copy after Start.
+		// The child keeps the fd open until it exits, so log writes are not lost.
+		go func() {
+			_ = cmd.Wait()
+			_ = logFile.Close()
+		}()
 
 		pid := cmd.Process.Pid
 

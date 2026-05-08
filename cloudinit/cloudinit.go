@@ -66,6 +66,16 @@ func Generate(vmDir string, cfg *Config) (string, error) {
 	return isoPath, nil
 }
 
+// RenderUserData returns the cloud-config user-data string for cfg.
+func RenderUserData(cfg *Config) (string, error) {
+	return renderUserData(cfg)
+}
+
+// RenderMetaData returns the meta-data string for cfg.
+func RenderMetaData(cfg *Config) string {
+	return renderMetaData(cfg)
+}
+
 func renderUserData(cfg *Config) (string, error) {
 	var sb strings.Builder
 	sb.WriteString("#cloud-config\n")

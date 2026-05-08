@@ -95,7 +95,22 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
 		case "gaming":
 			cfg = templates.NewGamingConfig(prov, name, createGPUPCI, createVirtiofsDir)
 		case "torrent":
-			cfg = templates.NewTorrentConfig(prov, name, createSpicePort)
+			downloadsDir := createVirtiofsDir
+			if downloadsDir == "" && !cmd.Flags().Changed("virtiofs-dir") {
+				var promptErr error
+				downloadsDir, promptErr = promptPath("Downloads directory (leave blank to skip): ")
+				if promptErr != nil {
+					return fmt.Errorf("prompt downloads dir: %w", promptErr)
+				}
+			}
+			wgConf, vpnProvider, err := promptVPN()
+			if err != nil {
+				return fmt.Errorf("VPN setup: %w", err)
+			}
+			cfg, err = templates.NewTorrentConfig(cmd.Context(), prov, name, sshKeys, downloadsDir, wgConf, vpnProvider, createSpicePort)
+			if err != nil {
+				return err
+			}
 		case "devbox":
 			var err error
 			cfg, err = templates.NewDevboxConfig(cmd.Context(), prov, name, sshKeys, createDistro, createDistroVersion)

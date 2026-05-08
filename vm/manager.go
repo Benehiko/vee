@@ -182,7 +182,7 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 	if cfg.SPICE != nil {
 		newState.SPICEPort = cfg.SPICE.Port
 	}
-	if cfg.Headless && cfg.SSHPort > 0 {
+	if cfg.SSHPort > 0 {
 		newState.SSHPort = cfg.SSHPort
 	}
 	if err := SaveStateForVM(m.storagePath(), name, newState); err != nil {
@@ -560,7 +560,7 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 		cfg.NIC.MAC = qemu.DeterministicMAC(cfg.Name)
 	}
 	nicHostFwds := cfg.NIC.HostFwds
-	if cfg.Headless && cfg.SSHPort > 0 {
+	if cfg.SSHPort > 0 {
 		port := availablePort(cfg.SSHPort, 2200, 2299)
 		cfg.SSHPort = port
 		nicHostFwds = append(nicHostFwds, fmt.Sprintf("tcp:127.0.0.1:%d-:22", port))
