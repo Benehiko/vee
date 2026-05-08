@@ -66,6 +66,7 @@ type CloudInitWriteFile struct {
 	Path        string `yaml:"path"`
 	Content     string `yaml:"content"`
 	Permissions string `yaml:"permissions,omitempty"`
+	Owner       string `yaml:"owner,omitempty"`
 	Defer       bool   `yaml:"defer,omitempty"`
 }
 

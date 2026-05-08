@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/Benehiko/vee/cloudinit"
@@ -13,12 +14,18 @@ import (
 	"github.com/Benehiko/vee/vpn"
 )
 
+// ShareMount maps a host directory to a guest mount point.
+type ShareMount struct {
+	HostDir   string // absolute path on the host
+	GuestPath string // absolute path inside the VM (e.g. /downloads)
+}
+
 // NewTorrentConfig returns a VMConfig for a lightweight torrent VM with SPICE display.
 // spicePort defaults to 5934 if 0. sshKeys are injected into the VM's authorized_keys.
-// downloadsDir is an optional host directory to share into the VM at /downloads via virtiofs.
+// mounts is an optional list of host→guest directory mappings shared via virtiofs.
 // wgConf is an optional WireGuard config injected as /etc/wireguard/wg0.conf with a kill-switch.
 // vpnProvider records the provider name (e.g. "nordvpn", "generic") for display/monitoring.
-func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, sshKeys []string, downloadsDir string, wgConf *vpn.WireGuardConfig, vpnProvider string, spicePort int) (*vm.VMConfig, error) {
+func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, sshKeys []string, mounts []ShareMount, wgConf *vpn.WireGuardConfig, vpnProvider string, spicePort int) (*vm.VMConfig, error) {
 	conf := p.Config()
 	if spicePort == 0 {
 		spicePort = 5934
@@ -34,11 +41,27 @@ func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, ssh
 
 	vmDir := filepath.Join(conf.StoragePath, name)
 
-	var writeFiles []vm.CloudInitWriteFile
+	// Pick the first mount's guest path as the default save path, or /downloads.
+	savePath := "/downloads"
+	if len(mounts) > 0 && mounts[0].GuestPath != "" {
+		savePath = mounts[0].GuestPath
+	}
+
+	writeFiles := []vm.CloudInitWriteFile{
+		{
+			Path:        "/home/vee/.config/qBittorrent/qBittorrent.conf",
+			Content:     qbittorrentConf(savePath),
+			Permissions: "0600",
+			Owner:       "vee:vee",
+			Defer:       true,
+		},
+	}
 	runCmds := []string{
 		"ufw allow OpenSSH",
 		"ufw allow 8080/tcp",
 		"ufw --force enable",
+		"mkdir -p /home/vee/.config/qBittorrent",
+		"chown -R vee:vee /home/vee/.config",
 		"systemctl enable --now qbittorrent-nox@vee",
 	}
 
@@ -49,7 +72,6 @@ func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, ssh
 			Permissions: "0600",
 		})
 		// Kill-switch: default-deny outbound/forward, allow only on wg0 + loopback.
-		// wg-quick up runs after ufw is configured so it adds its own rules on top.
 		runCmds = append([]string{
 			"ufw default deny outgoing",
 			"ufw default deny forward",
@@ -60,12 +82,25 @@ func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, ssh
 	}
 
 	var virtiofsMounts []vm.VirtiofsMount
-	if downloadsDir != "" {
-		virtiofsMounts = []vm.VirtiofsMount{{SharedDir: downloadsDir, Tag: "downloads"}}
+	for i, m := range mounts {
+		// Derive a stable virtiofs tag from the guest path (strip leading slash,
+		// replace separators with dashes). Tags must be unique per VM.
+		tag := fmt.Sprintf("share%d", i)
+		if m.GuestPath != "" {
+			tag = strings.NewReplacer("/", "-", " ", "_").Replace(strings.TrimPrefix(m.GuestPath, "/"))
+		}
+		virtiofsMounts = append(virtiofsMounts, vm.VirtiofsMount{
+			SharedDir: m.HostDir,
+			Tag:       tag,
+		})
+		guestPath := m.GuestPath
+		if guestPath == "" {
+			guestPath = "/share" + fmt.Sprintf("%d", i)
+		}
 		runCmds = append([]string{
-			"mkdir -p /downloads",
-			"mount -t virtiofs downloads /downloads",
-			"chown vee:vee /downloads",
+			fmt.Sprintf("mkdir -p %s", guestPath),
+			fmt.Sprintf("mount -t virtiofs %s %s", tag, guestPath),
+			fmt.Sprintf("chown vee:vee %s", guestPath),
 		}, runCmds...)
 	}
 
@@ -74,7 +109,7 @@ func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, ssh
 		packages = append(packages, "wireguard", "resolvconf")
 	}
 
-	cfg := &vm.VMConfig{
+	return &vm.VMConfig{
 		Name:     name,
 		Template: "torrent",
 		Memory:   "1G",
@@ -119,6 +154,5 @@ func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, ssh
 			WriteFiles:  writeFiles,
 		},
 		CreatedAt: time.Now(),
-	}
-	return cfg, nil
+	}, nil
 }

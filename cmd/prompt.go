@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Benehiko/vee/templates"
 	"github.com/Benehiko/vee/vpn"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -72,6 +73,46 @@ func (m *pathInputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *pathInputModel) View() string {
 	return m.prompt + "\n" + m.input.View() + "\n" + ghostStyle.Render("Tab: complete  Enter: confirm  Esc: skip") + "\n"
+}
+
+// promptShareMounts interactively collects host→guest directory pairs until the
+// user submits a blank host path. If prefillHostDir is non-empty it is used as
+// the first host path without prompting.
+func promptShareMounts(prefillHostDir string) ([]templates.ShareMount, error) {
+	var mounts []templates.ShareMount
+	stdin := bufio.NewReader(os.Stdin)
+
+	first := true
+	for {
+		var hostDir string
+		if first && prefillHostDir != "" {
+			hostDir = prefillHostDir
+			first = false
+		} else {
+			var err error
+			hostDir, err = promptPath("Host directory to mount (leave blank to finish): ")
+			if err != nil {
+				return nil, err
+			}
+			hostDir = strings.TrimSpace(hostDir)
+			if hostDir == "" {
+				break
+			}
+			first = false
+		}
+
+		fmt.Fprintf(os.Stderr, "Guest mount point for %s (e.g. /downloads): ", hostDir)
+		guestPath, _ := stdin.ReadString('\n')
+		guestPath = strings.TrimSpace(guestPath)
+		if guestPath == "" {
+			guestPath = "/downloads"
+			if len(mounts) > 0 {
+				guestPath = fmt.Sprintf("/share%d", len(mounts))
+			}
+		}
+		mounts = append(mounts, templates.ShareMount{HostDir: hostDir, GuestPath: guestPath})
+	}
+	return mounts, nil
 }
 
 // promptVPN interactively asks the user whether to configure a VPN for the
