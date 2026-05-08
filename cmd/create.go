@@ -49,7 +49,7 @@ Templates apply sane defaults automatically:
   devbox         8G / 4 CPUs, Docker + zsh via cloud-init (supports --distro)
   server         8G / 2 CPUs, openssh + ufw + fail2ban via cloud-init (supports --distro)
   windows        24G / 4 CPUs, UEFI secboot, TPM 2.0
-  truenas        4G / 2 CPUs, UEFI, AHCI OS disk, bridge NIC, SPICE display
+  truenas        4G / 1 CPU, UEFI, AHCI OS disk, bridge NIC, SPICE display
 
 Supported distros for devbox/server: ubuntu, arch, fedora
 Use --distro-version latest (default) or a specific version string.

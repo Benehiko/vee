@@ -103,9 +103,9 @@ func NewTruenasConfig(ctx context.Context, p provider.Provider, name, version st
 		Name:     name,
 		Template: "truenas",
 		Memory:   "4G",
-		CPUs:     2,
+		CPUs:     1,
 		Sockets:  1,
-		Cores:    2,
+		Cores:    1,
 		Threads:  1,
 		CPUModel: conf.DefaultCPUModel,
 		NIC: vm.NICConfig{
