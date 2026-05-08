@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 
+	virtiofsdinstall "github.com/Benehiko/vee/virtiofsdinstall"
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/providers/structs"
@@ -32,10 +33,17 @@ func newDefaultConfig() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	virtiofsdPath, virtiofsdErr := virtiofsdinstall.EnsureVirtiofsd(home)
+	if virtiofsdErr != nil {
+		// Non-fatal: fall back to system path; start will warn if not found.
+		virtiofsdPath = "/usr/bin/virtiofsd"
+	}
+
 	return &Config{
 		StoragePath:         filepath.Join(home, ".vee/vms"),
 		ISOCachePath:        filepath.Join(home, ".vee/iso"),
-		VirtiofsdPath:       "/usr/bin/virtiofsd",
+		VirtiofsdPath:       virtiofsdPath,
 		QemuBinaryPath:      "qemu-system-x86_64",
 		OVMFCodePath:        "/usr/share/OVMF/x64/OVMF_CODE.4m.fd",
 		OVMFVarsPath:        "/usr/share/OVMF/x64/OVMF_VARS.4m.fd",
