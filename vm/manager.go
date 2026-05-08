@@ -160,6 +160,7 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 	newState := &VMState{
 		PID:          result.PID,
 		QMPSocket:    result.QMPSocket,
+		QGASocket:    result.QGASocket,
 		VirtiofsdPID: virtiofsdPID,
 		StartedAt:    ptr(time.Now()),
 		Running:      true,
@@ -432,6 +433,17 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 	// QMP socket
 	qmpSock := filepath.Join(m.vmDir(cfg.Name), "qmp.sock")
 	opts = append(opts, qemu.WithQMPSocket(qmpSock))
+
+	// QGA socket
+	if cfg.GuestAgent {
+		qgaSock := filepath.Join(m.vmDir(cfg.Name), "qga.sock")
+		opts = append(opts, qemu.WithQGASocket(qgaSock))
+	}
+
+	// Extra devices (e.g. virtio-serial-pci for guest agent)
+	for _, dev := range cfg.ExtraDevices {
+		opts = append(opts, qemu.WithDevice(dev))
+	}
 
 	// Virtiofsd mounts
 	virtiofsdPID := 0

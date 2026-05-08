@@ -10,6 +10,7 @@ const (
 type VMState struct {
 	PID          int        `json:"pid,omitempty"`
 	QMPSocket    string     `json:"qmp_socket,omitempty"`
+	QGASocket    string     `json:"qga_socket,omitempty"`
 	SPICEPort    int        `json:"spice_port,omitempty"`
 	SSHPort      int        `json:"ssh_port,omitempty"`
 	VirtiofsdPID int        `json:"virtiofsd_pid,omitempty"`

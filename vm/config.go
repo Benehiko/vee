@@ -102,5 +102,7 @@ type VMConfig struct {
 	VsockCID       uint32           `yaml:"vsock_cid,omitempty"`
 	Headless       bool             `yaml:"headless,omitempty"`
 	SSHPort        int              `yaml:"ssh_port,omitempty"`
+	GuestAgent     bool             `yaml:"guest_agent,omitempty"`
+	ExtraDevices   []string         `yaml:"extra_devices,omitempty"`
 	CreatedAt      time.Time        `yaml:"created_at"`
 }

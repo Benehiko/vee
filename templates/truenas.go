@@ -102,10 +102,10 @@ func NewTruenasConfig(ctx context.Context, p provider.Provider, name, version st
 	return &vm.VMConfig{
 		Name:     name,
 		Template: "truenas",
-		Memory:   "8G",
-		CPUs:     2,
+		Memory:   "4G",
+		CPUs:     1,
 		Sockets:  1,
-		Cores:    2,
+		Cores:    1,
 		Threads:  1,
 		CPUModel: conf.DefaultCPUModel,
 		NIC: vm.NICConfig{
@@ -113,8 +113,10 @@ func NewTruenasConfig(ctx context.Context, p provider.Provider, name, version st
 			Bridge: bridge,
 			Model:  "virtio-net-pci",
 		},
-		GPU:      vm.GPUConfig{Mode: vm.GPUNone},
-		Headless: false,
+		GPU:         vm.GPUConfig{Mode: vm.GPUNone},
+		Headless:    false,
+		GuestAgent:  true,
+		ExtraDevices: []string{"virtio-serial-pci"},
 		UEFI: vm.UEFIConfig{
 			Enabled: true,
 		},

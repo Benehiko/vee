@@ -47,6 +47,7 @@ type BaseMachine struct {
 	nics         []*NIC
 	uefi         *UEFI
 	qmpSocket    string
+	qgaSocket    string
 	memfd        *MemfdBackend
 	vfioDevices  []*VFIODevice
 	tpm          *TPM
@@ -114,6 +115,12 @@ func WithUEFI(uefi *UEFI) QemuOptions {
 func WithQMPSocket(path string) QemuOptions {
 	return func(q *BaseMachine) {
 		q.qmpSocket = path
+	}
+}
+
+func WithQGASocket(path string) QemuOptions {
+	return func(q *BaseMachine) {
+		q.qgaSocket = path
 	}
 }
 
@@ -266,6 +273,12 @@ func (q *BaseMachine) Args() []string {
 		args = append(args, "-qmp", fmt.Sprintf("unix:%s,server,nowait", q.qmpSocket))
 	}
 
+	if q.qgaSocket != "" {
+		args = append(args, "-device", "virtio-serial-pci,id=virtio-serial0")
+		args = append(args, "-chardev", fmt.Sprintf("socket,path=%s,server=on,wait=off,id=qga0", q.qgaSocket))
+		args = append(args, "-device", "virtserialport,chardev=qga0,name=org.qemu.guest_agent.0")
+	}
+
 	return args
 }
 
@@ -273,6 +286,7 @@ func (q *BaseMachine) Args() []string {
 type StartResult struct {
 	PID       int
 	QMPSocket string
+	QGASocket string
 }
 
 // Start runs QEMU in the foreground (blocks until the VM exits).
@@ -337,7 +351,7 @@ func (q *BaseMachine) start(ctx context.Context, detach bool) (*StartResult, err
 			}
 		}
 
-		return &StartResult{PID: pid, QMPSocket: q.qmpSocket}, nil
+		return &StartResult{PID: pid, QMPSocket: q.qmpSocket, QGASocket: q.qgaSocket}, nil
 	}
 
 	// Foreground mode: pipe output through the logger.
