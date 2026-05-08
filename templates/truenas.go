@@ -102,7 +102,7 @@ func NewTruenasConfig(ctx context.Context, p provider.Provider, name, version st
 	return &vm.VMConfig{
 		Name:     name,
 		Template: "truenas",
-		Memory:   "8G",
+		Memory:   "4G",
 		CPUs:     2,
 		Sockets:  1,
 		Cores:    2,
