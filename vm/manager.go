@@ -419,9 +419,13 @@ func (m *Manager) Stop(ctx context.Context, name string) error {
 		}
 	}
 
-	// Preserve install state across stop.
+	// Preserve install state across stop; pending → ready on shutdown.
+	installState := state.InstallState
+	if installState == InstallStatePending {
+		installState = InstallStateReady
+	}
 	preserved := &VMState{
-		InstallState: state.InstallState,
+		InstallState: installState,
 		InstalledAt:  state.InstalledAt,
 	}
 	return SaveStateForVM(m.storagePath(), name, preserved)
@@ -438,7 +442,12 @@ func (m *Manager) cleanupStaleVM(name string, cfg *VMConfig, state *VMState) {
 	}
 	preserved := &VMState{}
 	if state != nil {
-		preserved.InstallState = state.InstallState
+		// A pending VM that ran long enough to shut down has completed its install.
+		installState := state.InstallState
+		if installState == InstallStatePending {
+			installState = InstallStateReady
+		}
+		preserved.InstallState = installState
 		preserved.InstalledAt = state.InstalledAt
 	}
 	_ = SaveStateForVM(m.storagePath(), name, preserved)
