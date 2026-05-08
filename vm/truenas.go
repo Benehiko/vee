@@ -10,25 +10,33 @@ import (
 	"time"
 )
 
-const truenasAPITimeout = 10 * time.Second
+const (
+	truenasAPITimeout  = 10 * time.Second
+	truenasBootTimeout = 5 * time.Minute
+	truenasAdminUser   = "truenas_admin"
+)
 
-// EnsureTrueNASAPIKey checks if cfg already has an API key; if not, creates one
-// via the TrueNAS REST API using Basic auth (prompts for password via the provided
-// promptFn), persists it to vm.yaml, and returns the key.
+// EnsureTrueNASAPIKey checks if cfg already has an API key; if not, waits for
+// the TrueNAS API to become reachable, prompts for the admin password, creates
+// a named "vee" API key, persists it to vm.yaml, and returns the key.
 func EnsureTrueNASAPIKey(cfg *VMConfig, ip, storagePath string, promptFn func(prompt string) (string, error)) (string, error) {
 	if cfg.TrueNASAPIKey != "" {
 		return cfg.TrueNASAPIKey, nil
 	}
 
-	password, err := promptFn("TrueNAS root password (to create a vee API key): ")
+	client := &http.Client{Timeout: truenasAPITimeout}
+	base := "http://" + ip + "/api/v2.0"
+
+	if err := truenasWaitAPI(client, base, truenasBootTimeout); err != nil {
+		return "", fmt.Errorf("waiting for TrueNAS API: %w", err)
+	}
+
+	password, err := promptFn("TrueNAS admin password (to create a vee API key): ")
 	if err != nil {
 		return "", fmt.Errorf("read password: %w", err)
 	}
 
-	client := &http.Client{Timeout: truenasAPITimeout}
-	base := "http://" + ip + "/api/v2.0"
-
-	apiKey, err := truenasCreateAPIKey(client, base, "root", password)
+	apiKey, err := truenasCreateAPIKey(client, base, truenasAdminUser, password)
 	if err != nil {
 		return "", fmt.Errorf("create TrueNAS API key: %w", err)
 	}
@@ -40,6 +48,22 @@ func EnsureTrueNASAPIKey(cfg *VMConfig, ip, storagePath string, promptFn func(pr
 	return apiKey, nil
 }
 
+// truenasWaitAPI polls GET /api/v2.0/system/info until it responds or timeout.
+func truenasWaitAPI(client *http.Client, base string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		resp, err := client.Get(base + "/system/info")
+		if err == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode < 500 {
+				return nil
+			}
+		}
+		time.Sleep(5 * time.Second)
+	}
+	return fmt.Errorf("TrueNAS API not reachable at %s within %s", base, timeout)
+}
+
 // InjectVeeSSHKey adds pubKey to the root user's authorized SSH keys on a
 // TrueNAS SCALE instance reachable at ip, authenticated with apiKey.
 // The operation is idempotent — if the key is already present it does nothing.
@@ -48,7 +72,7 @@ func InjectVeeSSHKey(ip, apiKey, pubKey string) error {
 	base := "http://" + ip + "/api/v2.0"
 	auth := "Bearer " + apiKey
 
-	userID, currentKeys, err := truenasFindUser(client, base, auth, "root")
+	userID, currentKeys, err := truenasFindUser(client, base, auth, truenasAdminUser)
 	if err != nil {
 		return fmt.Errorf("truenas find user: %w", err)
 	}
