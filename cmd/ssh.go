@@ -64,6 +64,19 @@ Examples:
 			user = entry.Config.CloudInit.User
 		}
 
+		// For TrueNAS, default to root and use the vee SSH keypair.
+		if entry.Config.Template == "truenas" {
+			if user == "" {
+				user = "root"
+			}
+			if sshIdentity == "" {
+				home, herr := os.UserHomeDir()
+				if herr == nil {
+					sshIdentity = home + "/.vee/ssh/id_ed25519"
+				}
+			}
+		}
+
 		var host string
 		var port int
 

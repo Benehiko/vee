@@ -22,6 +22,9 @@ import (
 
 type Manager struct {
 	provider provider.Provider
+	// PromptFn is called when interactive input is needed (e.g. TrueNAS password).
+	// If nil, operations requiring prompts are skipped with a warning.
+	PromptFn func(prompt string) (string, error)
 }
 
 func NewManager(p provider.Provider) *Manager {
@@ -186,16 +189,33 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 		return err
 	}
 
-	// Register hostname → IP if configured. Best-effort: log but don't fail start.
-	if cfg.Hostname != "" {
+	// Register hostname → IP and inject SSH key. Best-effort: log but don't fail start.
+	if cfg.Hostname != "" || cfg.Template == "truenas" {
 		ip, ipErr := m.waitIP(ctx, cfg, newState, 30*time.Second)
 		if ipErr != nil {
-			m.provider.Logger().Warn("could not resolve VM IP for hostname registration",
+			m.provider.Logger().Warn("could not resolve VM IP",
 				zap.String("vm", name), zap.Error(ipErr))
 		} else {
-			if regErr := RegisterHostname(cfg.Hostname, ip); regErr != nil {
-				m.provider.Logger().Warn("hostname registration failed",
-					zap.String("hostname", cfg.Hostname), zap.Error(regErr))
+			if cfg.Hostname != "" {
+				if regErr := RegisterHostname(cfg.Hostname, ip); regErr != nil {
+					m.provider.Logger().Warn("hostname registration failed",
+						zap.String("hostname", cfg.Hostname), zap.Error(regErr))
+				}
+			}
+			if cfg.Template == "truenas" {
+				pubKey, keyErr := veeSSHPublicKey()
+				if keyErr != nil {
+					m.provider.Logger().Warn("read vee SSH public key failed", zap.Error(keyErr))
+				} else if m.PromptFn == nil && cfg.TrueNASAPIKey == "" {
+					m.provider.Logger().Warn("skipping TrueNAS SSH key injection: no API key and no prompt available")
+				} else {
+					apiKey, ensureErr := EnsureTrueNASAPIKey(cfg, ip, m.storagePath(), m.PromptFn)
+					if ensureErr != nil {
+						m.provider.Logger().Warn("TrueNAS API key setup failed", zap.Error(ensureErr))
+					} else if injectErr := InjectVeeSSHKey(ip, apiKey, pubKey); injectErr != nil {
+						m.provider.Logger().Warn("TrueNAS SSH key injection failed", zap.Error(injectErr))
+					}
+				}
 			}
 		}
 	}
@@ -279,6 +299,19 @@ func (m *Manager) markReady(name string) error {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// veeSSHPublicKey reads the vee-managed SSH public key from ~/.vee/ssh/id_ed25519.pub.
+func veeSSHPublicKey() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".vee", "ssh", "id_ed25519.pub"))
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(data)), nil
+}
 
 // waitIP polls until the VM's IP is resolvable via MAC→ARP or QGA, up to timeout.
 func (m *Manager) waitIP(ctx context.Context, cfg *VMConfig, state *VMState, timeout time.Duration) (string, error) {

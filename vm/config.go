@@ -105,5 +105,6 @@ type VMConfig struct {
 	GuestAgent     bool             `yaml:"guest_agent,omitempty"`
 	ExtraDevices   []string         `yaml:"extra_devices,omitempty"`
 	Hostname       string           `yaml:"hostname,omitempty"`
+	TrueNASAPIKey  string           `yaml:"truenas_api_key,omitempty"`
 	CreatedAt      time.Time        `yaml:"created_at"`
 }

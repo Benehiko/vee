@@ -2,10 +2,12 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/Benehiko/vee/vm"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 var (
@@ -21,6 +23,12 @@ var startCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
 		mgr := vm.NewManager(prov)
+		mgr.PromptFn = func(prompt string) (string, error) {
+			fmt.Fprint(os.Stderr, prompt)
+			pw, err := term.ReadPassword(int(os.Stdin.Fd()))
+			fmt.Fprintln(os.Stderr)
+			return string(pw), err
+		}
 		if err := mgr.Start(cmd.Context(), name, startForeground); err != nil {
 			return err
 		}
