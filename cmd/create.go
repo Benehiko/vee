@@ -264,4 +264,33 @@ func init() {
 	createCmd.Flags().StringVar(&createDistroVersion, "distro-version", "latest", "ISO version for the selected distro (e.g. 24.04, 2025.05.01, 42) or 'latest'")
 	createCmd.Flags().StringArrayVar(&createDataDisks, "data-disk", nil, "Host block device for passthrough data disk, optionally with serial: path[:serial] (repeatable)")
 	createCmd.Flags().StringVar(&createHostname, "hostname", "", "Hostname registered in /etc/hosts (or systemd-resolved) on start (default: VM name)")
+
+	_ = createCmd.RegisterFlagCompletionFunc("template", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+		return []string{
+			"ubuntu-server\tUbuntu 24.04 Server",
+			"gaming\tGPU passthrough gaming VM",
+			"torrent\tqBittorrent VM with optional VPN",
+			"devbox\tDev environment with Docker + zsh",
+			"server\tMinimal server with openssh + ufw + fail2ban",
+			"windows\tWindows VM with UEFI + TPM",
+			"truenas\tTrueNAS SCALE VM",
+		}, cobra.ShellCompDirectiveNoFileComp
+	})
+	_ = createCmd.RegisterFlagCompletionFunc("distro", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+		return images.SupportedDistros(), cobra.ShellCompDirectiveNoFileComp
+	})
+	_ = createCmd.RegisterFlagCompletionFunc("distro-version", func(c *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+		distro, _ := c.Flags().GetString("distro")
+		versions := images.DistroVersions(distro)
+		if len(versions) == 0 {
+			return []string{"latest"}, cobra.ShellCompDirectiveNoFileComp
+		}
+		return append([]string{"latest"}, versions...), cobra.ShellCompDirectiveNoFileComp
+	})
+	_ = createCmd.RegisterFlagCompletionFunc("gpu-mode", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+		return []string{"none", "virtio", "passthrough"}, cobra.ShellCompDirectiveNoFileComp
+	})
+	_ = createCmd.RegisterFlagCompletionFunc("nic-mode", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+		return []string{"user", "bridge"}, cobra.ShellCompDirectiveNoFileComp
+	})
 }
