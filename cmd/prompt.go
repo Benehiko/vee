@@ -158,11 +158,91 @@ func promptNordVPN(stdin *bufio.Reader) (*vpn.NordVPNConfig, error) {
 		return nil, err
 	}
 
-	fmt.Fprint(os.Stderr, "Country to connect to (leave blank for auto): ")
-	country, _ := stdin.ReadString('\n')
-	country = strings.TrimSpace(country)
+	fmt.Fprintln(os.Stderr, "Fetching countries...")
+	countries, err := vpn.Countries()
+	if err != nil {
+		// Non-fatal: fall back to plain text prompt.
+		fmt.Fprint(os.Stderr, "Country to connect to (leave blank for auto): ")
+		country, _ := stdin.ReadString('\n')
+		return &vpn.NordVPNConfig{Token: token, Country: strings.TrimSpace(country)}, nil
+	}
+
+	country, err := promptCountry("Country to connect to (leave blank for auto):", countries)
+	if err != nil {
+		return nil, err
+	}
 
 	return &vpn.NordVPNConfig{Token: token, Country: country}, nil
+}
+
+// promptCountry shows a text input with ghost-text completion from the given
+// country list. Returns empty string if the user leaves it blank.
+func promptCountry(prompt string, countries []string) (string, error) {
+	ti := textinput.New()
+	ti.Placeholder = "leave blank for auto"
+	ti.Focus()
+	ti.ShowSuggestions = true
+
+	m := &countryInputModel{
+		prompt:    prompt,
+		input:     ti,
+		countries: countries,
+	}
+	p := tea.NewProgram(m)
+	result, err := p.Run()
+	if err != nil {
+		return "", err
+	}
+	final := result.(*countryInputModel)
+	if final.cancelled {
+		return "", nil
+	}
+	return strings.TrimSpace(final.input.Value()), nil
+}
+
+type countryInputModel struct {
+	prompt    string
+	input     textinput.Model
+	countries []string
+	cancelled bool
+}
+
+func (m *countryInputModel) Init() tea.Cmd { return textinput.Blink }
+
+func (m *countryInputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.Type {
+		case tea.KeyEnter:
+			return m, tea.Quit
+		case tea.KeyCtrlC, tea.KeyEsc:
+			m.cancelled = true
+			return m, tea.Quit
+		}
+	}
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	m.input.SetSuggestions(countrySuggestions(m.input.Value(), m.countries))
+	return m, cmd
+}
+
+func (m *countryInputModel) View() string {
+	return m.prompt + "\n" + m.input.View() + "\n" + ghostStyle.Render("Tab: complete  Enter: confirm  Esc: skip") + "\n"
+}
+
+// countrySuggestions returns country names that have the given prefix (case-insensitive).
+func countrySuggestions(prefix string, countries []string) []string {
+	if prefix == "" {
+		return nil
+	}
+	lower := strings.ToLower(prefix)
+	var out []string
+	for _, c := range countries {
+		if strings.HasPrefix(strings.ToLower(c), lower) {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 func promptGenericWireGuard() (*vpn.WireGuardConfig, error) {

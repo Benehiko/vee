@@ -1,9 +1,11 @@
 package vpn
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 )
@@ -90,4 +92,31 @@ func ValidateToken(token string) error {
 	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, resp.Body)
 	return nil
+}
+
+// Countries returns country names that have NordVPN servers, sorted alphabetically.
+func Countries() ([]string, error) {
+	hc := &http.Client{Timeout: nordAPITimeout}
+	resp, err := hc.Get(nordAPI + "/servers/countries")
+	if err != nil {
+		return nil, fmt.Errorf("fetch countries: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+
+	var raw []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("parse countries: %w", err)
+	}
+
+	names := make([]string, 0, len(raw))
+	for _, c := range raw {
+		if c.Name != "" {
+			names = append(names, c.Name)
+		}
+	}
+	sort.Strings(names)
+	return names, nil
 }
