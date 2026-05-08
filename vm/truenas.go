@@ -100,8 +100,8 @@ func InjectVeeSSHKey(ip, apiKey, username, pubKey string) error {
 
 func truenasCreateAPIKey(client *http.Client, base, user, password string) (string, error) {
 	payload, err := json.Marshal(map[string]any{
-		"name":      "vee",
-		"allowlist": []any{},
+		"name":     "vee",
+		"username": user,
 	})
 	if err != nil {
 		return "", err
