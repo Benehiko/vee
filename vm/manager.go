@@ -154,6 +154,11 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 		return machine.Start(ctx)
 	}
 
+	// Persist any fields assigned during buildMachine (e.g. deterministic MAC).
+	if err := SaveConfig(m.storagePath(), cfg); err != nil {
+		return fmt.Errorf("save config: %w", err)
+	}
+
 	result, err := machine.StartDetached(ctx)
 	if err != nil {
 		return err

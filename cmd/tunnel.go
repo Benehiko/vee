@@ -35,15 +35,25 @@ var tunnelCmd = &cobra.Command{
 			sshPort = state.SSHPort
 		case cfg.NIC.Mode == "bridge" || cfg.NIC.Mode == "":
 			mac := cfg.NIC.MAC
-			if mac == "" {
-				return fmt.Errorf("VM %q has no MAC address; cannot resolve IP", name)
+			if mac != "" {
+				ip, resolveErr := resolveIPFromMAC(mac)
+				if resolveErr == nil {
+					sshHost = ip
+					sshPort = 22
+					break
+				}
 			}
-			ip, resolveErr := resolveIPFromMAC(mac)
-			if resolveErr != nil {
-				return fmt.Errorf("could not resolve IP for VM %q (MAC %s): %w", name, mac, resolveErr)
+			// Fall back to QGA guest-network-get-interfaces.
+			if state.QGASocket != "" {
+				ip, resolveErr := resolveIPFromQGA(state.QGASocket)
+				if resolveErr != nil {
+					return fmt.Errorf("could not resolve IP for VM %q via QGA: %w", name, resolveErr)
+				}
+				sshHost = ip
+				sshPort = 22
+			} else {
+				return fmt.Errorf("VM %q: no MAC in ARP table and no QGA socket; cannot resolve IP", name)
 			}
-			sshHost = ip
-			sshPort = 22
 		default:
 			return fmt.Errorf("VM %q has no SSH port and is not on a bridge network", name)
 		}
