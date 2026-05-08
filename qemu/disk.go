@@ -233,7 +233,8 @@ func (q *Disk) Create(ctx context.Context) error {
 	}
 
 	if _, err := os.Stat(q.AbsolutePath()); err == nil {
-		return errors.New("disk already exists")
+		q.provider.Logger().Info("skipping disk creation", zap.String("reason", "disk already exists"), zap.String("path", q.AbsolutePath()))
+		return nil
 	}
 
 	var cmd *exec.Cmd
