@@ -55,14 +55,15 @@ func NewSpice(opts ...SpiceOption) *Spice {
 // Args returns the qemu arguments for the spice server
 // example of qemu spice args:
 //
-//	-spice port=3001,disable-ticketing -soundhw hda \
+//	-spice port=3001,disable-ticketing \
+//	-device intel-hda -device hda-duplex \
 //	-device virtio-serial -chardev spicevmc,id=vdagent,debug=0,name=vdagent \
 //	-device virtserialport,chardev=vdagent,name=com.redhat.spice.0
 func (qs *Spice) Args() []string {
 	var args []string
 	args = append(args, "-spice", fmt.Sprintf("port=%d,disable-ticketing=%t", qs.Port, qs.DisableTicketing))
-	// add sound device for spice
-	args = append(args, "-soundhw", "hda")
+	// -soundhw was removed in QEMU 6.0; use device-based HDA instead.
+	args = append(args, "-device", "intel-hda", "-device", "hda-duplex")
 	args = append(args, "-device", "virtio-serial", "-chardev", fmt.Sprintf("spicevmc,id=%s,debug=0,name=%s", qs.Name, qs.Name))
 	args = append(args, "-device", "virtserialport,chardev=vdagent,name=com.redhat.spice.0")
 	return args
