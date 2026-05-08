@@ -42,7 +42,7 @@ type BaseMachine struct {
 	headless     bool
 	extraDevices []string
 	disks        []*Disk
-	virtiofsd    *Virtiofsd
+	virtiofsd    []*Virtiofsd
 	spice        *Spice
 	nics         []*NIC
 	uefi         *UEFI
@@ -69,10 +69,11 @@ func WithName(name string) QemuOptions {
 
 func WithVirtiofsd(socketPath, tag string) QemuOptions {
 	return func(q *BaseMachine) {
-		q.virtiofsd = &Virtiofsd{
+		q.virtiofsd = append(q.virtiofsd, &Virtiofsd{
 			SocketPath: socketPath,
 			Tag:        tag,
-		}
+			Chardev:    "virtiofs-" + tag,
+		})
 	}
 }
 
@@ -239,8 +240,8 @@ func (q *BaseMachine) Args() []string {
 		args = append(args, nic.Args()...)
 	}
 
-	if q.virtiofsd != nil {
-		args = append(args, q.virtiofsd.Args()...)
+	for _, vfs := range q.virtiofsd {
+		args = append(args, vfs.Args()...)
 	}
 
 	if q.spice != nil {

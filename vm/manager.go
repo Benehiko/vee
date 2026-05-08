@@ -150,7 +150,7 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 		cfg.Disks = filtered
 	}
 
-	machine, virtiofsdPID, err := m.buildMachine(ctx, cfg)
+	machine, virtiofsdPIDs, err := m.buildMachine(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -170,14 +170,14 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 	}
 
 	newState := &VMState{
-		PID:          result.PID,
-		QMPSocket:    result.QMPSocket,
-		QGASocket:    result.QGASocket,
-		VirtiofsdPID: virtiofsdPID,
-		StartedAt:    ptr(time.Now()),
-		Running:      true,
-		InstallState: state.InstallState,
-		InstalledAt:  state.InstalledAt,
+		PID:           result.PID,
+		QMPSocket:     result.QMPSocket,
+		QGASocket:     result.QGASocket,
+		VirtiofsdPIDs: virtiofsdPIDs,
+		StartedAt:     ptr(time.Now()),
+		Running:       true,
+		InstallState:  state.InstallState,
+		InstalledAt:   state.InstalledAt,
 	}
 	if cfg.SPICE != nil {
 		newState.SPICEPort = cfg.SPICE.Port
@@ -436,10 +436,12 @@ func (m *Manager) Stop(ctx context.Context, name string) error {
 		}
 	}
 
-	if state.VirtiofsdPID > 0 && isAlive(state.VirtiofsdPID) {
-		proc, err := os.FindProcess(state.VirtiofsdPID)
-		if err == nil {
-			_ = proc.Signal(syscall.SIGTERM)
+	for _, pid := range state.VirtiofsdPIDs {
+		if pid > 0 && isAlive(pid) {
+			proc, err := os.FindProcess(pid)
+			if err == nil {
+				_ = proc.Signal(syscall.SIGTERM)
+			}
 		}
 	}
 
@@ -523,10 +525,10 @@ func (m *Manager) List() ([]*ListEntry, error) {
 }
 
 // buildMachine constructs a BaseMachine from a VMConfig, starting virtiofsd if needed.
-func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMachine, int, error) {
+func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMachine, []int, error) {
 	machine, err := qemu.NewEmptyMachine(m.provider)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, err
 	}
 
 	opts := []qemu.QemuOptions{
@@ -630,7 +632,7 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 	}
 
 	// Virtiofsd mounts
-	virtiofsdPID := 0
+	var virtiofsdPIDs []int
 	for _, mount := range cfg.VirtiofsMounts {
 		sockPath := mount.SocketPath
 		if sockPath == "" {
@@ -647,7 +649,7 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 				zap.String("tag", mount.Tag),
 				zap.Error(err))
 		} else {
-			virtiofsdPID = pid
+			virtiofsdPIDs = append(virtiofsdPIDs, pid)
 		}
 		opts = append(opts, qemu.WithVirtiofsd(sockPath, mount.Tag))
 	}
@@ -657,7 +659,7 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 		tpmDir := filepath.Join(m.vmDir(cfg.Name), "tpm")
 		tpmSock := filepath.Join(m.vmDir(cfg.Name), "tpm.sock")
 		if err := startSwtpm(tpmDir, tpmSock); err != nil {
-			return nil, 0, fmt.Errorf("swtpm: %w", err)
+			return nil, nil, fmt.Errorf("swtpm: %w", err)
 		}
 		opts = append(opts, qemu.WithTPM(qemu.NewTPM(tpmSock)))
 	}
@@ -673,10 +675,10 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 
 	built, err := machine.BuildMachine(opts...)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, err
 	}
 
-	return built, virtiofsdPID, nil
+	return built, virtiofsdPIDs, nil
 }
 
 // startSwtpm launches a swtpm daemon for the given VM TPM state directory.

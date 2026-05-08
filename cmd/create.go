@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"strings"
@@ -11,9 +12,11 @@ import (
 	"github.com/Benehiko/vee/templates"
 	"github.com/Benehiko/vee/vm"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 var (
+	createNoStart       bool
 	createTemplate      string
 	createMemory        string
 	createCPUs          int
@@ -213,6 +216,24 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
 			return err
 		}
 		fmt.Printf("Created VM %q (template: %s)\n", name, cfg.Template)
+
+		if !createNoStart {
+			stdinReader := bufio.NewReader(os.Stdin)
+			mgr.PromptFn = func(prompt string) (string, error) {
+				fmt.Fprint(os.Stderr, prompt)
+				if strings.Contains(strings.ToLower(prompt), "password") {
+					pw, err := term.ReadPassword(int(os.Stdin.Fd()))
+					fmt.Fprintln(os.Stderr)
+					return string(pw), err
+				}
+				line, err := stdinReader.ReadString('\n')
+				return strings.TrimRight(line, "\r\n"), err
+			}
+			if err := mgr.Start(cmd.Context(), name, false); err != nil {
+				return fmt.Errorf("auto-start: %w", err)
+			}
+			return runStartSpinner(cmd, mgr, name)
+		}
 		return nil
 	},
 }
@@ -242,6 +263,7 @@ func defaultConfig(name string) *vm.VMConfig {
 }
 
 func init() {
+	createCmd.Flags().BoolVar(&createNoStart, "no-start", false, "Create VM config without starting it")
 	createCmd.Flags().StringVar(&createTemplate, "template", "ubuntu-server", "VM template: ubuntu-server, gaming, torrent, devbox, server, windows")
 	createCmd.Flags().StringVar(&createMemory, "memory", "2G", "Memory size (overrides template default)")
 	createCmd.Flags().IntVar(&createCPUs, "cpus", 2, "Number of vCPUs (overrides template default)")

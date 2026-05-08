@@ -8,14 +8,14 @@ import (
 	"time"
 
 	"github.com/Benehiko/vee/vm"
+	"github.com/charmbracelet/bubbles/spinner"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
 
-var (
-	startForeground bool
-	startWaitReady  bool
-)
+var startForeground bool
 
 var startCmd = &cobra.Command{
 	Use:               "start <name>",
@@ -28,7 +28,6 @@ var startCmd = &cobra.Command{
 		stdinReader := bufio.NewReader(os.Stdin)
 		mgr.PromptFn = func(prompt string) (string, error) {
 			fmt.Fprint(os.Stderr, prompt)
-			// Use hidden input for password prompts, plain readline for username.
 			if strings.Contains(strings.ToLower(prompt), "password") {
 				pw, err := term.ReadPassword(int(os.Stdin.Fd()))
 				fmt.Fprintln(os.Stderr)
@@ -40,18 +39,104 @@ var startCmd = &cobra.Command{
 		if err := mgr.Start(cmd.Context(), name, startForeground); err != nil {
 			return err
 		}
-		if startWaitReady {
-			fmt.Printf("Waiting for VM %q to become ready (up to 10m)...\n", name)
-			if err := mgr.WaitReady(cmd.Context(), name, 10*time.Minute); err != nil {
-				return fmt.Errorf("wait-ready: %w", err)
-			}
-			fmt.Printf("VM %q is ready.\n", name)
+		if startForeground {
+			return nil
 		}
-		return nil
+		return runStartSpinner(cmd, mgr, name)
 	},
+}
+
+// runStartSpinner shows a bubbletea spinner while WaitReady polls for SSH/QGA.
+func runStartSpinner(cmd *cobra.Command, mgr *vm.Manager, name string) error {
+	ctx := cmd.Context()
+
+	s := spinner.New()
+	s.Spinner = spinner.Dot
+	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+
+	m := &startSpinnerModel{
+		spinner: s,
+		name:    name,
+		status:  "starting…",
+	}
+
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- mgr.WaitReady(ctx, name, 10*time.Minute)
+	}()
+
+	p := tea.NewProgram(m)
+
+	go func() {
+		elapsed := 0
+		tick := time.NewTicker(500 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case err := <-doneCh:
+				p.Send(startDoneMsg{err: err})
+				return
+			case <-tick.C:
+				elapsed++
+				secs := elapsed / 2
+				p.Send(startStatusMsg(fmt.Sprintf("waiting for VM to become ready… %ds", secs)))
+			}
+		}
+	}()
+
+	result, err := p.Run()
+	if err != nil {
+		return err
+	}
+	final := result.(*startSpinnerModel)
+	if final.err != nil {
+		return fmt.Errorf("wait ready: %w", final.err)
+	}
+	fmt.Printf("VM %q is ready\n", name)
+	return nil
+}
+
+type (
+	startStatusMsg string
+	startDoneMsg   struct{ err error }
+)
+
+type startSpinnerModel struct {
+	spinner spinner.Model
+	name    string
+	status  string
+	done    bool
+	err     error
+}
+
+func (m *startSpinnerModel) Init() tea.Cmd { return m.spinner.Tick }
+
+func (m *startSpinnerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case startDoneMsg:
+		m.done = true
+		m.err = msg.err
+		return m, tea.Quit
+	case startStatusMsg:
+		m.status = string(msg)
+	case tea.KeyMsg:
+		if msg.Type == tea.KeyCtrlC {
+			m.err = fmt.Errorf("interrupted")
+			return m, tea.Quit
+		}
+	}
+	var cmd tea.Cmd
+	m.spinner, cmd = m.spinner.Update(msg)
+	return m, cmd
+}
+
+func (m *startSpinnerModel) View() string {
+	if m.done {
+		return ""
+	}
+	return m.spinner.View() + " " + m.status + "\n"
 }
 
 func init() {
 	startCmd.Flags().BoolVar(&startForeground, "foreground", false, "Run in foreground (block until VM exits)")
-	startCmd.Flags().BoolVar(&startWaitReady, "wait-ready", false, "Wait until SSH or guest-agent responds, then mark VM as ready")
 }
