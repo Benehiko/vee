@@ -282,9 +282,12 @@ func (q *Disk) Delete() error {
 }
 
 func (q *Disk) AbsolutePath() string {
+	if q.Passthrough {
+		return q.Path
+	}
 	suffixes := []string{"qcow2", "qcow", "img", "raw", "iso", "vmdk", "vdi", "vhd"}
 	for _, suffix := range suffixes {
-		if strings.HasSuffix(q.Path, string(suffix)) {
+		if strings.HasSuffix(q.Path, suffix) {
 			return q.Path
 		}
 	}
