@@ -206,7 +206,6 @@ func splitFields(s string) []string {
 	return fields
 }
 
-
 func init() {
 	sshCmd.Flags().StringVarP(&sshUser, "user", "u", "", "SSH username (default: cloud-init user)")
 	sshCmd.Flags().StringVarP(&sshIdentity, "identity", "i", "", "SSH identity file (private key)")

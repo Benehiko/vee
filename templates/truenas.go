@@ -64,12 +64,12 @@ func NewTruenasConfig(ctx context.Context, p provider.Provider, name, version st
 	disks := []vm.DiskConfig{
 		{
 			// TrueNAS installer ISO — booted via USB storage device emulation.
-			Path:     img.AbsolutePath(),
-			Format:   "raw",
+			Path:      img.AbsolutePath(),
+			Format:    "raw",
 			Interface: "none",
-			Media:    "cdrom",
-			Cache:    "none",
-			Readonly: true,
+			Media:     "cdrom",
+			Cache:     "none",
+			Readonly:  true,
 		},
 		{
 			// Primary OS disk on AHCI/SATA for ZFS boot pool.

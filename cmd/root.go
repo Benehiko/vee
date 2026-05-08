@@ -52,4 +52,5 @@ func init() {
 	rootCmd.AddCommand(logsCmd)
 	rootCmd.AddCommand(portsCmd)
 	rootCmd.AddCommand(tunnelCmd)
+	rootCmd.AddCommand(ipCmd)
 }
