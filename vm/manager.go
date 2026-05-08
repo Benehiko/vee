@@ -113,19 +113,21 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 		state = &VMState{}
 	}
 
-	// Determine if an installer ISO cdrom is present.
-	hasISO := false
+	// Determine if a cloud-init cidata ISO (interface=virtio) is present.
+	// TrueNAS-style installer ISOs (interface=none) are permanent in the config
+	// and must not trigger the pending state on every start.
+	hasCloudInitISO := false
 	for _, d := range cfg.Disks {
-		if d.Media == "cdrom" && strings.HasSuffix(d.Path, ".iso") {
-			hasISO = true
+		if d.Media == "cdrom" && strings.HasSuffix(d.Path, ".iso") && d.Interface == "virtio" {
+			hasCloudInitISO = true
 			break
 		}
 	}
 
 	switch state.InstallState {
 	case "":
-		// First boot: mark install as pending if there's an ISO.
-		if hasISO {
+		// First boot: mark install as pending only for cloud-init VMs.
+		if hasCloudInitISO {
 			state.InstallState = InstallStatePending
 			if err := SaveStateForVM(m.storagePath(), name, state); err != nil {
 				return fmt.Errorf("save install state: %w", err)
