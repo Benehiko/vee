@@ -3,10 +3,13 @@ package virtiofsdinstall
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"time"
 )
 
 const (
@@ -15,8 +18,8 @@ const (
 )
 
 // EnsureVirtiofsd ensures that a virtiofsd binary exists at ~/.vee/bin/virtiofsd.
-// If already present it returns immediately. Otherwise it compiles from source
-// inside a container (vessel → nerdctl → docker, first found wins).
+// If already present it returns immediately. Otherwise it downloads the source
+// tarball on the host and compiles it inside a container (vessel → nerdctl → docker).
 func EnsureVirtiofsd(home string) (string, error) {
 	if runtime.GOOS != "linux" {
 		return "", fmt.Errorf("virtiofsd is only supported on Linux")
@@ -38,29 +41,32 @@ func EnsureVirtiofsd(home string) (string, error) {
 		return "", fmt.Errorf("no container runtime found (vessel/nerdctl/docker required to build virtiofsd): %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "virtiofsd not found — building %s from source (this takes a few minutes)…\n", virtiofsdVersion)
+	fmt.Fprintf(os.Stderr, "virtiofsd not found — downloading and building %s (this takes a few minutes)…\n", virtiofsdVersion)
 
-	buildTmpDir := filepath.Join(os.TempDir(), "virtiofsd-build")
-	if err := os.MkdirAll(buildTmpDir, 0o755); err != nil {
+	// Download tarball on the host (has network access).
+	buildDir := filepath.Join(os.TempDir(), "virtiofsd-build")
+	if err := os.MkdirAll(buildDir, 0o755); err != nil {
 		return "", fmt.Errorf("create build dir: %w", err)
 	}
+	tarPath := filepath.Join(buildDir, "virtiofsd.tar.gz")
 
-	// Compile inside a rust:alpine container.
-	// Bind-mount: build tmp dir as /build (writable workspace), binDir as /out (output).
-	buildScript := fmt.Sprintf(`set -e
-apk add --no-cache curl tar musl-dev >/dev/null 2>&1
-curl -fsSL '%s' | tar -xz --strip-components=1 -C /build
+	if err := downloadFile(tarPath, virtiofsdSrcURL); err != nil {
+		return "", fmt.Errorf("download virtiofsd source: %w", err)
+	}
+
+	// Build inside container — source tarball and output dir are bind-mounted.
+	// No network needed inside the container.
+	buildScript := `set -e
+tar -xz --strip-components=1 -f /src/virtiofsd.tar.gz -C /build
 cd /build
 cargo build --release
 cp target/release/virtiofsd /out/virtiofsd
-`, virtiofsdSrcURL)
-
-	// Use short flags (-v, --rm) which are supported by vessel, nerdctl, and docker.
-	// Use "--" before IMAGE to prevent vessel from parsing sh's -c as a vessel flag.
+`
 	args := []string{
 		"run", "--rm",
+		"-v", buildDir + ":/src",
+		"-v", buildDir + ":/build",
 		"-v", binDir + ":/out",
-		"-v", buildTmpDir + ":/build",
 		"--",
 		"rust:alpine",
 		"sh", "-c", buildScript,
@@ -77,8 +83,30 @@ cp target/release/virtiofsd /out/virtiofsd
 		return "", fmt.Errorf("chmod virtiofsd: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "virtiofsd built successfully: %s\n", dst)
+	fmt.Fprintf(os.Stderr, "virtiofsd built: %s\n", dst)
 	return dst, nil
+}
+
+func downloadFile(dst, url string) error {
+	if _, err := os.Stat(dst); err == nil {
+		return nil // already downloaded
+	}
+	hc := &http.Client{Timeout: 5 * time.Minute}
+	resp, err := hc.Get(url) //nolint:noctx
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP %d fetching %s", resp.StatusCode, url)
+	}
+	f, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	_, err = io.Copy(f, resp.Body)
+	return err
 }
 
 // findContainerRuntime returns the path to the first available container runtime.
