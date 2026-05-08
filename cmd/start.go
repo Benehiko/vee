@@ -14,9 +14,10 @@ var (
 )
 
 var startCmd = &cobra.Command{
-	Use:   "start <name>",
-	Short: "Start a VM",
-	Args:  cobra.ExactArgs(1),
+	Use:               "start <name>",
+	Short:             "Start a VM",
+	Args:              cobra.ExactArgs(1),
+	ValidArgsFunction: completeVMNames,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
 		mgr := vm.NewManager(prov)

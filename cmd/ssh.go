@@ -6,7 +6,6 @@ import (
 	"os/exec"
 	"syscall"
 
-	"github.com/Benehiko/vee/provider"
 	"github.com/Benehiko/vee/vm"
 	"github.com/spf13/cobra"
 )
@@ -207,25 +206,6 @@ func splitFields(s string) []string {
 	return fields
 }
 
-func completeVMNames(_ *cobra.Command, args []string, _ string) ([]string, cobra.ShellCompDirective) {
-	if len(args) > 0 {
-		return nil, cobra.ShellCompDirectiveNoFileComp
-	}
-	p, err := provider.NewProviderSilent()
-	if err != nil {
-		return nil, cobra.ShellCompDirectiveError
-	}
-	mgr := vm.NewManager(p)
-	entries, err := mgr.List()
-	if err != nil {
-		return nil, cobra.ShellCompDirectiveError
-	}
-	names := make([]string, 0, len(entries))
-	for _, e := range entries {
-		names = append(names, e.Config.Name)
-	}
-	return names, cobra.ShellCompDirectiveNoFileComp
-}
 
 func init() {
 	sshCmd.Flags().StringVarP(&sshUser, "user", "u", "", "SSH username (default: cloud-init user)")

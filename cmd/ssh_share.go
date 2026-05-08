@@ -14,8 +14,9 @@ import (
 var sshShareAgentSock string
 
 var sshShareCmd = &cobra.Command{
-	Use:   "ssh-share <name>",
-	Short: "Share host SSH agent into a running VM via AF_VSOCK",
+	Use:               "ssh-share <name>",
+	Short:             "Share host SSH agent into a running VM via AF_VSOCK",
+	ValidArgsFunction: completeVMNames,
 	Long: `Starts a vsock proxy on port 2222 that forwards connections from the guest
 to the host SSH agent socket. The VM must have been created with --ssh-share
 and be currently running.

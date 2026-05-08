@@ -6,9 +6,10 @@ import (
 )
 
 var deleteCmd = &cobra.Command{
-	Use:   "delete <name>",
-	Short: "Delete a VM and its disks",
-	Args:  cobra.ExactArgs(1),
+	Use:               "delete <name>",
+	Short:             "Delete a VM and its disks",
+	Args:              cobra.ExactArgs(1),
+	ValidArgsFunction: completeVMNames,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		mgr := vm.NewManager(prov)
 		return mgr.Delete(args[0])

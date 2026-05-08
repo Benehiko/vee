@@ -12,8 +12,9 @@ import (
 var viewForceSPICE bool
 
 var viewCmd = &cobra.Command{
-	Use:   "view <name>",
-	Short: "Open or connect to a running VM's display",
+	Use:               "view <name>",
+	Short:             "Open or connect to a running VM's display",
+	ValidArgsFunction: completeVMNames,
 	Long: `Open the display for a running VM:
 
   GPU passthrough  Prints Moonlight/Sunshine connection instructions.
