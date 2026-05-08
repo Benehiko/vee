@@ -132,10 +132,12 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 			}
 		}
 	case InstallStateReady:
-		// OS already installed — strip installer ISO cdroms so we boot from disk.
+		// Strip cloud-init cidata ISOs (interface=virtio) — they are one-shot
+		// and must not be attached after first boot. Leave installer ISOs
+		// (interface=none, e.g. TrueNAS) in place; UEFI boot order governs.
 		filtered := cfg.Disks[:0]
 		for _, d := range cfg.Disks {
-			if d.Media == "cdrom" && strings.HasSuffix(d.Path, ".iso") {
+			if d.Media == "cdrom" && strings.HasSuffix(d.Path, ".iso") && d.Interface == "virtio" {
 				continue
 			}
 			filtered = append(filtered, d)
