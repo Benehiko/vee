@@ -1,9 +1,12 @@
 package qemu
 
 import (
+	"bufio"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"time"
 )
@@ -12,6 +15,7 @@ import (
 // Unlike QMP, QGA requires no capabilities handshake.
 type QGAClient struct {
 	conn net.Conn
+	rd   *bufio.Reader
 }
 
 type qgaRequest struct {
@@ -32,7 +36,7 @@ func NewQGAClient(socketPath string, timeout time.Duration) (*QGAClient, error) 
 	for time.Now().Before(deadline) {
 		conn, err = net.Dial("unix", socketPath)
 		if err == nil {
-			return &QGAClient{conn: conn}, nil
+			return &QGAClient{conn: conn, rd: bufio.NewReader(conn)}, nil
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
@@ -51,18 +55,14 @@ func (c *QGAClient) execute(cmd string, args map[string]any) (json.RawMessage, e
 	}
 
 	// Read one line response.
-	buf := make([]byte, 0, 4096)
-	tmp := make([]byte, 1)
-	for {
-		_, err := c.conn.Read(tmp)
-		if err != nil {
-			return nil, fmt.Errorf("QGA read: %w", err)
+	line, err := c.rd.ReadBytes('\n')
+	if err != nil {
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return nil, fmt.Errorf("QGA connection closed (VM may have stopped)")
 		}
-		if tmp[0] == '\n' {
-			break
-		}
-		buf = append(buf, tmp[0])
+		return nil, fmt.Errorf("QGA read: %w", err)
 	}
+	buf := line
 
 	var resp qgaResponse
 	if err := json.Unmarshal(buf, &resp); err != nil {
