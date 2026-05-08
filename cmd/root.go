@@ -50,4 +50,6 @@ func init() {
 	rootCmd.AddCommand(sshShareCmd)
 	rootCmd.AddCommand(sshCmd)
 	rootCmd.AddCommand(logsCmd)
+	rootCmd.AddCommand(portsCmd)
+	rootCmd.AddCommand(tunnelCmd)
 }

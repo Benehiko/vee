@@ -113,8 +113,9 @@ func NewTruenasConfig(ctx context.Context, p provider.Provider, name, version st
 			Bridge: bridge,
 			Model:  "virtio-net-pci",
 		},
-		GPU:      vm.GPUConfig{Mode: vm.GPUNone},
-		Headless: false,
+		GPU:        vm.GPUConfig{Mode: vm.GPUNone},
+		Headless:   false,
+		GuestAgent: true,
 		UEFI: vm.UEFIConfig{
 			Enabled: true,
 		},
