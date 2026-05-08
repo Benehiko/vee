@@ -121,47 +121,8 @@ func buildSSHArgs(user, host string, port int, identity string, positional, extr
 	return args
 }
 
-// resolveIPFromMAC scans the kernel neighbour table for a matching MAC address.
 func resolveIPFromMAC(mac string) (string, error) {
-	out, err := exec.Command("ip", "neigh").Output()
-	if err != nil {
-		return "", fmt.Errorf("ip neigh: %w", err)
-	}
-	return parseIPNeigh(string(out), mac)
-}
-
-// parseIPNeigh extracts the IP for the given MAC from `ip neigh` output.
-// Each line looks like: <ip> dev <iface> lladdr <mac> <state>
-func parseIPNeigh(output, wantMAC string) (string, error) {
-	for _, line := range splitLines(output) {
-		fields := splitFields(line)
-		// Minimum: ip dev iface lladdr mac state
-		for i, f := range fields {
-			if f == "lladdr" && i+1 < len(fields) {
-				if equalMAC(fields[i+1], wantMAC) && len(fields) > 0 {
-					return fields[0], nil
-				}
-			}
-		}
-	}
-	return "", fmt.Errorf("MAC %s not found in neighbour table", wantMAC)
-}
-
-func equalMAC(a, b string) bool {
-	normalize := func(s string) string {
-		out := make([]byte, 0, len(s))
-		for i := 0; i < len(s); i++ {
-			c := s[i]
-			if c != ':' && c != '-' {
-				if c >= 'A' && c <= 'F' {
-					c += 32
-				}
-				out = append(out, c)
-			}
-		}
-		return string(out)
-	}
-	return normalize(a) == normalize(b)
+	return vm.ResolveIPFromMAC(mac)
 }
 
 func userPrefix(user string) string {
@@ -169,41 +130,6 @@ func userPrefix(user string) string {
 		return ""
 	}
 	return user + "@"
-}
-
-func splitLines(s string) []string {
-	var lines []string
-	start := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\n' {
-			lines = append(lines, s[start:i])
-			start = i + 1
-		}
-	}
-	if start < len(s) {
-		lines = append(lines, s[start:])
-	}
-	return lines
-}
-
-func splitFields(s string) []string {
-	var fields []string
-	inField := false
-	start := 0
-	for i := 0; i < len(s); i++ {
-		isSpace := s[i] == ' ' || s[i] == '\t'
-		if !isSpace && !inField {
-			start = i
-			inField = true
-		} else if isSpace && inField {
-			fields = append(fields, s[start:i])
-			inField = false
-		}
-	}
-	if inField {
-		fields = append(fields, s[start:])
-	}
-	return fields
 }
 
 func init() {

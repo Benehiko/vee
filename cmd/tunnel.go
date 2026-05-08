@@ -61,12 +61,12 @@ The local port is chosen randomly and printed on startup.`,
 
 func tunnelResolveIP(cfg *vm.VMConfig, state *vm.VMState) (string, error) {
 	if cfg.NIC.MAC != "" {
-		if ip, err := resolveIPFromMAC(cfg.NIC.MAC); err == nil {
+		if ip, err := vm.ResolveIPFromMAC(cfg.NIC.MAC); err == nil {
 			return ip, nil
 		}
 	}
 	if state.QGASocket != "" {
-		return resolveIPFromQGA(state.QGASocket)
+		return vm.ResolveIPFromQGA(state.QGASocket)
 	}
 	return "", fmt.Errorf("cannot resolve IP: no MAC in ARP table and no guest agent socket")
 }

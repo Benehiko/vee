@@ -35,6 +35,7 @@ var (
 	createDistro        string
 	createDistroVersion string
 	createDataDisks     []string
+	createHostname      string
 )
 
 var createCmd = &cobra.Command{
@@ -189,6 +190,12 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
 		if cmd.Flags().Changed("ssh-port") && createSSHPort > 0 {
 			cfg.SSHPort = createSSHPort
 		}
+		if cmd.Flags().Changed("hostname") {
+			cfg.Hostname = createHostname
+		} else if cfg.Hostname == "" {
+			// Default: use VM name as hostname for any VM.
+			cfg.Hostname = name
+		}
 
 		mgr := vm.NewManager(prov)
 		if err := mgr.Create(cmd.Context(), cfg); err != nil {
@@ -245,4 +252,5 @@ func init() {
 	createCmd.Flags().StringVar(&createDistro, "distro", "ubuntu", "Base OS distro for devbox/server templates: ubuntu, arch, fedora")
 	createCmd.Flags().StringVar(&createDistroVersion, "distro-version", "latest", "ISO version for the selected distro (e.g. 24.04, 2025.05.01, 42) or 'latest'")
 	createCmd.Flags().StringArrayVar(&createDataDisks, "data-disk", nil, "Host block device for passthrough data disk, optionally with serial: path[:serial] (repeatable)")
+	createCmd.Flags().StringVar(&createHostname, "hostname", "", "Hostname registered in /etc/hosts (or systemd-resolved) on start (default: VM name)")
 }

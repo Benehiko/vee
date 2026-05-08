@@ -136,29 +136,3 @@ func extractProcessName(field string) string {
 	}
 	return field[start+1 : start+1+end]
 }
-
-// resolveIPFromQGA returns the first non-loopback IPv4 address reported by
-// the QEMU guest agent. Used when the VM's MAC is not in the ARP table yet.
-func resolveIPFromQGA(qgaSocket string) (string, error) {
-	client, err := qemu.NewQGAClient(qgaSocket, 3*time.Second)
-	if err != nil {
-		return "", fmt.Errorf("connect to guest agent: %w", err)
-	}
-	defer func() { _ = client.Close() }()
-
-	ifaces, err := client.GuestNetworkGetInterfaces()
-	if err != nil {
-		return "", err
-	}
-	for _, iface := range ifaces {
-		if iface.Name == "lo" {
-			continue
-		}
-		for _, addr := range iface.IPAddresses {
-			if addr.IPAddressType == "ipv4" && addr.IPAddress != "127.0.0.1" {
-				return addr.IPAddress, nil
-			}
-		}
-	}
-	return "", fmt.Errorf("no non-loopback IPv4 address found via guest agent")
-}

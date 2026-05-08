@@ -104,5 +104,6 @@ type VMConfig struct {
 	SSHPort        int              `yaml:"ssh_port,omitempty"`
 	GuestAgent     bool             `yaml:"guest_agent,omitempty"`
 	ExtraDevices   []string         `yaml:"extra_devices,omitempty"`
+	Hostname       string           `yaml:"hostname,omitempty"`
 	CreatedAt      time.Time        `yaml:"created_at"`
 }

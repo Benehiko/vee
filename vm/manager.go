@@ -180,7 +180,24 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 	if cfg.Headless && cfg.SSHPort > 0 {
 		newState.SSHPort = cfg.SSHPort
 	}
-	return SaveStateForVM(m.storagePath(), name, newState)
+	if err := SaveStateForVM(m.storagePath(), name, newState); err != nil {
+		return err
+	}
+
+	// Register hostname → IP if configured. Best-effort: log but don't fail start.
+	if cfg.Hostname != "" {
+		ip, ipErr := m.waitIP(ctx, cfg, newState, 30*time.Second)
+		if ipErr != nil {
+			m.provider.Logger().Warn("could not resolve VM IP for hostname registration",
+				zap.String("vm", name), zap.Error(ipErr))
+		} else {
+			if regErr := RegisterHostname(cfg.Hostname, ip); regErr != nil {
+				m.provider.Logger().Warn("hostname registration failed",
+					zap.String("hostname", cfg.Hostname), zap.Error(regErr))
+			}
+		}
+	}
+	return nil
 }
 
 // WaitReady polls until SSH is accepting connections or QMP guest-agent responds,
@@ -261,6 +278,95 @@ func (m *Manager) markReady(name string) error {
 
 func ptr[T any](v T) *T { return &v }
 
+// waitIP polls until the VM's IP is resolvable via MAC→ARP or QGA, up to timeout.
+func (m *Manager) waitIP(ctx context.Context, cfg *VMConfig, state *VMState, timeout time.Duration) (string, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		if cfg.NIC.MAC != "" {
+			if ip, err := ResolveIPFromMAC(cfg.NIC.MAC); err == nil {
+				return ip, nil
+			}
+		}
+		if state.QGASocket != "" {
+			if ip, err := ResolveIPFromQGA(state.QGASocket); err == nil {
+				return ip, nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return "", fmt.Errorf("VM %q IP not resolvable within %s", cfg.Name, timeout)
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(3 * time.Second):
+		}
+	}
+}
+
+// ResolveIPFromMAC scans the kernel neighbour table for the IP matching a MAC.
+func ResolveIPFromMAC(mac string) (string, error) {
+	out, err := exec.Command("ip", "neigh").Output()
+	if err != nil {
+		return "", fmt.Errorf("ip neigh: %w", err)
+	}
+	return parseIPNeigh(string(out), mac)
+}
+
+func parseIPNeigh(output, wantMAC string) (string, error) {
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		fields := strings.Fields(line)
+		for i, f := range fields {
+			if f == "lladdr" && i+1 < len(fields) {
+				if equalMAC(fields[i+1], wantMAC) {
+					return fields[0], nil
+				}
+			}
+		}
+	}
+	return "", fmt.Errorf("MAC %s not found in neighbour table", wantMAC)
+}
+
+func equalMAC(a, b string) bool {
+	norm := func(s string) string {
+		out := make([]byte, 0, len(s))
+		for i := 0; i < len(s); i++ {
+			c := s[i]
+			if c != ':' && c != '-' {
+				if c >= 'A' && c <= 'F' {
+					c += 32
+				}
+				out = append(out, c)
+			}
+		}
+		return string(out)
+	}
+	return norm(a) == norm(b)
+}
+
+// ResolveIPFromQGA returns the first non-loopback IPv4 via the QEMU guest agent.
+func ResolveIPFromQGA(qgaSocket string) (string, error) {
+	client, err := qemu.NewQGAClient(qgaSocket, 3*time.Second)
+	if err != nil {
+		return "", fmt.Errorf("QGA dial: %w", err)
+	}
+	defer func() { _ = client.Close() }()
+	ifaces, err := client.GuestNetworkGetInterfaces()
+	if err != nil {
+		return "", err
+	}
+	for _, iface := range ifaces {
+		if iface.Name == "lo" {
+			continue
+		}
+		for _, addr := range iface.IPAddresses {
+			if addr.IPAddressType == "ipv4" && addr.IPAddress != "127.0.0.1" {
+				return addr.IPAddress, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("no non-loopback IPv4 found via guest agent")
+}
+
 // Stop sends a graceful QMP powerdown and waits for the process to exit.
 func (m *Manager) Stop(ctx context.Context, name string) error {
 	state, err := LoadState(m.storagePath(), name)
@@ -299,6 +405,15 @@ func (m *Manager) Stop(ctx context.Context, name string) error {
 		proc, err := os.FindProcess(state.VirtiofsdPID)
 		if err == nil {
 			_ = proc.Signal(syscall.SIGTERM)
+		}
+	}
+
+	// Unregister hostname if configured.
+	cfg, cfgErr := LoadConfig(m.storagePath(), name)
+	if cfgErr == nil && cfg.Hostname != "" {
+		if unregErr := UnregisterHostname(cfg.Hostname); unregErr != nil {
+			m.provider.Logger().Warn("hostname unregistration failed",
+				zap.String("hostname", cfg.Hostname), zap.Error(unregErr))
 		}
 	}
 

@@ -17,7 +17,7 @@ var ipCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
 
-		_, state, err := loadRunningVM(name)
+		cfg, state, err := loadRunningVM(name)
 		if err != nil {
 			return err
 		}
@@ -36,6 +36,9 @@ var ipCmd = &cobra.Command{
 			return fmt.Errorf("get interfaces: %w", err)
 		}
 
+		if cfg.Hostname != "" {
+			fmt.Printf("hostname: %s\n\n", cfg.Hostname)
+		}
 		fmt.Printf("%-12s %-20s %s\n", "NIC", "MAC", "ADDRESSES")
 		fmt.Println(strings.Repeat("-", 60))
 		for _, iface := range ifaces {
