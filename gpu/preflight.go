@@ -38,6 +38,9 @@ type PreflightResult struct {
 	// Required memlock in bytes (== VM RAM size).
 	MemlockRequiredBytes uint64
 
+	// Device power and reset state.
+	DeviceState DeviceState
+
 	// Errors collected per check — nil entry means the check passed.
 	Errors map[string]error
 }
@@ -69,6 +72,14 @@ func PreflightCheck(addr, memoryStr string) *PreflightResult {
 		PCIAddr:    pciAddr,
 		IOMMUGroup: -1,
 		Errors:     make(map[string]error),
+	}
+
+	// 0. Power / reset state.
+	r.DeviceState = ReadDeviceState(pciAddr)
+	if r.DeviceState.NeedsReset() {
+		r.Errors["power_state"] = fmt.Errorf(
+			"device is in %s/%s — likely stuck from a previous unclean exit; vee will attempt reset before start",
+			r.DeviceState.PowerState, r.DeviceState.RuntimeStatus)
 	}
 
 	// 1. Driver check.
