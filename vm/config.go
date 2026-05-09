@@ -35,9 +35,18 @@ const (
 )
 
 type GPUConfig struct {
-	Mode       GPUMode `yaml:"mode"`
-	PCIAddr    string  `yaml:"pci_addr,omitempty"`
-	AntiDetect bool    `yaml:"anti_detect,omitempty"`
+	Mode    GPUMode `yaml:"mode"`
+	PCIAddr string  `yaml:"pci_addr,omitempty"`
+	// ExtraVFIOAddrs lists additional PCI addresses that must be passed through
+	// alongside the primary GPU — typically the GPU's HDMI/DP audio function
+	// (e.g. "0000:08:00.1"). All addresses in the same IOMMU reset domain must
+	// be owned by the same VFIO container.
+	ExtraVFIOAddrs []string `yaml:"extra_vfio_addrs,omitempty"`
+	// ROMFile is a path to a VBIOS dump to pass to the guest via romfile=.
+	// Required on some AMD GPUs when rombar=1 alone is insufficient for the
+	// guest driver to initialize display output.
+	ROMFile    string `yaml:"rom_file,omitempty"`
+	AntiDetect bool   `yaml:"anti_detect,omitempty"`
 }
 
 type UEFIConfig struct {

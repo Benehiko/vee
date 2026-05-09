@@ -621,7 +621,22 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 					zap.Bool("is_gpu", peer.IsGPU),
 				)
 			}
-			opts = append(opts, qemu.WithVFIO(qemu.NewVFIODevice(cfg.GPU.PCIAddr)))
+			primary := qemu.NewVFIODevice(cfg.GPU.PCIAddr)
+			if cfg.GPU.ROMFile != "" {
+				primary.ROMFile = cfg.GPU.ROMFile
+			}
+			opts = append(opts, qemu.WithVFIO(primary))
+			// Peer devices (e.g. GPU HDMI/DP audio) must be in the same VFIO
+			// container; each gets its own PCIe root port (pcie.2, pcie.3, …).
+			for i, addr := range cfg.GPU.ExtraVFIOAddrs {
+				busID := fmt.Sprintf("pcie.%d", i+2)
+				peer := qemu.NewVFIOPeerDevice(addr, busID)
+				opts = append(opts, qemu.WithVFIO(peer))
+				m.provider.Logger().Info("attaching VFIO peer device",
+					zap.String("pci_addr", addr),
+					zap.String("bus_id", busID),
+				)
+			}
 		} else {
 			m.provider.Logger().Warn("GPU mode is passthrough but no pci_addr configured — no VFIO device will be attached")
 		}
