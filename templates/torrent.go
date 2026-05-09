@@ -128,7 +128,7 @@ func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, ssh
 	return &vm.VMConfig{
 		Name:     name,
 		Template: "torrent",
-		Memory:   "1G",
+		Memory:   "2G",
 		CPUs:     1,
 		Sockets:  1,
 		Cores:    1,

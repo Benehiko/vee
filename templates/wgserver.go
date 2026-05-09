@@ -108,7 +108,7 @@ AllowedIPs = %s/32
 			User:        "vee",
 			DefaultUser: images.DefaultUser(images.DistroUbuntu),
 			SSHKeys:     sshKeys,
-			Packages:    []string{"wireguard", "resolvconf", "ufw", "iptables"},
+			Packages:    []string{"wireguard", "ufw", "iptables"},
 			RunCmds:     runCmds,
 			WriteFiles: []vm.CloudInitWriteFile{
 				{

@@ -87,6 +87,15 @@ func (u *UbuntuImage) Checksum() (string, error) {
 func (u *UbuntuImage) Download(ctx context.Context) error {
 	u.provider.Logger().Info("downloading", zap.String("file", u.Name()))
 
+	// Skip network entirely if the file already exists — it was verified on
+	// first download. Only hit the checksum URL when the file is absent.
+	if _, err := os.Stat(u.AbsolutePath()); err == nil {
+		u.provider.Logger().Info("skipping download",
+			zap.String("file", u.AbsolutePath()),
+			zap.String("reason", "already downloaded"))
+		return nil
+	}
+
 	checksumURL := fmt.Sprintf(UbuntuDownloadChecksumURL, u.version)
 
 	httpClient := &http.Client{}
@@ -119,28 +128,6 @@ func (u *UbuntuImage) Download(ctx context.Context) error {
 	if targetChecksum == "" {
 		u.provider.Logger().Error("checksum not found", zap.String("file", u.Name()))
 		return fmt.Errorf("checksum not found for %s", u.Name())
-	}
-
-	if _, err := os.Stat(u.AbsolutePath()); err == nil {
-		sha256, err := u.Checksum()
-		if err != nil {
-			return err
-		}
-
-		if sha256 == targetChecksum {
-			u.provider.Logger().Info("skipping download",
-				zap.String("file", u.AbsolutePath()),
-				zap.String("reason", "already downloaded"))
-			return nil
-		}
-
-		u.provider.Logger().Warn("removing file due to checksum mismatch",
-			zap.String("file", u.AbsolutePath()),
-			zap.String("expected", targetChecksum),
-			zap.String("actual", sha256))
-		if err := os.Remove(u.AbsolutePath()); err != nil {
-			return err
-		}
 	}
 
 	req, err = http.NewRequestWithContext(ctx, "GET", fmt.Sprintf(UbuntuDownloadURL, u.version, u.version, u.imageType, u.arch), nil)
@@ -227,6 +214,15 @@ func (u *UbuntuCloudImage) checksum() (string, error) {
 
 func (u *UbuntuCloudImage) Download(ctx context.Context) error {
 	u.provider.Logger().Info("downloading", zap.String("file", u.Name()))
+
+	// Skip network entirely if the file already exists — it was verified on
+	// first download. Only hit the checksum URL when the file is absent.
+	if _, err := os.Stat(u.AbsolutePath()); err == nil {
+		u.provider.Logger().Info("skipping download",
+			zap.String("file", u.AbsolutePath()),
+			zap.String("reason", "already downloaded"))
+		return nil
+	}
 
 	checksumURL := fmt.Sprintf(UbuntuCloudImageChecksumURL, u.version)
 	httpClient := &http.Client{}

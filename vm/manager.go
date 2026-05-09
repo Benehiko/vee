@@ -603,6 +603,11 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 		opts = append(opts, qemu.WithDisplay("gtk,gl=on"))
 	}
 
+	// Explicit VGA override (e.g. "none" for passthrough VMs using virtio-gpu-pci via ExtraDevices).
+	if cfg.VGA != "" {
+		opts = append(opts, qemu.WithVGA(cfg.VGA))
+	}
+
 	// Headless
 	if cfg.Headless {
 		opts = append(opts, qemu.WithHeadless())

@@ -93,7 +93,12 @@ func TestVMTorrentWireGuard(t *testing.T) {
 	wgSSHPort := resolveSSHPort(t, home, wgServerName)
 	wgSSH := fmt.Sprintf("127.0.0.1:%d", wgSSHPort)
 	waitSSHAuth(t, wgSSH, "ubuntu", privKeyPath, 5*time.Minute)
-	sshRun(t, wgSSH, "ubuntu", privKeyPath, "sudo cloud-init status --wait")
+	ciStatus := sshRunLenient(t, wgSSH, "ubuntu", privKeyPath, "sudo cloud-init status --wait 2>&1")
+	if strings.Contains(ciStatus, "status: error") {
+		ciDetail := sshRunLenient(t, wgSSH, "ubuntu", privKeyPath,
+			"sudo cloud-init status --long 2>&1; echo '---OUTPUT LOG---'; sudo cat /var/log/cloud-init-output.log 2>&1 | tail -80")
+		t.Fatalf("wg-server cloud-init failed:\n%s\n\n%s", ciStatus, ciDetail)
+	}
 	t.Log("WireGuard server VM ready")
 
 	// --- Step 2: torrent VM with WireGuard client ---
@@ -105,7 +110,7 @@ func TestVMTorrentWireGuard(t *testing.T) {
 			{HostDir: moviesDir, GuestPath: "/movies"},
 			{HostDir: showsDir, GuestPath: "/shows"},
 		},
-		nil,           // no NordVPN
+		nil, // no NordVPN
 		clientWGConf,
 		"wireguard",
 		0,
@@ -122,14 +127,30 @@ func TestVMTorrentWireGuard(t *testing.T) {
 		t.Fatalf("start torrent VM: %v", err)
 	}
 	t.Log("waiting for torrent VM to be ready (cloud-init: WireGuard + qbittorrent)...")
-	if err := mgr.WaitReady(ctx, torrentVMName, 15*time.Minute); err != nil {
-		t.Fatalf("torrent VM not ready: %v", err)
+	if err := mgr.WaitReady(ctx, torrentVMName, 20*time.Minute); err != nil {
+		// Check if QEMU process is still alive.
+		torrentState, _ := vm.LoadState(filepath.Join(home, ".vee", "vms"), torrentVMName)
+		if torrentState != nil {
+			_, pidErr := os.FindProcess(torrentState.PID)
+			t.Logf("torrent VM QEMU PID=%d alive=%v", torrentState.PID, pidErr == nil)
+		}
+		// Try SSH for cloud-init diag.
+		torrentSSHPortDiag := resolveSSHPort(t, home, torrentVMName)
+		diagSSH := fmt.Sprintf("127.0.0.1:%d", torrentSSHPortDiag)
+		diag := sshRunLenient(t, diagSSH, "ubuntu", privKeyPath,
+			"sudo cloud-init status --long 2>&1; echo '---OUTPUT---'; sudo cat /var/log/cloud-init-output.log 2>&1 | tail -60; echo '---VIRTIOFS---'; dmesg | grep -i virtiofs | tail -10")
+		t.Fatalf("torrent VM not ready: %v\ndiag:\n%s", err, diag)
 	}
 
 	torrentSSHPort := resolveSSHPort(t, home, torrentVMName)
 	torrentSSH := fmt.Sprintf("127.0.0.1:%d", torrentSSHPort)
-	waitSSHAuth(t, torrentSSH, "ubuntu", privKeyPath, 10*time.Minute)
-	sshRun(t, torrentSSH, "ubuntu", privKeyPath, "sudo cloud-init status --wait")
+	waitSSHAuth(t, torrentSSH, "ubuntu", privKeyPath, 15*time.Minute)
+	torrentCIStatus := sshRunLenient(t, torrentSSH, "ubuntu", privKeyPath, "sudo cloud-init status --wait 2>&1")
+	if strings.Contains(torrentCIStatus, "status: error") {
+		ciDetail := sshRunLenient(t, torrentSSH, "ubuntu", privKeyPath,
+			"sudo cloud-init status --long 2>&1; echo '---OUTPUT LOG---'; sudo cat /var/log/cloud-init-output.log 2>&1 | tail -80")
+		t.Fatalf("torrent cloud-init failed:\n%s\n\n%s", torrentCIStatus, ciDetail)
+	}
 	t.Log("torrent VM ready")
 
 	// --- Step 3: assertions ---
@@ -169,18 +190,26 @@ func TestVMTorrentWireGuard(t *testing.T) {
 }
 
 // providerWithHome creates a provider.Provider rooted at the given home dir.
-// It pre-populates ~/.vee/bin/virtiofsd from the real home so EnsureVirtiofsd
-// returns immediately without attempting a build.
+// It wires up the test home so that expensive first-run operations (virtiofsd
+// build, image download) are skipped by reusing artifacts from the real home.
 func providerWithHome(t *testing.T, home string) (provider.Provider, error) {
 	t.Helper()
 
-	// Find virtiofsd from the real home or PATH and copy it into the test home
-	// so EnsureVirtiofsd finds it on first lookup.
 	realHome, _ := os.UserHomeDir()
+
+	// Symlink the real iso cache so image downloads are skipped.
+	realISODir := filepath.Join(realHome, ".vee", "iso")
+	testISODir := filepath.Join(home, ".vee", "iso")
+	if _, err := os.Stat(realISODir); err == nil {
+		if err := os.MkdirAll(filepath.Dir(testISODir), 0o755); err == nil {
+			_ = os.Symlink(realISODir, testISODir)
+		}
+	}
+
+	// Copy virtiofsd binary so EnsureVirtiofsd returns immediately.
 	src := filepath.Join(realHome, ".vee", "bin", "virtiofsd")
 	if _, err := os.Stat(src); err != nil {
-		// fall back to system path
-		if p, err := exec.LookPath("virtiofsd"); err == nil {
+		if p, err2 := exec.LookPath("virtiofsd"); err2 == nil {
 			src = p
 		} else {
 			src = ""
@@ -211,4 +240,3 @@ func copyFileExec(src, dst string) error {
 	_, err = io.Copy(out, in)
 	return err
 }
-

@@ -137,6 +137,38 @@ func sshRun(t *testing.T, addr, user, privKeyPath, command string) string {
 	return strings.TrimSpace(string(out))
 }
 
+// sshRunLenient runs a command over SSH and returns combined output without
+// fataling on non-zero exit — useful for diagnostic collection before assertions.
+func sshRunLenient(t *testing.T, addr, user, privKeyPath, command string) string {
+	t.Helper()
+	keyBytes, err := os.ReadFile(privKeyPath)
+	if err != nil {
+		return fmt.Sprintf("read key error: %v", err)
+	}
+	signer, err := ssh.ParsePrivateKey(keyBytes)
+	if err != nil {
+		return fmt.Sprintf("parse key error: %v", err)
+	}
+	cfg := &ssh.ClientConfig{
+		User:            user,
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(), //nolint:gosec
+		Timeout:         10 * time.Second,
+	}
+	client, err := ssh.Dial("tcp", addr, cfg)
+	if err != nil {
+		return fmt.Sprintf("dial error: %v", err)
+	}
+	defer client.Close()
+	sess, err := client.NewSession()
+	if err != nil {
+		return fmt.Sprintf("session error: %v", err)
+	}
+	defer sess.Close()
+	out, _ := sess.CombinedOutput(command)
+	return strings.TrimSpace(string(out))
+}
+
 // resolveSSHPort reads the ssh_port field from the VM state file.
 func resolveSSHPort(t *testing.T, home, vmName string) int {
 	t.Helper()

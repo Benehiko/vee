@@ -105,6 +105,7 @@ type VMConfig struct {
 	SSHPort        int              `yaml:"ssh_port,omitempty"`
 	GuestAgent     bool             `yaml:"guest_agent,omitempty"`
 	ExtraDevices   []string         `yaml:"extra_devices,omitempty"`
+	VGA            string           `yaml:"vga,omitempty"`
 	Hostname       string           `yaml:"hostname,omitempty"`
 	TrueNASAPIKey  string           `yaml:"truenas_api_key,omitempty"`
 	TrueNASUser    string           `yaml:"truenas_user,omitempty"`

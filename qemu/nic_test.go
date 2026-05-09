@@ -25,14 +25,14 @@ func newTestProvider(t *testing.T) provider.Provider {
 	t.Helper()
 	return &testProvider{
 		cfg: &provider.Config{
-			QemuBinaryPath:  "qemu-system-x86_64",
-			VirtiofsdPath:   "/usr/bin/virtiofsd",
-			DefaultMemory:   "2G",
-			DefaultCPUs:     2,
-			DefaultDiskSize: "20G",
-			DefaultCPUModel: "host",
+			QemuBinaryPath:     "qemu-system-x86_64",
+			VirtiofsdPath:      "/usr/bin/virtiofsd",
+			DefaultMemory:      "2G",
+			DefaultCPUs:        2,
+			DefaultDiskSize:    "20G",
+			DefaultCPUModel:    "host",
 			DefaultMachineType: "q35",
-			StoragePath:     t.TempDir(),
+			StoragePath:        t.TempDir(),
 		},
 		log: zap.NewNop(),
 	}
