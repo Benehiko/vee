@@ -14,6 +14,7 @@ import (
 	"github.com/Benehiko/vee/provider"
 	"github.com/Benehiko/vee/utils"
 	"go.uber.org/zap"
+	"golang.org/x/sys/unix"
 )
 
 type VGA string
@@ -332,14 +333,24 @@ func (q *BaseMachine) start(ctx context.Context, detach bool) (*StartResult, err
 		if err != nil {
 			return nil, err
 		}
+		bootBanner := fmt.Sprintf("\n=== boot on %s ===\n", time.Now().Format(time.RFC3339))
+		if _, err := fmt.Fprint(logFile, bootBanner); err != nil {
+			_ = logFile.Close()
+			return nil, err
+		}
 		cmd.Stdout = logFile
 		cmd.Stderr = logFile
 		if err := cmd.Start(); err != nil {
 			_ = logFile.Close()
 			return nil, err
 		}
-		// logFile is inherited by the detached child; close our copy after Start.
-		// The child keeps the fd open until it exits, so log writes are not lost.
+		if err := q.applyVFIOLimits(cmd.Process.Pid); err != nil {
+			_ = cmd.Process.Kill()
+			_ = logFile.Close()
+			return nil, err
+		}
+		// logFile fd is inherited by the detached child; close the parent's copy.
+		// The child keeps it open until it exits.
 		go func() {
 			_ = cmd.Wait()
 			_ = logFile.Close()
@@ -355,6 +366,35 @@ func (q *BaseMachine) start(ctx context.Context, detach bool) (*StartResult, err
 					break
 				}
 				time.Sleep(200 * time.Millisecond)
+			}
+			if _, err := os.Stat(q.qmpSocket); err != nil {
+				q.provider.Logger().Warn("QMP socket did not appear — QEMU may have crashed; check qemu.log",
+					zap.String("machine", q.name),
+					zap.String("qmp_socket", q.qmpSocket),
+					zap.Bool("process_alive", checkAlive(pid)),
+				)
+			} else {
+				q.provider.Logger().Info("QEMU started",
+					zap.String("machine", q.name),
+					zap.Int("pid", pid),
+					zap.String("qmp_socket", q.qmpSocket),
+					zap.Bool("process_alive", checkAlive(pid)),
+				)
+			}
+		} else {
+			// No QMP socket — brief pause then check liveness.
+			time.Sleep(500 * time.Millisecond)
+			alive := checkAlive(pid)
+			if !alive {
+				q.provider.Logger().Warn("QEMU process exited immediately after start — check qemu.log",
+					zap.String("machine", q.name),
+					zap.Int("pid", pid),
+				)
+			} else {
+				q.provider.Logger().Info("QEMU started",
+					zap.String("machine", q.name),
+					zap.Int("pid", pid),
+				)
 			}
 		}
 
@@ -374,10 +414,73 @@ func (q *BaseMachine) start(ctx context.Context, detach bool) (*StartResult, err
 		}
 	}()
 
-	if err := cmd.Run(); err != nil {
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	if err := q.applyVFIOLimits(cmd.Process.Pid); err != nil {
+		_ = cmd.Process.Kill()
+		return nil, err
+	}
+	if err := cmd.Wait(); err != nil {
 		return nil, err
 	}
 	return &StartResult{PID: 0}, nil
+}
+
+// applyVFIOLimits raises RLIMIT_MEMLOCK on the child process when VFIO devices
+// are configured. VFIO DMA-maps the entire guest RAM into the IOMMU; without
+// sufficient locked-memory headroom vfio_container_dma_map returns ENOMEM.
+//
+// Raising Max beyond the inherited hard limit requires CAP_SYS_RESOURCE. To
+// avoid that requirement, configure unlimited memlock system-wide:
+//
+//	/etc/security/limits.d/vee-vfio.conf:
+//	  * - memlock unlimited
+func (q *BaseMachine) applyVFIOLimits(pid int) error {
+	if len(q.vfioDevices) == 0 {
+		return nil
+	}
+	var before unix.Rlimit
+	if err := unix.Prlimit(pid, unix.RLIMIT_MEMLOCK, nil, &before); err != nil {
+		return fmt.Errorf("get memlock rlimit: %w", err)
+	}
+	q.provider.Logger().Info("VFIO memlock before",
+		zap.String("machine", q.name),
+		zap.Int("pid", pid),
+		zap.Uint64("soft_bytes", before.Cur),
+		zap.Uint64("hard_bytes", before.Max),
+	)
+
+	// Try to raise both soft and hard limits to infinity (requires CAP_SYS_RESOURCE
+	// or a pre-configured unlimited hard limit via /etc/security/limits.d/).
+	want := unix.Rlimit{Cur: unix.RLIM_INFINITY, Max: unix.RLIM_INFINITY}
+	if err := unix.Prlimit(pid, unix.RLIMIT_MEMLOCK, &want, nil); err != nil {
+		// Fall back to raising soft limit to the current hard limit.
+		fallback := unix.Rlimit{Cur: before.Max, Max: before.Max}
+		if err2 := unix.Prlimit(pid, unix.RLIMIT_MEMLOCK, &fallback, nil); err2 != nil {
+			return fmt.Errorf("set memlock rlimit: %w", err2)
+		}
+		q.provider.Logger().Warn("memlock hard limit capped — VFIO DMA map may fail; set 'memlock unlimited' in /etc/security/limits.d/vee-vfio.conf",
+			zap.String("machine", q.name),
+			zap.Uint64("hard_limit_bytes", before.Max),
+		)
+	} else {
+		q.provider.Logger().Info("VFIO memlock raised to unlimited",
+			zap.String("machine", q.name),
+			zap.Int("pid", pid),
+		)
+	}
+	return nil
+}
+
+// checkAlive returns true if the process with the given PID is still running.
+func checkAlive(pid int) bool {
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	// Signal 0 checks existence without disturbing the process.
+	return p.Signal(syscall.Signal(0)) == nil
 }
 
 func (q *BaseMachine) AbsolutePath() string {
