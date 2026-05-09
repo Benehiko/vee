@@ -160,10 +160,17 @@ error getting device from group 22: No such device
 **Do not use `rombar=1` without also supplying a VBIOS dump via `rom_file`.**
 vee defaults to `rombar=0` for passthrough devices to avoid this.
 
-#### Dumping the VBIOS
+#### Obtaining the VBIOS
 
-The ROM can only be read while the GPU is owned by the native `amdgpu` driver
-(not `vfio-pci`). Do this before binding the device to VFIO:
+If `vfio-pci` owns the device at boot (the typical setup), `amdgpu` never loads
+and the sysfs ROM interface is not available. The easiest source for the VBIOS
+dump is your GPU vendor's support page or a community database such as
+[TechPowerUp GPU-Z BIOS collection](https://www.techpowerup.com/vgabios/).
+Download the ROM that matches your exact board revision and save it somewhere
+stable, e.g. `~/.vee/gpu.rom`.
+
+If you do have a second GPU driving the host display (so `amdgpu` never loads
+on the passthrough card), you can dump directly from sysfs:
 
 ```sh
 echo 1 | sudo tee /sys/bus/pci/devices/0000:08:00.0/rom
