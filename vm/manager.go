@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Benehiko/vee/cloudinit"
+	"github.com/Benehiko/vee/gpu"
 	"github.com/Benehiko/vee/provider"
 	"github.com/Benehiko/vee/qemu"
 	"github.com/Benehiko/vee/virtiofs"
@@ -593,7 +594,36 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 	switch cfg.GPU.Mode {
 	case GPUPassthrough:
 		if cfg.GPU.PCIAddr != "" {
+			pf := gpu.PreflightCheck(cfg.GPU.PCIAddr, cfg.Memory)
+			fields := []zap.Field{
+				zap.String("pci_addr", pf.PCIAddr),
+				zap.String("driver", pf.Driver),
+				zap.Int("iommu_group", pf.IOMMUGroup),
+				zap.String("vfio_dev", pf.VFIODevPath),
+				zap.Bool("vfio_accessible", pf.VFIOAccessible),
+				zap.String("memlock_soft", gpu.FormatBytes(pf.MemlockSoftBytes)),
+				zap.String("memlock_hard", gpu.FormatBytes(pf.MemlockHardBytes)),
+				zap.String("memlock_required", gpu.FormatBytes(pf.MemlockRequiredBytes)),
+				zap.Bool("memlock_ok", pf.MemlockOK()),
+			}
+			for key, err := range pf.Errors {
+				fields = append(fields, zap.String("preflight_fail_"+key, err.Error()))
+			}
+			if pf.OK() {
+				m.provider.Logger().Info("VFIO preflight passed", fields...)
+			} else {
+				m.provider.Logger().Warn("VFIO preflight issues detected — passthrough may fail", fields...)
+			}
+			for _, peer := range pf.GroupPeers {
+				m.provider.Logger().Info("IOMMU group peer",
+					zap.String("pci_addr", peer.Address),
+					zap.String("driver", peer.Driver),
+					zap.Bool("is_gpu", peer.IsGPU),
+				)
+			}
 			opts = append(opts, qemu.WithVFIO(qemu.NewVFIODevice(cfg.GPU.PCIAddr)))
+		} else {
+			m.provider.Logger().Warn("GPU mode is passthrough but no pci_addr configured — no VFIO device will be attached")
 		}
 		// Passthrough VMs need shared memory for the vhost-user protocol.
 		opts = append(opts, qemu.WithMemfd(qemu.NewMemfdBackend(cfg.Memory)))
