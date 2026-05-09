@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 
-	virtiofsdinstall "github.com/Benehiko/vee/virtiofsdinstall"
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/providers/structs"
@@ -34,9 +33,10 @@ func newDefaultConfig() (*Config, error) {
 		return nil, err
 	}
 
-	virtiofsdPath, virtiofsdErr := virtiofsdinstall.EnsureVirtiofsd(home)
-	if virtiofsdErr != nil {
-		// Non-fatal: fall back to system path; start will warn if not found.
+	// VirtiofsdPath is set to the expected install location; the binary is
+	// built on demand in buildMachine only when a virtiofs mount is requested.
+	virtiofsdPath := filepath.Join(home, ".vee", "bin", "virtiofsd")
+	if _, err := os.Stat(virtiofsdPath); err != nil {
 		virtiofsdPath = "/usr/bin/virtiofsd"
 	}
 

@@ -19,6 +19,9 @@ const (
 var gpuCmd = &cobra.Command{
 	Use:   "gpu",
 	Short: "Manage GPU devices for VM passthrough",
+	// Override the root PersistentPreRunE — gpu subcommands only need sysfs
+	// access and must not trigger provider init (virtiofsd build, log setup).
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error { return nil },
 }
 
 var gpuListCmd = &cobra.Command{

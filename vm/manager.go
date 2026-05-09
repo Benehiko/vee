@@ -18,6 +18,7 @@ import (
 	"github.com/Benehiko/vee/provider"
 	"github.com/Benehiko/vee/qemu"
 	"github.com/Benehiko/vee/virtiofs"
+	"github.com/Benehiko/vee/virtiofsdinstall"
 	"go.uber.org/zap"
 )
 
@@ -682,8 +683,18 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 		opts = append(opts, qemu.WithDevice(dev))
 	}
 
-	// Virtiofsd mounts
+	// Virtiofsd mounts — ensure the binary exists before starting any daemon.
 	var virtiofsdPIDs []int
+	if len(cfg.VirtiofsMounts) > 0 {
+		home, homeErr := os.UserHomeDir()
+		if homeErr == nil {
+			if path, ensureErr := virtiofsdinstall.EnsureVirtiofsd(home); ensureErr == nil {
+				m.provider.Config().VirtiofsdPath = path
+			} else {
+				m.provider.Logger().Warn("virtiofsd not available", zap.Error(ensureErr))
+			}
+		}
+	}
 	for _, mount := range cfg.VirtiofsMounts {
 		sockPath := mount.SocketPath
 		if sockPath == "" {
