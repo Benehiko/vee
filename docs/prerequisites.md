@@ -106,6 +106,45 @@ And ensure `/usr/lib/qemu/qemu-bridge-helper` is setuid:
 sudo chmod u+s /usr/lib/qemu/qemu-bridge-helper
 ```
 
+## GPU passthrough (VFIO)
+
+To pass a GPU through to a VM using VFIO, two system-level changes are required.
+
+### VFIO group membership
+
+Your user must be in the `vfio` group so QEMU can open `/dev/vfio/<group>`:
+
+```sh
+sudo usermod -aG vfio $USER
+```
+
+Log out and back in (or `newgrp vfio`) for the change to take effect.
+
+### Locked memory limit (memlock)
+
+VFIO DMA-maps the entire guest RAM into the IOMMU. The default `memlock` limit
+(typically 32 MiB) is far too small and causes QEMU to fail with:
+
+```
+vfio_container_dma_map(...) = -12 (Cannot allocate memory)
+```
+
+Set the limit to unlimited for all users:
+
+```sh
+sudo tee /etc/security/limits.d/vee-vfio.conf <<'EOF'
+* - memlock unlimited
+EOF
+```
+
+Log out and back in for PAM to apply the new limit. Verify with `ulimit -l`
+(should print `unlimited`).
+
+> **Note:** `vee` will attempt to raise the memlock limit on the QEMU child
+> process automatically. If the system hard limit is still capped, it logs a
+> warning and uses the maximum available — which may still be insufficient for
+> large VMs.
+
 ## Shell completion
 
 Register tab completion for your shell so `vee start <TAB>` completes VM names:
