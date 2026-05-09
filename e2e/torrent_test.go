@@ -5,7 +5,10 @@ package e2e_test
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -166,9 +169,46 @@ func TestVMTorrentWireGuard(t *testing.T) {
 }
 
 // providerWithHome creates a provider.Provider rooted at the given home dir.
+// It pre-populates ~/.vee/bin/virtiofsd from the real home so EnsureVirtiofsd
+// returns immediately without attempting a build.
 func providerWithHome(t *testing.T, home string) (provider.Provider, error) {
 	t.Helper()
+
+	// Find virtiofsd from the real home or PATH and copy it into the test home
+	// so EnsureVirtiofsd finds it on first lookup.
+	realHome, _ := os.UserHomeDir()
+	src := filepath.Join(realHome, ".vee", "bin", "virtiofsd")
+	if _, err := os.Stat(src); err != nil {
+		// fall back to system path
+		if p, err := exec.LookPath("virtiofsd"); err == nil {
+			src = p
+		} else {
+			src = ""
+		}
+	}
+	if src != "" {
+		dstDir := filepath.Join(home, ".vee", "bin")
+		if err := os.MkdirAll(dstDir, 0o755); err == nil {
+			_ = copyFileExec(src, filepath.Join(dstDir, "virtiofsd"))
+		}
+	}
+
 	t.Setenv("HOME", home)
 	return provider.NewProvider()
+}
+
+func copyFileExec(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, in)
+	return err
 }
 

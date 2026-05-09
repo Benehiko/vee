@@ -111,7 +111,13 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 		if isAlive(state.PID) {
 			return fmt.Errorf("VM %q is already running (PID %d)", name, state.PID)
 		}
-		// Stale state — VM shut itself down; run cleanup.
+		// Stale state — VM shut itself down; unregister hostname and clean up.
+		if cfg.Hostname != "" {
+			if err := UnregisterHostname(cfg.Hostname); err != nil {
+				m.provider.Logger().Warn("hostname unregistration failed",
+					zap.String("hostname", cfg.Hostname), zap.Error(err))
+			}
+		}
 		m.cleanupStaleVM(name, cfg, state)
 		state = &VMState{}
 	}
@@ -466,15 +472,10 @@ func (m *Manager) Stop(ctx context.Context, name string) error {
 	return SaveStateForVM(m.storagePath(), name, preserved)
 }
 
-// cleanupStaleVM runs post-stop cleanup for a VM whose process died on its own
-// (e.g. guest OS shutdown). Unregisters hostname and clears state.
-func (m *Manager) cleanupStaleVM(name string, cfg *VMConfig, state *VMState) {
-	if cfg != nil && cfg.Hostname != "" {
-		if err := UnregisterHostname(cfg.Hostname); err != nil {
-			m.provider.Logger().Warn("hostname unregistration failed",
-				zap.String("hostname", cfg.Hostname), zap.Error(err))
-		}
-	}
+// cleanupStaleVM clears persisted running state for a VM whose process died on
+// its own (e.g. guest OS shutdown). It does NOT touch /etc/hosts — callers
+// that want hostname unregistration must call UnregisterHostname themselves.
+func (m *Manager) cleanupStaleVM(name string, _ *VMConfig, state *VMState) {
 	preserved := &VMState{}
 	if state != nil {
 		// A pending VM that ran long enough to shut down has completed its install.

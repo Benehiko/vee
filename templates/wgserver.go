@@ -75,7 +75,7 @@ AllowedIPs = %s/32
 	cfg := &vm.VMConfig{
 		Name:     name,
 		Template: "wg-server",
-		Memory:   "512M",
+		Memory:   "1G",
 		CPUs:     1,
 		Sockets:  1,
 		Cores:    1,
