@@ -19,12 +19,15 @@ type VFIODevice struct {
 
 var _ Builder = &VFIODevice{}
 
-// NewVFIODevice creates a primary VFIO device (GPU) with rombar enabled.
+// NewVFIODevice creates a primary VFIO device (GPU) with rombar disabled.
+// AMD Navi GPUs return an invalid ROM signature when probed through vfio-pci
+// without a VBIOS dump; enabling the ROM BAR can cause the device to hang
+// during reset. Use GPUConfig.ROMFile to supply a VBIOS explicitly instead.
 func NewVFIODevice(pciAddr string) *VFIODevice {
 	return &VFIODevice{
 		PCIAddr:       pciAddr,
 		BusID:         "pcie.1",
-		ROMBar:        true,
+		ROMBar:        false,
 		Multifunction: true,
 	}
 }
