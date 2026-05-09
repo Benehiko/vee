@@ -47,8 +47,23 @@ var startCmd = &cobra.Command{
 }
 
 // runStartSpinner shows a bubbletea spinner while WaitReady polls for SSH/QGA.
+// Falls back to plain text output when stdout is not a TTY.
 func runStartSpinner(cmd *cobra.Command, mgr *vm.Manager, name string) error {
 	ctx := cmd.Context()
+
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- mgr.WaitReady(ctx, name, 10*time.Minute)
+	}()
+
+	if !term.IsTerminal(int(os.Stdout.Fd())) {
+		err := <-doneCh
+		if err != nil {
+			return fmt.Errorf("wait ready: %w", err)
+		}
+		fmt.Printf("VM %q is ready\n", name)
+		return nil
+	}
 
 	s := spinner.New()
 	s.Spinner = spinner.Dot
@@ -59,11 +74,6 @@ func runStartSpinner(cmd *cobra.Command, mgr *vm.Manager, name string) error {
 		name:    name,
 		status:  "starting…",
 	}
-
-	doneCh := make(chan error, 1)
-	go func() {
-		doneCh <- mgr.WaitReady(ctx, name, 10*time.Minute)
-	}()
 
 	p := tea.NewProgram(m)
 
