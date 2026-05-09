@@ -650,6 +650,14 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 				zap.Error(err))
 		} else {
 			virtiofsdPIDs = append(virtiofsdPIDs, pid)
+			// Wait for virtiofsd to create its socket before QEMU starts.
+			deadline := time.Now().Add(5 * time.Second)
+			for time.Now().Before(deadline) {
+				if _, statErr := os.Stat(sockPath); statErr == nil {
+					break
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
 		}
 		opts = append(opts, qemu.WithVirtiofsd(sockPath, mount.Tag))
 	}

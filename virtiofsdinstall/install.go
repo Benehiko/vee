@@ -55,19 +55,20 @@ func EnsureVirtiofsd(home string) (string, error) {
 	}
 
 	// Build inside container — source tarball and output dir are bind-mounted.
-	// No network needed inside the container.
+	// Cargo needs network access to fetch the crates registry on first build.
+	// libseccomp and libcap-ng are required link dependencies of virtiofsd.
 	buildScript := `set -e
-tar -xz --strip-components=1 -f /src/virtiofsd.tar.gz -C /build
+apk add --no-cache musl-dev libseccomp-dev libcap-ng-dev
+[ -f /build/Cargo.toml ] || tar -xz --strip-components=1 -f /src/virtiofsd.tar.gz -C /build
 cd /build
 cargo build --release
 cp target/release/virtiofsd /out/virtiofsd
 `
 	args := []string{
 		"run", "--rm",
-		"-v", buildDir + ":/src",
+		"-v", buildDir + ":/src:ro",
 		"-v", buildDir + ":/build",
 		"-v", binDir + ":/out",
-		"--",
 		"rust:alpine",
 		"sh", "-c", buildScript,
 	}
@@ -109,12 +110,14 @@ func downloadFile(dst, url string) error {
 	return err
 }
 
-// findContainerRuntime returns the path to the first available container runtime.
+// findContainerRuntime returns the path to the first available container runtime
+// that supports network access inside containers (needed for cargo to fetch crates).
+// vessel is excluded because its containers lack DNS resolution.
 func findContainerRuntime() (string, error) {
-	for _, name := range []string{"vessel", "nerdctl", "docker"} {
+	for _, name := range []string{"nerdctl", "docker"} {
 		if p, err := exec.LookPath(name); err == nil {
 			return p, nil
 		}
 	}
-	return "", fmt.Errorf("none of vessel/nerdctl/docker found in PATH")
+	return "", fmt.Errorf("none of nerdctl/docker found in PATH (vessel not supported: no DNS in containers)")
 }

@@ -73,6 +73,7 @@ func WithVirtiofsd(socketPath, tag string) QemuOptions {
 			SocketPath: socketPath,
 			Tag:        tag,
 			Chardev:    "virtiofs-" + tag,
+			Device:     "vhost-user-fs-pci",
 		})
 	}
 }

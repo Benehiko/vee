@@ -5,13 +5,41 @@ import (
 	"testing"
 
 	"go.uber.org/goleak"
+	"go.uber.org/zap"
 
+	"github.com/Benehiko/vee/provider"
 	"github.com/Benehiko/vee/qemu"
 )
 
 func TestMain(m *testing.M) {
 	goleak.VerifyTestMain(m)
 }
+
+// testProvider is a minimal provider.Provider for unit tests.
+type testProvider struct {
+	cfg *provider.Config
+	log *zap.Logger
+}
+
+func newTestProvider(t *testing.T) provider.Provider {
+	t.Helper()
+	return &testProvider{
+		cfg: &provider.Config{
+			QemuBinaryPath:  "qemu-system-x86_64",
+			VirtiofsdPath:   "/usr/bin/virtiofsd",
+			DefaultMemory:   "2G",
+			DefaultCPUs:     2,
+			DefaultDiskSize: "20G",
+			DefaultCPUModel: "host",
+			DefaultMachineType: "q35",
+			StoragePath:     t.TempDir(),
+		},
+		log: zap.NewNop(),
+	}
+}
+
+func (p *testProvider) Config() *provider.Config { return p.cfg }
+func (p *testProvider) Logger() *zap.Logger      { return p.log }
 
 func TestDeterministicMAC(t *testing.T) {
 	mac1 := qemu.DeterministicMAC("my-vm")

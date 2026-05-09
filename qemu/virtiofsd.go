@@ -48,7 +48,7 @@ func WithQemuVirtiofsdObject(object string) QemuVirtiofsdOption {
 
 func NewQemuVirtiofsd(opts ...QemuVirtiofsdOption) *Virtiofsd {
 	q := &Virtiofsd{
-		Device: "virtiofsd-pci",
+		Device: "vhost-user-fs-pci",
 		Object: "virtiofsd",
 	}
 	for _, opt := range opts {
