@@ -10,6 +10,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const (
+	checkPass = "PASS"
+	checkFail = "FAIL"
+	checkSkip = "SKIP"
+)
+
 var gpuCmd = &cobra.Command{
 	Use:   "gpu",
 	Short: "Manage GPU devices for VM passthrough",
@@ -30,15 +36,19 @@ var gpuListCmd = &cobra.Command{
 		})
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		_, _ = fmt.Fprintln(w, "GROUP\tADDRESS\tVENDOR\tDEVICE\tCLASS\tDRIVER\tGPU")
+		_, _ = fmt.Fprintln(w, "GROUP\tADDRESS\tNAME\tCLASS\tDRIVER\tGPU")
 		for _, g := range groups {
 			for _, d := range g.Devices {
 				gpuMark := ""
 				if d.IsGPU {
 					gpuMark = "yes"
 				}
-				_, _ = fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\t%s\n",
-					g.ID, d.Address, d.Vendor, d.Device, d.Class, d.Driver, gpuMark)
+				name := gpu.LookupDeviceName(d.Vendor, d.Device)
+				if name == "" {
+					name = d.Vendor + ":" + d.Device
+				}
+				_, _ = fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\n",
+					g.ID, d.Address, name, d.Class, d.Driver, gpuMark)
 			}
 		}
 		return w.Flush()
@@ -56,6 +66,85 @@ var gpuBindCmd = &cobra.Command{
 			return err
 		}
 		fmt.Printf("OK — %s is now bound to vfio-pci\n", addr)
+		return nil
+	},
+}
+
+var gpuStatusMemory string
+
+var gpuStatusCmd = &cobra.Command{
+	Use:               "status <pci-addr>",
+	Short:             "Check VFIO passthrough readiness for a PCI device",
+	Args:              cobra.ExactArgs(1),
+	ValidArgsFunction: cobra.NoFileCompletions,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		r := gpu.PreflightCheck(args[0], gpuStatusMemory)
+
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		_, _ = fmt.Fprintln(w, "CHECK\tSTATUS\tDETAIL")
+
+		check := func(name, detail string, err error) {
+			status := checkPass
+			if err != nil {
+				status = checkFail
+				detail = err.Error()
+			}
+			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\n", name, status, detail)
+		}
+		skipIf := func(name, detail string, skip bool, err error) {
+			if skip {
+				_, _ = fmt.Fprintf(w, "%s\t%s\t%s\n", name, checkSkip, detail)
+				return
+			}
+			check(name, detail, err)
+		}
+
+		check("driver",
+			fmt.Sprintf("bound to %s", r.Driver),
+			r.Errors["driver"])
+
+		check("iommu_group",
+			fmt.Sprintf("group %d", r.IOMMUGroup),
+			r.Errors["iommu_group"])
+
+		for _, peer := range r.GroupPeers {
+			name := gpu.LookupDeviceName(peer.Vendor, peer.Device)
+			if name == "" {
+				name = peer.Vendor + ":" + peer.Device
+			}
+			check("iommu_group_peer_"+peer.Address,
+				fmt.Sprintf("%s driver=%s", name, peer.Driver),
+				r.Errors["iommu_group_peer_"+peer.Address])
+		}
+
+		skipIf("vfio_dev",
+			fmt.Sprintf("%s exists", r.VFIODevPath),
+			r.IOMMUGroup < 0,
+			r.Errors["vfio_dev"])
+
+		skipIf("vfio_access",
+			fmt.Sprintf("%s is accessible", r.VFIODevPath),
+			r.IOMMUGroup < 0 || r.Errors["vfio_dev"] != nil,
+			r.Errors["vfio_access"])
+
+		const unlimited = ^uint64(0)
+		softStr := gpu.FormatBytes(r.MemlockSoftBytes)
+		hardStr := gpu.FormatBytes(r.MemlockHardBytes)
+		requiredStr := ""
+		if r.MemlockRequiredBytes > 0 {
+			requiredStr = fmt.Sprintf(" (need %s for VM RAM)", gpu.FormatBytes(r.MemlockRequiredBytes))
+		}
+		skipIf("memlock",
+			fmt.Sprintf("soft=%s hard=%s%s", softStr, hardStr, requiredStr),
+			gpuStatusMemory == "" && r.MemlockSoftBytes == unlimited,
+			r.Errors["memlock"])
+
+		_ = w.Flush()
+
+		if !r.OK() {
+			return fmt.Errorf("preflight checks failed — fix the issues above before starting the VM")
+		}
+		fmt.Println("\nAll checks passed.")
 		return nil
 	},
 }
@@ -89,7 +178,8 @@ var gpuUnbindCmd = &cobra.Command{
 }
 
 func init() {
+	gpuStatusCmd.Flags().StringVar(&gpuStatusMemory, "memory", "", "VM RAM size (e.g. 16G) to check memlock sufficiency")
 	gpuUnbindCmd.Flags().StringVar(&unbindOriginalDriver, "driver", "", "Original driver to rebind to (auto-detected if omitted)")
-	gpuCmd.AddCommand(gpuListCmd, gpuBindCmd, gpuUnbindCmd)
+	gpuCmd.AddCommand(gpuListCmd, gpuBindCmd, gpuUnbindCmd, gpuStatusCmd)
 	rootCmd.AddCommand(gpuCmd)
 }
