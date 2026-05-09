@@ -638,15 +638,22 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 			// Ensure all VFIO devices are in a clean power state before handing
 			// them to QEMU. An unclean previous exit can leave the GPU in D3cold,
 			// which causes "error getting device from group N: No such device".
+			// D3hot/suspended is handled by vfio-pci during open — warn only.
 			allAddrs := append([]string{cfg.GPU.PCIAddr}, cfg.GPU.ExtraVFIOAddrs...)
 			for _, addr := range allAddrs {
 				ds, resetErr := gpu.EnsureReady(addr)
 				if resetErr != nil {
-					m.provider.Logger().Warn("VFIO device reset failed — start may fail; cold reboot may be required",
+					m.provider.Logger().Warn("VFIO device D3cold reset failed — cold reboot required",
 						zap.String("pci_addr", addr),
 						zap.String("power_state", string(ds.PowerState)),
 						zap.String("runtime_status", ds.RuntimeStatus),
 						zap.Error(resetErr),
+					)
+				} else if ds.NeedsAttention() {
+					m.provider.Logger().Warn("VFIO device in D3hot/suspended — vfio-pci will attempt runtime resume",
+						zap.String("pci_addr", addr),
+						zap.String("power_state", string(ds.PowerState)),
+						zap.String("runtime_status", ds.RuntimeStatus),
 					)
 				} else {
 					m.provider.Logger().Info("VFIO device ready",

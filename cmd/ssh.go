@@ -100,7 +100,7 @@ Examples:
 			}
 			ip, resolveErr := resolveIPFromMAC(mac)
 			if resolveErr != nil {
-				return fmt.Errorf("could not resolve IP for VM %q (MAC %s): %w\nTry: ssh %s@<ip>", name, mac, resolveErr, userPrefix(user))
+				return fmt.Errorf("could not resolve IP for VM %q (MAC %s): %w\nTry: ssh %s<ip>", name, mac, resolveErr, userPrefix(user))
 			}
 			host = ip
 			port = 22

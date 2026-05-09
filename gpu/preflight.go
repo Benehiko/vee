@@ -78,7 +78,7 @@ func PreflightCheck(addr, memoryStr string) *PreflightResult {
 	r.DeviceState = ReadDeviceState(pciAddr)
 	if r.DeviceState.NeedsReset() {
 		r.Errors["power_state"] = fmt.Errorf(
-			"device is in %s/%s — likely stuck from a previous unclean exit; vee will attempt reset before start",
+			"device is in %s/%s — stuck in D3cold; cold reboot required",
 			r.DeviceState.PowerState, r.DeviceState.RuntimeStatus)
 	}
 

@@ -54,18 +54,24 @@ func ReadDeviceState(addr string) DeviceState {
 
 // NeedsReset reports whether the device is in a state that requires a reset
 // before it can be safely opened by VFIO.
+//
+// D3cold is the only state that truly blocks VFIO — the device has no power
+// and cannot respond to any transactions. D3hot/suspended is handled by
+// vfio-pci itself during device open (it triggers a runtime resume).
 func (s *DeviceState) NeedsReset() bool {
-	switch s.PowerState {
-	case PowerStateD3cold:
+	return s.PowerState == PowerStateD3cold
+}
+
+// NeedsAttention reports softer conditions worth logging as warnings but that
+// do not require a reset — e.g. D3hot/suspended after an unclean exit.
+func (s *DeviceState) NeedsAttention() bool {
+	if s.NeedsReset() {
+		return false
+	}
+	if s.RuntimeStatus == "suspended" && strings.Contains(string(s.PowerState), "D3") {
 		return true
 	}
-	switch s.RuntimeStatus {
-	case "error", "suspended":
-		// "suspended" under vfio-pci after an unclean exit means the device
-		// was not properly resumed by the previous QEMU instance.
-		return s.PowerState == PowerStateD3cold || strings.Contains(string(s.PowerState), "D3")
-	}
-	return false
+	return s.RuntimeStatus == "error"
 }
 
 // Reset triggers a PCI function-level reset via sysfs.
