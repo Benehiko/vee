@@ -45,6 +45,7 @@ gpu:
   anti_detect: true
 
 ssh_user: youruser
+guest_agent: true
 ```
 
 `extra_vfio_addrs` passes all devices in the IOMMU group through together.
@@ -89,31 +90,88 @@ DISPLAY=:0 xrandr | grep connected
 
 You should see the connector listed as `connected` with your target resolution.
 
+**First boot with monitor plugged in:** On the first boot after setting the
+kernel parameter, plug a physical monitor into the GPU so amdgpu can initialize
+the display engine. Subsequent boots work headlessly via the `video=` param.
+
 ### Sunshine
 
 Install Sunshine for your distro (see [Sunshine docs](https://docs.lizardbyte.dev/projects/sunshine/)).
 
-Recommended `/home/<user>/.config/sunshine/sunshine.conf`:
+#### Configuration
+
+Create `/home/<user>/.config/sunshine/sunshine.conf`:
 
 ```ini
-encoder = vaapi          # use GPU hardware encoding
-av1_mode = 3
-hevc_mode = 3
+encoder = vaapi          # use GPU hardware encoding (AMD: vaapi, NVIDIA: nvenc)
+av1_mode = 0             # disable AV1 — causes session teardown deadlock on some AMD/vaapi builds
+hevc_mode = 0            # disable HEVC — same issue; H.264 is stable
 min_threads = 4
 output_name = 0          # capture primary display (the GPU output)
-qp = 10                  # encode quality (lower = better, higher bitrate)
-bitrate = 50000          # cap at 50 Mbps — tune for your network
-vaapi_strict_rc_buffer = enabled
+qp = 28                  # encode quality (lower = better quality, higher bitrate)
 ```
 
-Enable and start:
+> **Note on `av1_mode`/`hevc_mode`:** Some Sunshine nightly builds (e.g. `2025.x`)
+> have a deadlock in session teardown when AV1 or HEVC encoding is used with
+> vaapi on AMD GPUs. This causes `Fatal: Hang detected! Session failed to
+> terminate in 10 seconds` followed by a core dump on every disconnect. Set
+> both to `0` to force H.264 only until a fixed release is available.
+
+> **Note on `vaapi_strict_rc_buffer`:** Can cause hangs on some AMD setups.
+> Leave it out of the config unless you have a specific reason to enable it.
+
+> **Note on `bitrate`:** The `bitrate` config option is not recognized by all
+> Sunshine versions. Set the bitrate cap from Moonlight's client settings or
+> via the Sunshine web UI at `https://localhost:47990` instead.
+
+#### Systemd service override
+
+Sunshine must start after Xorg has initialized the display. The default
+`sleep 5` pre-start delay is not reliable. Override the service to poll
+xrandr until the connector is ready, then set the target resolution:
+
+Create `~/.config/systemd/user/sunshine.service`:
+
+```ini
+[Unit]
+Description=Self-hosted game stream host for Moonlight
+StartLimitIntervalSec=500
+StartLimitBurst=5
+
+[Service]
+Environment=DISPLAY=:0
+TimeoutStartSec=120
+ExecStartPre=/bin/sh -c 'until xrandr 2>/dev/null | grep -q "^DisplayPort-0 connected"; do sleep 2; done'
+ExecStartPre=/bin/sh -c 'xrandr --newmode "2560x1440_60.00" 312.25 2560 2752 3024 3488 1440 1443 1448 1493 -hsync +vsync 2>/dev/null; xrandr --addmode DisplayPort-0 "2560x1440_60.00" 2>/dev/null; xrandr --output DisplayPort-0 --mode "2560x1440_60.00"'
+ExecStart=/usr/bin/sunshine
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=xdg-desktop-autostart.target
+```
+
+Replace `DisplayPort-0` and `2560x1440` with your connector name and resolution.
+
+Apply:
 
 ```sh
+systemctl --user daemon-reload
 systemctl --user enable --now sunshine
 ```
 
 Sunshine's web UI is available at `https://localhost:47990` for pairing and
 configuration.
+
+#### Disable the guest firewall
+
+Sunshine uses several UDP ports for the video/audio stream. On Ubuntu the UFW
+firewall is enabled by default and blocks these ports, causing `Initial Ping
+Timeout` and session crashes. Since this is a LAN-only gaming VM, disable UFW:
+
+```sh
+sudo ufw disable
+```
 
 ### qemu-guest-agent (recommended)
 
@@ -122,45 +180,71 @@ Install the guest agent so `vee ssh` can resolve the VM's IP without ARP and
 
 ```sh
 sudo apt install qemu-guest-agent
-sudo systemctl enable --now qemu-guest-agent
 ```
 
-Then add to `vm.yaml`:
-
-```yaml
-guest_agent: true
-```
+The agent is socket-activated and starts automatically when the VM is launched
+with `guest_agent: true` in `vm.yaml`. No manual `systemctl enable` is needed.
 
 ## Connecting with Moonlight
 
 1. Open Moonlight on your client device
 2. Add the VM's IP address (`192.168.x.x`) as a host
-3. Enter the pairing PIN shown in Moonlight into Sunshine's web UI
+3. Enter the pairing PIN shown in Moonlight into Sunshine's web UI at
+   `https://<vm-ip>:47990`
 4. Select the desktop app and connect
 
 ## Troubleshooting
 
-### No display output / all connectors disconnected
+### All connectors disconnected / no display output
 
-The GPU was not detected with a monitor at boot. Causes:
+The GPU display engine did not initialize. Causes:
 
-- `video=` kernel param not set → add it as described above
-- GPU stuck in D3cold from a previous unclean exit → `vee` will attempt reset
+- `video=` kernel param not set → add it as described above and reboot
+- First boot after adding the param → plug a physical monitor in for the first
+  boot, then it works headlessly after that
+- GPU stuck in D3cold from a previous unclean exit → `vee` attempts reset
   automatically; if it fails, cold reboot the host
+
+### Sunshine crashes on every Moonlight disconnect
+
+Symptom: `Fatal: Hang detected! Session failed to terminate in 10 seconds`
+followed by core dump.
+
+Cause: deadlock in session teardown when AV1 or HEVC is used with vaapi on
+some AMD GPU + Sunshine nightly build combinations.
+
+Fix: set `av1_mode = 0` and `hevc_mode = 0` in `sunshine.conf` to force H.264.
+
+### Moonlight: "Failed to initialize video capture/encoding" (Error 503)
+
+Sunshine started before Xorg was ready. The systemd service override above
+(polling xrandr) prevents this. If it still occurs, restart Sunshine manually:
+
+```sh
+systemctl --user restart sunshine
+```
+
+### Moonlight: "Starting RTSP handshake failed" (Error 110)
+
+Firewall blocking Sunshine's stream ports. Disable UFW:
+
+```sh
+sudo ufw disable
+```
 
 ### Moonlight reports slow connection
 
-- Sunshine bitrate is uncapped and `qp` is very low → add `bitrate = 50000`
-  (or lower for WiFi clients) to `sunshine.conf`
-- Check that both host and client are on wired ethernet for best results
+- Check client-side bitrate setting in Moonlight preferences
+- Set bitrate via Sunshine web UI at `https://<vm-ip>:47990`
+- Ensure both host and client are on wired ethernet
 
 ### vee ssh cannot resolve IP
 
-The ARP table may not have an IPv4 entry yet. Ping the VM first to populate it:
+The ARP table may not have an IPv4 entry yet. Ping the VM first:
 
 ```sh
 ping -c1 <vm-ip> && vee ssh <name>
 ```
 
-With `guest_agent: true` and `qemu-guest-agent` running in the guest, `vee ssh`
-resolves the IP via QGA without needing ARP.
+With `guest_agent: true` and `qemu-guest-agent` installed, `vee ssh` resolves
+the IP via QGA without needing ARP.
