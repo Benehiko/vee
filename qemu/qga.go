@@ -92,6 +92,34 @@ type GuestNetworkInterface struct {
 	IPAddresses     []GuestIPAddress `json:"ip-addresses"`
 }
 
+// GuestInfo holds basic system information reported by the guest agent.
+type GuestInfo struct {
+	Version           string `json:"version"`
+	SupportedCommands []struct {
+		Name    string `json:"name"`
+		Enabled bool   `json:"enabled"`
+	} `json:"supported_commands"`
+}
+
+// GuestGetInfo returns the guest agent version and supported commands.
+func (c *QGAClient) GuestGetInfo() (*GuestInfo, error) {
+	raw, err := c.execute("guest-info", nil)
+	if err != nil {
+		return nil, err
+	}
+	var info GuestInfo
+	if err := json.Unmarshal(raw, &info); err != nil {
+		return nil, fmt.Errorf("QGA parse info: %w", err)
+	}
+	return &info, nil
+}
+
+// GuestPing sends a guest-ping to verify the agent is alive.
+func (c *QGAClient) GuestPing() error {
+	_, err := c.execute("guest-ping", nil)
+	return err
+}
+
 // GuestNetworkGetInterfaces returns all network interfaces visible inside the guest.
 func (c *QGAClient) GuestNetworkGetInterfaces() ([]GuestNetworkInterface, error) {
 	raw, err := c.execute("guest-network-get-interfaces", nil)
