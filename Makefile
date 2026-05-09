@@ -15,7 +15,7 @@ build:
 
 install: build
 	mkdir -p $(INSTALL_DIR)
-	cp $(BINARY) $(INSTALL_DIR)/$(BINARY)
+	install -m 755 $(BINARY) $(INSTALL_DIR)/$(BINARY)
 	@echo "Installed to $(INSTALL_DIR)/$(BINARY)"
 	@$(MAKE) --no-print-directory _add_to_path
 
