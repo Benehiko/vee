@@ -232,6 +232,8 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 
 // WaitReady polls until SSH is accepting connections or QMP guest-agent responds,
 // then marks the VM as ready (InstallState = "ready").
+// If neither SSHPort nor QMPSocket is configured, returns immediately as long as
+// the QEMU process is still alive — readiness cannot be probed without them.
 // timeout is how long to wait total. Polls every 5s.
 func (m *Manager) WaitReady(ctx context.Context, name string, timeout time.Duration) error {
 	state, err := LoadState(m.storagePath(), name)
@@ -240,6 +242,14 @@ func (m *Manager) WaitReady(ctx context.Context, name string, timeout time.Durat
 	}
 	if !state.Running || state.PID == 0 {
 		return fmt.Errorf("VM %q is not running", name)
+	}
+
+	// No probe configured — just confirm the process is alive and return.
+	if state.SSHPort == 0 && state.QMPSocket == "" {
+		if !isAlive(state.PID) {
+			return fmt.Errorf("VM %q process (PID %d) exited immediately — check: vee logs %s", name, state.PID, name)
+		}
+		return m.markReady(name)
 	}
 
 	deadline := time.Now().Add(timeout)
@@ -282,6 +292,9 @@ func (m *Manager) WaitReady(ctx context.Context, name string, timeout time.Durat
 		case <-ctx.Done():
 			return ctx.Err()
 		case t := <-ticker.C:
+			if !isAlive(state.PID) {
+				return fmt.Errorf("VM %q process (PID %d) exited — check: vee logs %s", name, state.PID, name)
+			}
 			if t.After(deadline) {
 				return fmt.Errorf("VM %q did not become ready within %s", name, timeout)
 			}
