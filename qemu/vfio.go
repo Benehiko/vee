@@ -9,6 +9,8 @@ type VFIODevice struct {
 	PCIAddr string
 	// BusID is the QEMU PCIe root port ID, e.g. "pcie.1".
 	BusID string
+	// Slot is the chassis slot number for the PCIe root port — must be unique per machine.
+	Slot int
 	// ROMBar controls whether QEMU exposes the ROM BAR to the guest.
 	// Should be true for GPU primary functions so the guest driver can read the VBIOS.
 	ROMBar bool
@@ -27,24 +29,26 @@ func NewVFIODevice(pciAddr string) *VFIODevice {
 	return &VFIODevice{
 		PCIAddr:       pciAddr,
 		BusID:         "pcie.1",
+		Slot:          1,
 		ROMBar:        false,
 		Multifunction: true,
 	}
 }
 
 // NewVFIOPeerDevice creates a secondary VFIO device (e.g. GPU audio function)
-// on its own PCIe root port. busID must be unique across all devices in the machine.
-func NewVFIOPeerDevice(pciAddr, busID string) *VFIODevice {
+// on its own PCIe root port. busID and slot must be unique across all devices in the machine.
+func NewVFIOPeerDevice(pciAddr, busID string, slot int) *VFIODevice {
 	return &VFIODevice{
 		PCIAddr:       pciAddr,
 		BusID:         busID,
+		Slot:          slot,
 		ROMBar:        false,
 		Multifunction: false,
 	}
 }
 
 func (v *VFIODevice) Args() []string {
-	rootPort := fmt.Sprintf("pcie-root-port,id=%s,slot=1", v.BusID)
+	rootPort := fmt.Sprintf("pcie-root-port,id=%s,slot=%d", v.BusID, v.Slot)
 	device := fmt.Sprintf("vfio-pci,host=%s,bus=%s,multifunction=%s",
 		v.PCIAddr, v.BusID, boolOnOff(v.Multifunction))
 	if !v.ROMBar {

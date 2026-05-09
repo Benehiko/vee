@@ -190,6 +190,25 @@ gpu:
 With `rom_file` set, QEMU serves the VBIOS from the file rather than probing
 the BAR, and `rombar=1` becomes safe to use.
 
+### Multiple VFIO devices (GPU + audio peer)
+
+GPUs with an integrated audio function (e.g. `08:00.0` GPU and `08:00.1` HDMI
+audio) share an IOMMU reset domain. Both must be passed through together or
+QEMU cannot take ownership of the group. List all peer addresses under
+`extra_vfio_addrs` in `vm.yaml`:
+
+```yaml
+gpu:
+  mode: passthrough
+  pci_addr: "0000:08:00.0"
+  extra_vfio_addrs:
+    - "0000:08:00.1"
+```
+
+Each device gets its own PCIe root port with a unique chassis slot. If slots
+collide, QEMU fails with `Can't add chassis slot, error -16` — vee assigns
+slots automatically so this should not happen in practice.
+
 ### D3cold recovery after unclean exit
 
 If a passthrough VM exits uncleanly (crash, force-kill), the GPU may be left in

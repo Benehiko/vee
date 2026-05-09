@@ -356,7 +356,7 @@ func ResolveIPFromMAC(mac string) (string, error) {
 }
 
 func parseIPNeigh(output, wantMAC string) (string, error) {
-	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(output), "\n") {
 		fields := strings.Fields(line)
 		for i, f := range fields {
 			if f == "lladdr" && i+1 < len(fields) {
@@ -652,7 +652,8 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 			// container; each gets its own PCIe root port (pcie.2, pcie.3, …).
 			for i, addr := range cfg.GPU.ExtraVFIOAddrs {
 				busID := fmt.Sprintf("pcie.%d", i+2)
-				peer := qemu.NewVFIOPeerDevice(addr, busID)
+				slot := i + 2
+				peer := qemu.NewVFIOPeerDevice(addr, busID, slot)
 				opts = append(opts, qemu.WithVFIO(peer))
 				m.provider.Logger().Info("attaching VFIO peer device",
 					zap.String("pci_addr", addr),
