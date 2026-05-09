@@ -108,6 +108,7 @@ type VMConfig struct {
 	VirtiofsMounts []VirtiofsMount  `yaml:"virtiofs_mounts,omitempty"`
 	CloudInit      *CloudInitConfig `yaml:"cloud_init,omitempty"`
 	TPM            *TPMConfig       `yaml:"tpm,omitempty"`
+	SSHUser        string           `yaml:"ssh_user,omitempty"`
 	SSHShare       bool             `yaml:"ssh_share,omitempty"`
 	VsockCID       uint32           `yaml:"vsock_cid,omitempty"`
 	Headless       bool             `yaml:"headless,omitempty"`

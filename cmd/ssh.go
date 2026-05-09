@@ -60,19 +60,25 @@ Examples:
 		}
 
 		user := sshUser
+		if user == "" {
+			user = entry.Config.SSHUser
+		}
 		if user == "" && entry.Config.CloudInit != nil && entry.Config.CloudInit.User != "" {
 			user = entry.Config.CloudInit.User
 		}
 
-		// For TrueNAS, default to stored admin user and use the vee SSH keypair.
-		if entry.Config.Template == "truenas" {
-			if user == "" {
-				user = entry.Config.TrueNASUser
-			}
-			if sshIdentity == "" {
-				home, herr := os.UserHomeDir()
-				if herr == nil {
-					sshIdentity = home + "/.vee/ssh/id_ed25519"
+		// For TrueNAS, default to stored admin user.
+		if entry.Config.Template == "truenas" && user == "" {
+			user = entry.Config.TrueNASUser
+		}
+
+		// Always prefer the vee SSH keypair when no identity is specified.
+		if sshIdentity == "" {
+			home, herr := os.UserHomeDir()
+			if herr == nil {
+				veeKey := home + "/.vee/ssh/id_ed25519"
+				if _, statErr := os.Stat(veeKey); statErr == nil {
+					sshIdentity = veeKey
 				}
 			}
 		}
@@ -123,14 +129,17 @@ func buildSSHArgs(user, host string, port int, identity string, positional, extr
 	if identity != "" {
 		args = append(args, "-i", identity)
 	}
+	// extra holds --ssh-flag values (ssh flags, e.g. -L 8080:...) — before host.
 	args = append(args, extra...)
-	args = append(args, positional...)
 
 	dest := host
 	if user != "" {
 		dest = user + "@" + host
 	}
 	args = append(args, dest)
+
+	// positional holds remote command args — after host.
+	args = append(args, positional...)
 	return args
 }
 
