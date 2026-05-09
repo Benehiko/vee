@@ -369,15 +369,32 @@ func ResolveIPFromMAC(mac string) (string, error) {
 }
 
 func parseIPNeigh(output, wantMAC string) (string, error) {
+	var ipv4, ipv6global string
 	for line := range strings.SplitSeq(strings.TrimSpace(output), "\n") {
 		fields := strings.Fields(line)
 		for i, f := range fields {
-			if f == "lladdr" && i+1 < len(fields) {
-				if equalMAC(fields[i+1], wantMAC) {
-					return fields[0], nil
-				}
+			if f != "lladdr" || i+1 >= len(fields) {
+				continue
+			}
+			if !equalMAC(fields[i+1], wantMAC) {
+				continue
+			}
+			ip := fields[0]
+			if !strings.Contains(ip, ":") {
+				// IPv4 — best choice, return immediately.
+				return ip, nil
+			}
+			// IPv6 — skip link-local (fe80::), keep global as fallback.
+			if !strings.HasPrefix(strings.ToLower(ip), "fe80") && ipv6global == "" {
+				ipv6global = ip
 			}
 		}
+	}
+	if ipv4 != "" {
+		return ipv4, nil
+	}
+	if ipv6global != "" {
+		return ipv6global, nil
 	}
 	return "", fmt.Errorf("MAC %s not found in neighbour table", wantMAC)
 }
