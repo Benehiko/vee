@@ -29,6 +29,7 @@ var templateNames = []string{
 	"server",
 	"torrent",
 	"gaming",
+	"passthrough",
 	"windows",
 }
 

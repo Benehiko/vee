@@ -4,10 +4,10 @@ import (
 	"bufio"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/Benehiko/vee/templates"
+	"github.com/Benehiko/vee/tui"
 	"github.com/Benehiko/vee/vpn"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -66,7 +66,7 @@ func (m *pathInputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
-	m.input.SetSuggestions(pathSuggestions(m.input.Value()))
+	m.input.SetSuggestions(tui.PathSuggestions(m.input.Value()))
 	return m, cmd
 }
 
@@ -259,34 +259,4 @@ func promptGenericWireGuard() (*vpn.WireGuardConfig, error) {
 		return nil, fmt.Errorf("parse WireGuard config: %w", err)
 	}
 	return wgConf, nil
-}
-
-// pathSuggestions returns filesystem completions for the current input value.
-func pathSuggestions(prefix string) []string {
-	dir, partial := filepath.Split(prefix)
-	if dir == "" {
-		dir = "."
-	}
-
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
-
-	var completions []string
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		if !strings.HasPrefix(name, partial) {
-			continue
-		}
-		full := filepath.Join(dir, name)
-		if dir != "." {
-			full = filepath.Join(dir, name)
-		}
-		completions = append(completions, full+"/")
-	}
-	return completions
 }

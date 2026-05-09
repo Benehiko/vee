@@ -10,6 +10,7 @@ import (
 	"github.com/Benehiko/vee/images"
 	"github.com/Benehiko/vee/sshkeys"
 	"github.com/Benehiko/vee/templates"
+	"github.com/Benehiko/vee/tui"
 	"github.com/Benehiko/vee/vm"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -39,6 +40,9 @@ var (
 	createDistroVersion string
 	createDataDisks     []string
 	createHostname      string
+	createNVMeDev       string
+	createOVMFVars      string
+	createNICMAC        string
 )
 
 var createCmd = &cobra.Command{
@@ -49,6 +53,7 @@ var createCmd = &cobra.Command{
 Templates apply sane defaults automatically:
   ubuntu-server  Ubuntu 24.04 Server, UEFI, user mode NIC
   gaming         GPU passthrough, 16G RAM, 6 CPUs, anti-detect, bridge NIC
+  passthrough    Raw NVMe boot + GPU passthrough, 16G / 6 CPUs, SPICE, virtiofs Games
   torrent        Lightweight 4G / 2 CPUs, SPICE, qbittorrent-nox via cloud-init
   devbox         8G / 4 CPUs, Docker + zsh via cloud-init (supports --distro)
   server         8G / 2 CPUs, openssh + ufw + fail2ban via cloud-init (supports --distro)
@@ -97,6 +102,11 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
 		switch createTemplate {
 		case "gaming":
 			cfg = templates.NewGamingConfig(prov, name, createGPUPCI, createVirtiofsDir)
+		case "passthrough":
+			if createNVMeDev == "" || createOVMFVars == "" {
+				return tui.RunConfigWizard(cmd.Context(), prov, !createNoStart)
+			}
+			cfg = templates.NewPassthroughConfig(prov, name, createNVMeDev, createOVMFVars, createGPUPCI, createVirtiofsDir, createNICMAC)
 		case "torrent":
 			mounts, mountErr := promptShareMounts(createVirtiofsDir)
 			if mountErr != nil {
@@ -286,11 +296,15 @@ func init() {
 	createCmd.Flags().StringVar(&createDistroVersion, "distro-version", "latest", "ISO version for the selected distro (e.g. 24.04, 2025.05.01, 42) or 'latest'")
 	createCmd.Flags().StringArrayVar(&createDataDisks, "data-disk", nil, "Host block device for passthrough data disk, optionally with serial: path[:serial] (repeatable)")
 	createCmd.Flags().StringVar(&createHostname, "hostname", "", "Hostname registered in /etc/hosts (or systemd-resolved) on start (default: VM name)")
+	createCmd.Flags().StringVar(&createNVMeDev, "nvme-dev", "", "Host NVMe block device for raw boot passthrough (passthrough template)")
+	createCmd.Flags().StringVar(&createOVMFVars, "ovmf-vars", "", "Path to existing OVMF_VARS.fd to reuse for UEFI state (passthrough template)")
+	createCmd.Flags().StringVar(&createNICMAC, "nic-mac", "", "Fixed MAC address for the bridge NIC (passthrough template; empty = deterministic)")
 
 	_ = createCmd.RegisterFlagCompletionFunc("template", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 		return []string{
 			"ubuntu-server\tUbuntu 24.04 Server",
 			"gaming\tGPU passthrough gaming VM",
+			"passthrough\tRaw NVMe boot + GPU passthrough",
 			"torrent\tqBittorrent VM with optional VPN",
 			"devbox\tDev environment with Docker + zsh",
 			"server\tMinimal server with openssh + ufw + fail2ban",
