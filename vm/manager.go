@@ -622,6 +622,27 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 					zap.Bool("is_gpu", peer.IsGPU),
 				)
 			}
+			// Ensure all VFIO devices are in a clean power state before handing
+			// them to QEMU. An unclean previous exit can leave the GPU in D3cold,
+			// which causes "error getting device from group N: No such device".
+			allAddrs := append([]string{cfg.GPU.PCIAddr}, cfg.GPU.ExtraVFIOAddrs...)
+			for _, addr := range allAddrs {
+				ds, resetErr := gpu.EnsureReady(addr)
+				if resetErr != nil {
+					m.provider.Logger().Warn("VFIO device reset failed — start may fail; cold reboot may be required",
+						zap.String("pci_addr", addr),
+						zap.String("power_state", string(ds.PowerState)),
+						zap.String("runtime_status", ds.RuntimeStatus),
+						zap.Error(resetErr),
+					)
+				} else {
+					m.provider.Logger().Info("VFIO device ready",
+						zap.String("pci_addr", addr),
+						zap.String("power_state", string(ds.PowerState)),
+						zap.String("runtime_status", ds.RuntimeStatus),
+					)
+				}
+			}
 			primary := qemu.NewVFIODevice(cfg.GPU.PCIAddr)
 			if cfg.GPU.ROMFile != "" {
 				primary.ROMFile = cfg.GPU.ROMFile
