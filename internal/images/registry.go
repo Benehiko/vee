@@ -13,11 +13,12 @@ const (
 	DistroTrueNAS = "truenas"
 	DistroWindows = "windows"
 	DistroAlpine  = "alpine"
+	DistroBazzite = "bazzite"
 )
 
 // SupportedDistros returns all known distro slugs.
 func SupportedDistros() []string {
-	return []string{DistroUbuntu, DistroArch, DistroFedora, DistroTrueNAS, DistroWindows, DistroAlpine}
+	return []string{DistroUbuntu, DistroArch, DistroFedora, DistroTrueNAS, DistroWindows, DistroAlpine, DistroBazzite}
 }
 
 // DistroVersions returns the known version strings for a distro, newest first.
@@ -56,6 +57,12 @@ func DistroVersions(distro string) []string {
 	case DistroAlpine:
 		out := make([]string, len(KnownAlpineVersions))
 		for i, v := range KnownAlpineVersions {
+			out[i] = string(v)
+		}
+		return out
+	case DistroBazzite:
+		out := make([]string, len(KnownBazziteVersions))
+		for i, v := range KnownBazziteVersions {
 			out[i] = string(v)
 		}
 		return out
@@ -105,6 +112,8 @@ func NewImage(p provider.Provider, distro, version string) (Image, error) {
 		return NewWindowsImage(p, WindowsVersion(version)), nil
 	case DistroAlpine:
 		return NewAlpineImage(p, AlpineVersion(version)), nil
+	case DistroBazzite:
+		return NewBazziteImage(p, BazziteVersion(version)), nil
 	default:
 		return nil, fmt.Errorf("unknown distro: %s", distro)
 	}

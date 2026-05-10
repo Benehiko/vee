@@ -3,18 +3,21 @@ package cloudinit
 type Distro string
 
 const (
-	Ubuntu Distro = "ubuntu"
-	Fedora Distro = "fedora"
-	Arch   Distro = "arch"
+	Ubuntu  Distro = "ubuntu"
+	Fedora  Distro = "fedora"
+	Arch    Distro = "arch"
+	Bazzite Distro = "bazzite"
 )
 
 type PackageCategory string
 
 const (
-	CategoryGaming  PackageCategory = "gaming"
-	CategoryTorrent PackageCategory = "torrent"
-	CategoryDevbox  PackageCategory = "devbox"
-	CategoryServer  PackageCategory = "server"
+	CategoryGaming        PackageCategory = "gaming"
+	CategoryGamingVirtigl PackageCategory = "gaming-virtigl"
+	CategoryGamingKasmVNC PackageCategory = "gaming-kasmvnc"
+	CategoryTorrent       PackageCategory = "torrent"
+	CategoryDevbox        PackageCategory = "devbox"
+	CategoryServer        PackageCategory = "server"
 )
 
 var packageMap = map[Distro]map[PackageCategory][]string{
@@ -26,6 +29,13 @@ var packageMap = map[Distro]map[PackageCategory][]string{
 			"xorg",
 			"openbox",
 		},
+		CategoryGamingVirtigl: {
+			"mesa-vulkan-drivers",
+			"libvulkan1",
+			"vulkan-tools",
+			"mesa-utils",
+		},
+		CategoryGamingKasmVNC: {},
 		CategoryTorrent: {
 			"qbittorrent-nox",
 			"ufw",
@@ -90,10 +100,39 @@ var packageMap = map[Distro]map[PackageCategory][]string{
 	},
 	Arch: {
 		CategoryGaming: {
+			// Base gaming stack: mesa, Vulkan, KDE Plasma + Wayland, Steam, Proton, audio
 			"mesa",
+			"lib32-mesa",
 			"vulkan-radeon",
-			"xorg-server",
-			"openbox",
+			"lib32-vulkan-radeon",
+			"vulkan-icd-loader",
+			"lib32-vulkan-icd-loader",
+			"vulkan-tools",
+			"plasma",
+			"plasma-wayland-session",
+			"sddm",
+			"xdg-desktop-portal-kde",
+			"steam",
+			"wine",
+			"winetricks",
+			"gamemode",
+			"lib32-gamemode",
+			"pipewire",
+			"pipewire-pulse",
+			"pipewire-alsa",
+			"wireplumber",
+			"openssh",
+			"systemd-journal-remote",
+		},
+		CategoryGamingVirtigl: {
+			// Extra packages for virgl / virtio-vga-gl 3D acceleration
+			"mesa",
+			"lib32-mesa",
+			"vulkan-virtio",
+			"lib32-vulkan-mesa-layers",
+		},
+		CategoryGamingKasmVNC: {
+			// KasmVNC installed from AUR at runtime via runcmd; listed empty here.
 		},
 		CategoryTorrent: {
 			"qbittorrent-nox",
@@ -114,6 +153,18 @@ var packageMap = map[Distro]map[PackageCategory][]string{
 		CategoryServer: {
 			"openssh",
 			"ufw",
+			"htop",
+			"curl",
+			"wget",
+		},
+	},
+	// Bazzite is an immutable Fedora Atomic derivative — gaming stack is pre-installed.
+	// Package installs via rpm-ostree are layered; we keep additions minimal.
+	Bazzite: {
+		CategoryGaming:        {},
+		CategoryGamingVirtigl: {},
+		CategoryGamingKasmVNC: {},
+		CategoryServer: {
 			"htop",
 			"curl",
 			"wget",

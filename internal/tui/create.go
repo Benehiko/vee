@@ -362,8 +362,18 @@ func buildConfig(ctx context.Context, p provider.Provider, mgr *vm.Manager, name
 
 	var cfg *vm.VMConfig
 	switch tmpl {
-	case "gaming":
-		cfg = templates.NewGamingConfig(p, name, "", "")
+	case "gaming", "gaming-arch":
+		var err error
+		cfg, err = templates.NewGamingArchConfig(ctx, p, name, nil, templates.GamingOptions{})
+		if err != nil {
+			return nil, err
+		}
+	case "gaming-bazzite":
+		var err error
+		cfg, err = templates.NewGamingBazziteConfig(ctx, p, name, templates.GamingOptions{})
+		if err != nil {
+			return nil, err
+		}
 	case "torrent":
 		var err error
 		cfg, err = templates.NewTorrentConfig(ctx, p, name, nil, nil, nil, nil, "", 0)

@@ -44,6 +44,7 @@ var (
 	createNVMeDev       string
 	createOVMFVars      string
 	createNICMAC        string
+	createGPUVendor     string
 )
 
 var createCmd = &cobra.Command{
@@ -52,15 +53,19 @@ var createCmd = &cobra.Command{
 	Long: `Create a new VM and persist its configuration.
 
 Templates apply sane defaults automatically:
-  ubuntu-server  Ubuntu 24.04 Server, UEFI, user mode NIC
-  gaming         GPU passthrough, 16G RAM, 6 CPUs, anti-detect, bridge NIC
-  passthrough    Raw NVMe boot + GPU passthrough, 16G / 6 CPUs, SPICE, virtiofs Games
-  torrent        Lightweight 4G / 2 CPUs, SPICE, qbittorrent-nox via cloud-init
-  devbox         8G / 4 CPUs, Docker + zsh via cloud-init (supports --distro)
-  server         8G / 2 CPUs, openssh + ufw + fail2ban via cloud-init (supports --distro)
-  docker         2G / 2 CPUs, Alpine Linux, Docker daemon on tcp://localhost:2375
-  windows        24G / 4 CPUs, UEFI secboot, TPM 2.0
-  truenas        4G / 1 CPU, UEFI, AHCI OS disk, bridge NIC, SPICE display
+  ubuntu-server   Ubuntu 24.04 Server, UEFI, user mode NIC
+  gaming-arch     Arch Linux + KDE Plasma + Steam, 16G / 8 CPUs, virgl (non-passthrough)
+                  or KasmVNC browser access (--gpu-mode=passthrough). Use --gpu-vendor to
+                  select amd (default), nvidia, or virtio.
+  gaming-bazzite  Bazzite (Fedora Atomic) gaming ISO, 16G / 8 CPUs, KDE Plasma pre-installed
+  gaming          Legacy alias for gaming-arch with passthrough
+  passthrough     Raw NVMe boot + GPU passthrough, 16G / 6 CPUs, SPICE, virtiofs Games
+  torrent         Lightweight 4G / 2 CPUs, SPICE, qbittorrent-nox via cloud-init
+  devbox          8G / 4 CPUs, Docker + zsh via cloud-init (supports --distro)
+  server          8G / 2 CPUs, openssh + ufw + fail2ban via cloud-init (supports --distro)
+  docker          2G / 2 CPUs, Alpine Linux, Docker daemon on tcp://localhost:2375
+  windows         24G / 4 CPUs, UEFI secboot, TPM 2.0
+  truenas         4G / 1 CPU, UEFI, AHCI OS disk, bridge NIC, SPICE display
 
 Supported distros for devbox/server: ubuntu, arch, fedora
 Use --distro-version latest (default) or a specific version string.
@@ -109,8 +114,46 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
 		var cfg *vm.VMConfig
 
 		switch createTemplate {
+		case "gaming-arch":
+			var err error
+			cfg, err = templates.NewGamingArchConfig(cmd.Context(), prov, name, sshKeys, templates.GamingOptions{
+				VirtiofsMountDir: createVirtiofsDir,
+				GPUVendor:        templates.GPUVendor(createGPUVendor),
+				Passthrough:      createGPUMode == "passthrough",
+				PCIAddr:          createGPUPCI,
+				Bridge:           createNicBridge,
+				MAC:              createNICMAC,
+			})
+			if err != nil {
+				return err
+			}
+		case "gaming-bazzite":
+			var err error
+			cfg, err = templates.NewGamingBazziteConfig(cmd.Context(), prov, name, templates.GamingOptions{
+				VirtiofsMountDir: createVirtiofsDir,
+				GPUVendor:        templates.GPUVendor(createGPUVendor),
+				Passthrough:      createGPUMode == "passthrough",
+				PCIAddr:          createGPUPCI,
+				Bridge:           createNicBridge,
+				MAC:              createNICMAC,
+			})
+			if err != nil {
+				return err
+			}
 		case "gaming":
-			cfg = templates.NewGamingConfig(prov, name, createGPUPCI, createVirtiofsDir)
+			// Legacy alias — delegates to gaming-arch with passthrough.
+			var err error
+			cfg, err = templates.NewGamingArchConfig(cmd.Context(), prov, name, sshKeys, templates.GamingOptions{
+				VirtiofsMountDir: createVirtiofsDir,
+				GPUVendor:        templates.GPUVendor(createGPUVendor),
+				Passthrough:      createGPUMode == "passthrough" || createGPUPCI != "",
+				PCIAddr:          createGPUPCI,
+				Bridge:           createNicBridge,
+				MAC:              createNICMAC,
+			})
+			if err != nil {
+				return err
+			}
 		case "passthrough":
 			if createNVMeDev == "" || createOVMFVars == "" {
 				return tui.RunConfigWizard(cmd.Context(), prov, !createNoStart, name)
@@ -322,11 +365,14 @@ func init() {
 	createCmd.Flags().StringVar(&createNVMeDev, "nvme-dev", "", "Host NVMe block device for raw boot passthrough (passthrough template)")
 	createCmd.Flags().StringVar(&createOVMFVars, "ovmf-vars", "", "Path to existing OVMF_VARS.fd to reuse for UEFI state (passthrough template)")
 	createCmd.Flags().StringVar(&createNICMAC, "nic-mac", "", "Fixed MAC address for the bridge NIC (passthrough template; empty = deterministic)")
+	createCmd.Flags().StringVar(&createGPUVendor, "gpu-vendor", "amd", "Guest GPU vendor for driver selection: amd, nvidia, virtio (gaming-arch/gaming-bazzite templates)")
 
 	_ = createCmd.RegisterFlagCompletionFunc("template", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 		return []string{
 			"ubuntu-server\tUbuntu 24.04 Server",
-			"gaming\tGPU passthrough gaming VM",
+			"gaming-arch\tArch Linux + KDE Plasma gaming VM (virgl or passthrough)",
+			"gaming-bazzite\tBazzite Fedora Atomic gaming ISO",
+			"gaming\tLegacy gaming alias (GPU passthrough)",
 			"passthrough\tRaw NVMe boot + GPU passthrough",
 			"torrent\tqBittorrent VM with optional VPN",
 			"devbox\tDev environment with Docker + zsh",
@@ -335,6 +381,9 @@ func init() {
 			"truenas\tTrueNAS SCALE VM",
 			"docker\tAlpine Linux VM with Docker daemon on tcp://localhost:2375",
 		}, cobra.ShellCompDirectiveNoFileComp
+	})
+	_ = createCmd.RegisterFlagCompletionFunc("gpu-vendor", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+		return []string{"amd", "nvidia", "virtio"}, cobra.ShellCompDirectiveNoFileComp
 	})
 	_ = createCmd.RegisterFlagCompletionFunc("distro", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 		return images.SupportedDistros(), cobra.ShellCompDirectiveNoFileComp
