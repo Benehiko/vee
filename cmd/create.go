@@ -5,15 +5,12 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/Benehiko/vee/internal/gpu"
 	"github.com/Benehiko/vee/internal/images"
-	"github.com/Benehiko/vee/internal/sshkeys"
-	"github.com/Benehiko/vee/internal/templates"
 	"github.com/Benehiko/vee/internal/tui"
 	"github.com/Benehiko/vee/internal/vm"
-	"github.com/Benehiko/vee/provider"
+	"github.com/Benehiko/vee/internal/vm/build"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -77,104 +74,30 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
     --data-disk /dev/disk/by-id/ata-ST22000NM000C_ZXA0WD9J:EXOS22TB-B`,
 	Args: cobra.RangeArgs(0, 1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if len(args) == 0 {
-			p, err := provider.NewProvider()
-			if err != nil {
-				return err
-			}
-			return tui.Run(cmd.Context(), p)
+		// No name + no --template: empty TUI.
+		if len(args) == 0 && !cmd.Flags().Changed("template") {
+			return tui.Run(cmd.Context(), prov)
 		}
-		name := args[0]
 
-		// If no --template flag was given, drop into the TUI create wizard
-		// with the name pre-filled so the user can configure disk, memory, etc.
+		var name string
+		if len(args) > 0 {
+			name = args[0]
+		}
+
+		// Name (or any flag) but no --template: drop into the TUI form
+		// pre-filled from whatever flags the user did supply.
 		if !cmd.Flags().Changed("template") {
-			p, err := provider.NewProvider()
-			if err != nil {
-				return err
-			}
-			return tui.RunCreate(cmd.Context(), p, name)
+			return tui.RunCreate(cmd.Context(), prov, name, optsFromFlags(cmd, name))
 		}
 
-		var sshKeys []string
-		if createSSHKeyFile != "" {
-			data, err := os.ReadFile(createSSHKeyFile)
-			if err != nil {
-				return fmt.Errorf("read SSH key file: %w", err)
-			}
-			for line := range strings.SplitSeq(strings.TrimSpace(string(data)), "\n") {
-				line = strings.TrimSpace(line)
-				if line != "" && !strings.HasPrefix(line, "#") {
-					sshKeys = append(sshKeys, line)
-				}
-			}
+		// Flag-only fast path. Templates that need interactive prompts collect
+		// them here (the build package itself does no I/O).
+		opts := optsFromFlags(cmd, name)
+		if opts.Template == "passthrough" && (opts.NVMeDev == "" || opts.OVMFVars == "") {
+			return tui.RunConfigWizard(cmd.Context(), prov, !createNoStart, name)
 		}
-
-		// Always inject the vee-managed keypair so VMs are accessible without
-		// requiring the user to pass --ssh-keys on every create.
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return fmt.Errorf("get home dir: %w", err)
-		}
-		veePubKey, _, err := sshkeys.EnsureVeeKeyPair(home)
-		if err != nil {
-			return fmt.Errorf("vee keypair: %w", err)
-		}
-		sshKeys = append(sshKeys, veePubKey)
-
-		var cfg *vm.VMConfig
-
-		// For gaming templates, resolve GPU vendor: explicit flag > auto-detect > amd.
-		resolvedGPUVendor := resolveGPUVendor(cmd, createGPUVendor)
-
-		switch createTemplate {
-		case "gaming-arch":
-			var err error
-			cfg, err = templates.NewGamingArchConfig(cmd.Context(), prov, name, sshKeys, templates.GamingOptions{
-				VirtiofsMountDir: createVirtiofsDir,
-				GPUVendor:        resolvedGPUVendor,
-				Passthrough:      createGPUMode == "passthrough",
-				PCIAddr:          createGPUPCI,
-				Bridge:           createNicBridge,
-				MAC:              createNICMAC,
-			})
-			if err != nil {
-				return err
-			}
-		case "gaming-bazzite":
-			var err error
-			cfg, err = templates.NewGamingBazziteConfig(cmd.Context(), prov, name, templates.GamingOptions{
-				VirtiofsMountDir: createVirtiofsDir,
-				GPUVendor:        resolvedGPUVendor,
-				Passthrough:      createGPUMode == "passthrough",
-				PCIAddr:          createGPUPCI,
-				Bridge:           createNicBridge,
-				MAC:              createNICMAC,
-			})
-			if err != nil {
-				return err
-			}
-		case "gaming":
-			// Legacy alias — delegates to gaming-arch with passthrough.
-			var err error
-			cfg, err = templates.NewGamingArchConfig(cmd.Context(), prov, name, sshKeys, templates.GamingOptions{
-				VirtiofsMountDir: createVirtiofsDir,
-				GPUVendor:        resolvedGPUVendor,
-				Passthrough:      createGPUMode == "passthrough" || createGPUPCI != "",
-				PCIAddr:          createGPUPCI,
-				Bridge:           createNicBridge,
-				MAC:              createNICMAC,
-			})
-			if err != nil {
-				return err
-			}
-		case "passthrough":
-			if createNVMeDev == "" || createOVMFVars == "" {
-				return tui.RunConfigWizard(cmd.Context(), prov, !createNoStart, name)
-			}
-			cfg = templates.NewPassthroughConfig(prov, name, createNVMeDev, createOVMFVars, createGPUPCI, createVirtiofsDir, createNICMAC)
-		case "torrent":
-			mounts, mountErr := promptShareMounts(createVirtiofsDir)
+		if opts.Template == "torrent" {
+			mounts, mountErr := promptShareMounts(opts.VirtiofsDir)
 			if mountErr != nil {
 				return fmt.Errorf("prompt share mounts: %w", mountErr)
 			}
@@ -182,134 +105,23 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
 			if vpnErr != nil {
 				return fmt.Errorf("VPN setup: %w", vpnErr)
 			}
-			cfg, err = templates.NewTorrentConfig(cmd.Context(), prov, name, sshKeys, mounts, nordConf, wgConf, vpnProvider, createSpicePort)
-			if err != nil {
-				return err
+			opts.TorrentExtras = &build.TorrentExtras{
+				Mounts:      mounts,
+				NordConf:    nordConf,
+				WireGuard:   wgConf,
+				VPNProvider: vpnProvider,
 			}
-		case "devbox":
-			var err error
-			cfg, err = templates.NewDevboxConfig(cmd.Context(), prov, name, sshKeys, createDistro, createDistroVersion)
-			if err != nil {
-				return err
-			}
-		case "server":
-			var err error
-			cfg, err = templates.NewServerConfig(cmd.Context(), prov, name, sshKeys, createDistro, createDistroVersion)
-			if err != nil {
-				return err
-			}
-		case "truenas":
-			var err error
-			cfg, err = templates.NewTruenasConfig(cmd.Context(), prov, name, createDistroVersion, createNicBridge, createSpicePort, createDataDisks)
-			if err != nil {
-				return err
-			}
-		case "windows":
-			winVersion := images.Windows11
-			if createDistroVersion != "" && createDistroVersion != "latest" {
-				winVersion = images.WindowsVersion(createDistroVersion)
-			}
-			var err error
-			cfg, err = templates.NewWindowsConfig(cmd.Context(), prov, winVersion, name)
-			if err != nil {
-				return err
-			}
-		case "docker":
-			var err error
-			cfg, err = templates.NewDockerConfig(cmd.Context(), prov, name, sshKeys, createDistroVersion)
-			if err != nil {
-				return err
-			}
-		case "ubuntu-server":
-			version := images.UbuntuVersion(createDistroVersion)
-			if createDistroVersion == "" || createDistroVersion == "latest" {
-				version = images.KnownUbuntuVersions[0]
-			}
-			var err error
-			cfg, err = templates.NewUbuntuServerConfig(cmd.Context(), prov, version, name)
-			if err != nil {
-				return err
-			}
-		default:
-			cfg = defaultConfig(name)
 		}
 
-		// CLI flags override template defaults when explicitly set.
-		if cmd.Flags().Changed("memory") {
-			cfg.Memory = createMemory
+		cfg, err := build.Build(cmd.Context(), prov, opts)
+		if err != nil {
+			return err
 		}
-		if cmd.Flags().Changed("cpus") {
-			cfg.CPUs = createCPUs
-			cfg.Cores = createCPUs
-		}
-		if cmd.Flags().Changed("nic-mode") {
-			cfg.NIC.Mode = createNicMode
-		}
-		if cmd.Flags().Changed("nic-bridge") {
-			cfg.NIC.Bridge = createNicBridge
-		}
-		if cmd.Flags().Changed("uefi") {
-			cfg.UEFI.Enabled = createUEFI
-		}
-		if cmd.Flags().Changed("gpu-mode") {
-			cfg.GPU.Mode = vm.GPUMode(createGPUMode)
-		}
-		if cmd.Flags().Changed("gpu-pci") {
-			cfg.GPU.PCIAddr = createGPUPCI
-			// Auto-detect companion audio device from the same IOMMU group and
-			// add it to ExtraVFIOAddrs if not already listed. GPU passthrough
-			// requires all devices in an IOMMU group to be bound to vfio-pci.
-			if cfg.GPU.PCIAddr != "" && len(cfg.GPU.ExtraVFIOAddrs) == 0 {
-				for _, peer := range gpu.IOMMUGroupPeers(cfg.GPU.PCIAddr) {
-					if gpu.IsAudioDevice(peer) {
-						cfg.GPU.ExtraVFIOAddrs = append(cfg.GPU.ExtraVFIOAddrs, peer.Address)
-						fmt.Printf("Auto-detected companion audio device: %s\n", peer.Address)
-					}
-				}
-			}
-		}
-		if cmd.Flags().Changed("anti-detect") {
-			cfg.GPU.AntiDetect = createAntiDetect
-		}
-		if cmd.Flags().Changed("spice-port") && createSpicePort > 0 {
-			if cfg.SPICE == nil {
-				cfg.SPICE = &vm.SPICEConfig{DisableTicketing: true}
-			}
-			cfg.SPICE.Port = createSpicePort
-		}
-		if cmd.Flags().Changed("virtiofs-dir") && createVirtiofsDir != "" {
-			tag := createVirtiofsTag
-			if tag == "" {
-				tag = "share"
-			}
-			cfg.VirtiofsMounts = append(cfg.VirtiofsMounts, vm.VirtiofsMount{
-				SharedDir: createVirtiofsDir,
-				Tag:       tag,
-			})
-		}
-		if cmd.Flags().Changed("disk") && createDisk != "" {
-			cfg.Disks = append([]vm.DiskConfig{{
-				Size:      createDisk,
-				Format:    "qcow2",
-				Interface: "virtio",
-				Media:     "disk",
-				Cache:     "none",
-			}}, cfg.Disks...)
-		}
-		if cmd.Flags().Changed("ssh-share") {
-			cfg.SSHShare = createSSHShare
-		}
-		if cmd.Flags().Changed("headless") {
-			cfg.Headless = createHeadless
-		}
-		if cmd.Flags().Changed("ssh-port") && createSSHPort > 0 {
-			cfg.SSHPort = createSSHPort
-		}
-		if cmd.Flags().Changed("hostname") {
-			cfg.Hostname = createHostname
-		} else if cfg.Hostname == "" {
-			// Default: use VM name as hostname for any VM.
-			cfg.Hostname = name
+
+		// Surface the IOMMU companion audio detection that build.applyOverrides
+		// does silently — keep the user-visible breadcrumb the old CLI had.
+		for _, addr := range cfg.GPU.ExtraVFIOAddrs {
+			fmt.Printf("Auto-detected companion audio device: %s\n", addr)
 		}
 
 		mgr := vm.NewManager(prov)
@@ -331,6 +143,9 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
 				return strings.TrimRight(line, "\r\n"), err
 			}
 			if err := mgr.Start(cmd.Context(), name, false); err != nil {
+				if strings.Contains(err.Error(), "already running") {
+					return err
+				}
 				return fmt.Errorf("auto-start: %w", err)
 			}
 			return runStartSpinner(cmd, mgr, name)
@@ -339,48 +154,93 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
 	},
 }
 
-// resolveGPUVendor returns the GPU vendor to use for gaming templates.
-// If --gpu-vendor was explicitly set, that value is used as-is.
-// Otherwise, the host GPU is auto-detected via /sys; falls back to "amd".
-func resolveGPUVendor(cmd *cobra.Command, flagVal string) templates.GPUVendor {
-	if cmd.Flags().Changed("gpu-vendor") {
-		return templates.GPUVendor(flagVal)
-	}
-	detected := gpu.DetectHostGPU()
-	switch detected {
-	case gpu.VendorAMD:
-		return templates.GPUVendorAMD
-	case gpu.VendorNvidia:
-		return templates.GPUVendorNvidia
-	case gpu.VendorVirtio:
-		return templates.GPUVendorVirtio
-	default:
-		return templates.GPUVendorAMD
-	}
-}
-
-func defaultConfig(name string) *vm.VMConfig {
-	conf := prov.Config()
-	return &vm.VMConfig{
+// optsFromFlags collects every cobra flag into a build.Opts. Cobra's "Changed"
+// semantics are mirrored by leaving values at their zero/nil-pointer when the
+// user did not pass a flag, so build.applyOverrides only touches fields the
+// user explicitly set.
+func optsFromFlags(cmd *cobra.Command, name string) build.Opts {
+	opts := build.Opts{
 		Name:     name,
 		Template: createTemplate,
-		Memory:   createMemory,
-		CPUs:     createCPUs,
-		Sockets:  1,
-		Cores:    createCPUs,
-		Threads:  1,
-		CPUModel: conf.DefaultCPUModel,
-		NIC: vm.NICConfig{
-			Mode:   createNicMode,
-			Bridge: createNicBridge,
-			Model:  "virtio-net-pci",
-		},
-		GPU: vm.GPUConfig{Mode: vm.GPUNone},
-		UEFI: vm.UEFIConfig{
-			Enabled: createUEFI,
-		},
-		CreatedAt: time.Now(),
 	}
+	if cmd.Flags().Changed("memory") {
+		opts.Memory = createMemory
+	}
+	if cmd.Flags().Changed("cpus") {
+		opts.CPUs = createCPUs
+	}
+	if cmd.Flags().Changed("distro") {
+		opts.Distro = createDistro
+	}
+	if cmd.Flags().Changed("distro-version") {
+		opts.DistroVersion = createDistroVersion
+	}
+	if cmd.Flags().Changed("nic-mode") {
+		opts.NICMode = createNicMode
+	}
+	if cmd.Flags().Changed("nic-bridge") {
+		opts.NICBridge = createNicBridge
+	}
+	if cmd.Flags().Changed("nic-mac") {
+		opts.NICMAC = createNICMAC
+	}
+	if cmd.Flags().Changed("disk") {
+		opts.Disk = createDisk
+	}
+	if cmd.Flags().Changed("data-disk") {
+		opts.DataDisks = createDataDisks
+	}
+	if cmd.Flags().Changed("spice-port") {
+		p := createSpicePort
+		opts.SPICEPort = &p
+	}
+	if cmd.Flags().Changed("uefi") {
+		v := createUEFI
+		opts.UEFI = &v
+	}
+	if cmd.Flags().Changed("headless") {
+		v := createHeadless
+		opts.Headless = &v
+	}
+	if cmd.Flags().Changed("anti-detect") {
+		v := createAntiDetect
+		opts.AntiDetect = &v
+	}
+	if cmd.Flags().Changed("ssh-share") {
+		v := createSSHShare
+		opts.SSHShare = &v
+	}
+	if cmd.Flags().Changed("gpu-mode") {
+		opts.GPUMode = createGPUMode
+	}
+	if cmd.Flags().Changed("gpu-pci") {
+		opts.GPUPCI = createGPUPCI
+	}
+	if cmd.Flags().Changed("gpu-vendor") {
+		opts.GPUVendor = createGPUVendor
+	}
+	if cmd.Flags().Changed("virtiofs-dir") {
+		opts.VirtiofsDir = createVirtiofsDir
+	}
+	if cmd.Flags().Changed("virtiofs-tag") {
+		opts.VirtiofsTag = createVirtiofsTag
+	}
+	if cmd.Flags().Changed("ssh-keys") {
+		opts.SSHKeyFile = createSSHKeyFile
+	}
+	if cmd.Flags().Changed("ssh-port") {
+		opts.SSHPort = createSSHPort
+	}
+	if cmd.Flags().Changed("hostname") {
+		opts.Hostname = createHostname
+	}
+	if cmd.Flags().Changed("nvme-dev") {
+		opts.NVMeDev = createNVMeDev
+	}
+	if cmd.Flags().Changed("ovmf-vars") {
+		opts.OVMFVars = createOVMFVars
+	}
+	return opts
 }
 
 func init() {

@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/Benehiko/vee/internal/vm"
+	"github.com/Benehiko/vee/internal/vm/build"
 	"github.com/Benehiko/vee/provider"
 )
 
@@ -130,11 +131,16 @@ func Run(ctx context.Context, p provider.Provider) error {
 	return nil
 }
 
-// RunCreate launches the TUI directly on the create screen with name pre-filled.
-func RunCreate(ctx context.Context, p provider.Provider, name string) error {
+// RunCreate launches the TUI directly on the create screen with name and any
+// supplied flags pre-filled. Pass an empty build.Opts to start with template
+// defaults; pass populated fields to mirror command-line flags into the form.
+func RunCreate(ctx context.Context, p provider.Provider, name string, prefill build.Opts) error {
 	mgr := vm.NewManager(p)
 	cm := newCreateModel(mgr, p)
-	cm.name = name
+	if name != "" {
+		cm.name = name
+	}
+	cm.applyPrefill(prefill)
 	a := app{
 		prov:   p,
 		mgr:    mgr,
