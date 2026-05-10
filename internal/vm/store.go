@@ -3,6 +3,7 @@ package vm
 import (
 	"encoding/json"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 
@@ -99,6 +100,17 @@ func ListAll(storagePath string) ([]*VMConfig, error) {
 		configs = append(configs, cfg)
 	}
 	return configs, nil
+}
+
+// freeTCPPort asks the kernel for a free TCP port on localhost.
+func freeTCPPort() (int, error) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return 0, err
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	_ = ln.Close()
+	return port, nil
 }
 
 func atomicWrite(path string, marshal func() ([]byte, error)) error {

@@ -16,6 +16,11 @@ type DiskConfig struct {
 	// Passthrough marks this as a raw host block device (e.g. /dev/disk/by-id/...).
 	// Path must point to the host device. Format, cache, aio are set automatically.
 	Passthrough bool `yaml:"passthrough,omitempty" json:"passthrough,omitempty"`
+	// InstallISO marks a cdrom disk as a one-shot installer image. vee attaches
+	// it on the first boot (InstallState = pending) and removes it from the
+	// saved config once the install is complete (InstallState = ready), so the
+	// VM never re-enters the installer on subsequent starts.
+	InstallISO bool `yaml:"install_iso,omitempty" json:"install_iso,omitempty"`
 }
 
 type NICConfig struct {
@@ -90,6 +95,24 @@ type CloudInitConfig struct {
 	WriteFiles  []CloudInitWriteFile `yaml:"write_files,omitempty"  json:"write_files,omitempty"`
 }
 
+// ServiceProtocol describes how a service should be accessed.
+type ServiceProtocol string
+
+const (
+	ServiceHTTP  ServiceProtocol = "http"
+	ServiceHTTPS ServiceProtocol = "https"
+	ServiceSPICE ServiceProtocol = "spice"
+	ServiceTCP   ServiceProtocol = "tcp"
+)
+
+// ServiceEntry declares a named guest service that vee tunnel can connect to.
+// Port is the port inside the VM (or on the host for user-mode HostFwds).
+type ServiceEntry struct {
+	Name     string          `yaml:"name"     json:"name"`
+	Port     int             `yaml:"port"     json:"port"`
+	Protocol ServiceProtocol `yaml:"protocol" json:"protocol"`
+}
+
 type VMConfig struct {
 	Name           string           `yaml:"name"                    json:"name"`
 	Template       string           `yaml:"template"                json:"template"`
@@ -120,5 +143,15 @@ type VMConfig struct {
 	TrueNASAPIKey  string           `yaml:"truenas_api_key,omitempty" json:"truenas_api_key,omitempty"`
 	TrueNASUser    string           `yaml:"truenas_user,omitempty"  json:"truenas_user,omitempty"`
 	VPNProvider    string           `yaml:"vpn_provider,omitempty"  json:"vpn_provider,omitempty"`
-	CreatedAt      time.Time        `yaml:"created_at"              json:"created_at"`
+	// Services lists named guest services available via vee tunnel.
+	Services []ServiceEntry `yaml:"services,omitempty" json:"services,omitempty"`
+	// CPUPinning is a list of host CPU indices to pin the VM's vCPU threads to
+	// (e.g. [4,5,6,7]). Empty means no pinning. The host kernel can still
+	// schedule other work on those cores; add isolcpus= to the host kernel
+	// cmdline for full isolation.
+	CPUPinning []int `yaml:"cpu_pinning,omitempty" json:"cpu_pinning,omitempty"`
+	// RTC overrides the -rtc argument (e.g. "base=localtime,clock=host").
+	// Leave empty for the default (UTC). Set for Windows and gaming VMs.
+	RTC       string    `yaml:"rtc,omitempty"         json:"rtc,omitempty"`
+	CreatedAt time.Time `yaml:"created_at"            json:"created_at"`
 }
