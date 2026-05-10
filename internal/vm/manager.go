@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Benehiko/vee/internal/cloudinit"
+	cputil "github.com/Benehiko/vee/internal/cpu"
 	"github.com/Benehiko/vee/internal/gpu"
 	"github.com/Benehiko/vee/internal/qemu"
 	"github.com/Benehiko/vee/internal/virtiofs"
@@ -139,12 +140,28 @@ func (m *Manager) Create(ctx context.Context, cfg *VMConfig) error {
 		}
 		// Append cidata ISO as an extra disk entry stored in the config.
 		cfg.Disks = append(cfg.Disks, DiskConfig{
-			Path:      isoPath,
-			Interface: "virtio",
-			Media:     "cdrom",
-			Cache:     "none",
-			Readonly:  true,
+			Path:       isoPath,
+			Interface:  "virtio",
+			Media:      "cdrom",
+			Cache:      "none",
+			Readonly:   true,
+			InstallISO: true,
 		})
+	}
+
+	// Assign a random free SPICE port if the template left it at 0, then
+	// back-fill any ServiceEntry with Protocol=spice so tunnel can find it.
+	if cfg.SPICE != nil && cfg.SPICE.Port == 0 {
+		port, err := freeTCPPort()
+		if err != nil {
+			return fmt.Errorf("alloc SPICE port: %w", err)
+		}
+		cfg.SPICE.Port = port
+		for i := range cfg.Services {
+			if cfg.Services[i].Protocol == ServiceSPICE {
+				cfg.Services[i].Port = port
+			}
+		}
 	}
 
 	return m.saveConfig(cfg)
@@ -176,38 +193,39 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 		state = &VMState{}
 	}
 
-	// Determine if a cloud-init cidata ISO (interface=virtio) is present.
-	// TrueNAS-style installer ISOs (interface=none) are permanent in the config
-	// and must not trigger the pending state on every start.
-	hasCloudInitISO := false
+	// Detect any one-shot installer ISO disks (InstallISO=true).
+	hasInstallISO := false
 	for _, d := range cfg.Disks {
-		if d.Media == "cdrom" && strings.HasSuffix(d.Path, ".iso") && d.Interface == "virtio" {
-			hasCloudInitISO = true
+		if d.InstallISO {
+			hasInstallISO = true
 			break
 		}
 	}
 
 	switch state.InstallState {
 	case "":
-		// First boot: mark install as pending only for cloud-init VMs.
-		if hasCloudInitISO {
+		// First boot: mark install as pending when any one-shot ISO is present.
+		if hasInstallISO {
 			state.InstallState = InstallStatePending
 			if err := m.saveState(name, state); err != nil {
 				return fmt.Errorf("save install state: %w", err)
 			}
 		}
 	case InstallStateReady:
-		// Strip cloud-init cidata ISOs (interface=virtio) — they are one-shot
-		// and must not be attached after first boot. Leave installer ISOs
-		// (interface=none, e.g. TrueNAS) in place; UEFI boot order governs.
+		// Strip InstallISO disks — they are one-shot and must not be
+		// re-attached after installation completes. Persist the stripped config
+		// so future starts don't see the ISOs at all.
 		filtered := cfg.Disks[:0]
 		for _, d := range cfg.Disks {
-			if d.Media == "cdrom" && strings.HasSuffix(d.Path, ".iso") && d.Interface == "virtio" {
+			if d.InstallISO {
 				continue
 			}
 			filtered = append(filtered, d)
 		}
 		cfg.Disks = filtered
+		if err := m.saveConfig(cfg); err != nil {
+			return fmt.Errorf("save config after stripping install ISOs: %w", err)
+		}
 	}
 
 	machine, virtiofsdPIDs, err := m.buildMachine(ctx, cfg)
@@ -629,9 +647,10 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 	if cfg.GPU.Mode == GPUPassthrough && cfg.GPU.AntiDetect {
 		cpuFlags = append(cpuFlags, qemu.GamingCPUFlags...)
 	}
+	sockets, cores, threads := cputil.AdjustSMP(cfg.CPUs, cfg.Sockets, cfg.Cores, cfg.Threads)
 	cpu := qemu.NewCPU(m.provider,
 		qemu.WithCPUModel(qemu.CPUModel(cfg.CPUModel)),
-		qemu.WithSMP(cfg.CPUs, cfg.Sockets, cfg.Threads, cfg.Cores),
+		qemu.WithSMP(cfg.CPUs, sockets, threads, cores),
 		qemu.WithCPUFlags(cpuFlags),
 	)
 	opts = append(opts, qemu.WithCPU(cpu))
@@ -656,6 +675,9 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 		nicHostFwds = append(nicHostFwds, fmt.Sprintf("tcp:127.0.0.1:%d-:22", port))
 	}
 	nic := qemu.NewNIC(qemu.NICMode(cfg.NIC.Mode), cfg.NIC.Bridge, cfg.NIC.MAC, nicHostFwds...)
+	if cfg.NIC.Mode == "bridge" && cfg.CPUs > 1 {
+		nic.Queues = min(cfg.CPUs, 8)
+	}
 	opts = append(opts, qemu.WithNIC(nic))
 
 	// Disks
@@ -855,6 +877,16 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 			cid = deterministicCID(cfg.Name)
 		}
 		opts = append(opts, qemu.WithVSock(qemu.NewVSockDevice(cid)))
+	}
+
+	// CPU pinning — applied post-launch via taskset on vCPU threads.
+	if len(cfg.CPUPinning) > 0 {
+		opts = append(opts, qemu.WithCPUPinning(cfg.CPUPinning))
+	}
+
+	// RTC
+	if cfg.RTC != "" {
+		opts = append(opts, qemu.WithRTC(cfg.RTC))
 	}
 
 	built, err := machine.BuildMachine(opts...)
