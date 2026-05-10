@@ -43,6 +43,10 @@ var daemonInstallCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "warning: could not enable systemd linger: %v\n", err)
 			fmt.Fprintln(os.Stderr, "  Run manually: loginctl enable-linger $USER")
 		}
+		if err := installVFIOModprobeConf(); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not write vfio modprobe config: %v\n", err)
+			fmt.Fprintln(os.Stderr, "  Run manually: echo 'options vfio-pci enable_runtime_pm=0' | sudo tee /etc/modprobe.d/vee-vfio.conf")
+		}
 		return installSystemdUnit()
 	},
 }
@@ -113,6 +117,82 @@ func enableLinger() error {
 		return fmt.Errorf("SetUserLinger D-Bus call: %w", call.Err)
 	}
 	return nil
+}
+
+const vfioModprobeConf = `# Written by vee daemon install
+# Prevents vfio-pci from runtime-suspending GPUs to D3cold.
+# Without this, a QEMU crash can leave the GPU in D3cold and require a cold reboot.
+options vfio-pci enable_runtime_pm=0
+`
+
+const vfioModprobePath = "/etc/modprobe.d/vee-vfio.conf"
+
+// installVFIOModprobeConf writes the vfio-pci modprobe options file via sudo/pkexec.
+// It also regenerates the initramfs so the option is picked up on next boot.
+func installVFIOModprobeConf() error {
+	// Check if already installed with the right content.
+	if existing, err := os.ReadFile(vfioModprobePath); err == nil {
+		if string(existing) == vfioModprobeConf {
+			fmt.Println("vfio modprobe config already up to date:", vfioModprobePath)
+			return nil
+		}
+	}
+
+	// Write via sudo tee (pkexec as fallback).
+	writeCmd, err := sudoWriteCmd(vfioModprobePath, vfioModprobeConf)
+	if err != nil {
+		return err
+	}
+	if out, err := writeCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("write %s: %w\n%s", vfioModprobePath, err, out)
+	}
+	fmt.Println("Written:", vfioModprobePath)
+
+	// Regenerate initramfs so the option is baked in — best-effort.
+	for _, cmd := range [][]string{
+		{"mkinitcpio", "-P"},
+		{"dracut", "--regenerate-all", "--force"},
+	} {
+		if path, lookErr := exec.LookPath(cmd[0]); lookErr == nil {
+			args := append([]string{path}, cmd[1:]...)
+			sudoArgs := append([]string{"sudo"}, args...)
+			out, runErr := exec.Command(sudoArgs[0], sudoArgs[1:]...).CombinedOutput()
+			if runErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: %s failed: %v\n%s\n", cmd[0], runErr, out)
+			} else {
+				fmt.Printf("Initramfs regenerated via %s\n", cmd[0])
+			}
+			break
+		}
+	}
+
+	fmt.Println("vfio-pci enable_runtime_pm=0 applied — reboot to activate.")
+	return nil
+}
+
+// sudoWriteCmd returns an exec.Cmd that writes content to path via sudo tee.
+func sudoWriteCmd(path, content string) (*exec.Cmd, error) {
+	sudo, err := exec.LookPath("sudo")
+	if err != nil {
+		pkexec, pErr := exec.LookPath("pkexec")
+		if pErr != nil {
+			return nil, fmt.Errorf("neither sudo nor pkexec found")
+		}
+		sudo = pkexec
+	}
+	cmd := exec.Command(sudo, "tee", path)
+	cmd.Stdin = os.Stdin
+	// Feed the content via a pipe.
+	pr, pw, pipeErr := os.Pipe()
+	if pipeErr != nil {
+		return nil, pipeErr
+	}
+	cmd.Stdin = pr
+	go func() {
+		_, _ = pw.WriteString(content)
+		_ = pw.Close()
+	}()
+	return cmd, nil
 }
 
 func unitDir() (string, error) {

@@ -208,13 +208,41 @@ The agent is socket-activated and starts automatically when the VM is launched w
 ╚══════════════════════════════════════════════════════════════╝
 ```
 
+### GPU stuck in D3cold — QEMU crashes immediately
+
+**Symptom:** `pci_irq_handler: Assertion '0 <= irq_num && irq_num < PCI_NUM_PINS' failed` in QEMU output, or `VFIO device D3cold reset failed` in `vee start` output.
+
+**Cause:** The GPU has no power (D3cold state). This happens when a previous QEMU run crashed without releasing the device cleanly, or when the kernel's vfio-pci runtime PM autosuspended the device between runs.
+
+**Prevention (permanent fix):** Tell vfio-pci never to autosuspend to D3cold:
+
+```sh
+echo 'options vfio-pci enable_runtime_pm=0' | sudo tee /etc/modprobe.d/vee-vfio.conf
+# Arch:
+sudo mkinitcpio -P
+# Fedora/RHEL:
+sudo dracut --regenerate-all --force
+```
+
+`vee daemon install` writes this file automatically (requires sudo prompt).
+
+**Recovery (current session):** D3cold cannot be recovered without a full power cycle. If you see this error:
+
+```sh
+sudo reboot
+```
+
+After rebooting with `enable_runtime_pm=0` in place, the GPU will stay in D0 for the lifetime of the vfio-pci binding and the error will not recur.
+
+---
+
 ### All connectors disconnected / no display output
 
 GPU display engine did not initialize. Causes:
 
 - `video=` kernel param not set → add it and reboot
 - First boot after adding the param → plug a physical monitor in for the first boot; headless works after that
-- GPU stuck in D3cold from unclean exit → `vee` attempts reset automatically; if it fails, cold reboot the host
+- GPU in D3cold → see the D3cold section above
 
 ---
 
