@@ -283,7 +283,51 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 	}
 
 	if foreground {
-		return machine.Start(ctx)
+		// Save config before launching (captures deterministic MAC etc.).
+		if err := m.saveConfig(cfg); err != nil {
+			return fmt.Errorf("save config: %w", err)
+		}
+		// Use StartDetached so we get the PID immediately and can persist
+		// running state before blocking. Then poll until the process exits.
+		result, err := machine.StartDetached(ctx)
+		if err != nil {
+			return err
+		}
+		fgState := &VMState{
+			PID:          result.PID,
+			QMPSocket:    result.QMPSocket,
+			QGASocket:    result.QGASocket,
+			StartedAt:    ptr(time.Now()),
+			Running:      true,
+			InstallState: state.InstallState,
+			InstalledAt:  state.InstalledAt,
+		}
+		if cfg.SPICE != nil {
+			fgState.SPICEPort = cfg.SPICE.Port
+		}
+		if cfg.SSHPort > 0 {
+			fgState.SSHPort = cfg.SSHPort
+		}
+		if err := m.saveState(name, fgState); err != nil {
+			return fmt.Errorf("save state: %w", err)
+		}
+		// Block until QEMU exits or context is cancelled.
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				fgState.Running = false
+				_ = m.saveState(name, fgState)
+				return ctx.Err()
+			case <-ticker.C:
+				if !isAlive(result.PID) {
+					fgState.Running = false
+					_ = m.saveState(name, fgState)
+					return nil
+				}
+			}
+		}
 	}
 
 	// Persist any fields assigned during buildMachine (e.g. deterministic MAC).

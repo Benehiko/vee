@@ -9,5 +9,5 @@ type Builder interface {
 type Machine interface {
 	Name() string
 	AbsolutePath() string
-	Start(ctx context.Context) error
+	Start(ctx context.Context) (*StartResult, error)
 }

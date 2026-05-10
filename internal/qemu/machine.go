@@ -317,11 +317,8 @@ type StartResult struct {
 }
 
 // Start runs QEMU in the foreground (blocks until the VM exits).
-func (q *BaseMachine) Start(ctx context.Context) error {
-	if _, err := q.start(ctx, false); err != nil {
-		return err
-	}
-	return nil
+func (q *BaseMachine) Start(ctx context.Context) (*StartResult, error) {
+	return q.start(ctx, false)
 }
 
 // StartDetached launches QEMU as a detached process (survives terminal close).
@@ -447,10 +444,12 @@ func (q *BaseMachine) start(ctx context.Context, detach bool) (*StartResult, err
 		return nil, err
 	}
 	go q.applyCPUPinning(cmd.Process.Pid)
+	pid := cmd.Process.Pid
+	// Block until QEMU exits.
 	if err := cmd.Wait(); err != nil {
-		return nil, err
+		return &StartResult{PID: pid}, err
 	}
-	return &StartResult{PID: 0}, nil
+	return &StartResult{PID: pid}, nil
 }
 
 // applyVFIOLimits raises RLIMIT_MEMLOCK on the child process when VFIO devices
