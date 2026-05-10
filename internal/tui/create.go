@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/Benehiko/vee/internal/blockdev"
 	"github.com/Benehiko/vee/internal/images"
 	"github.com/Benehiko/vee/internal/templates"
 	"github.com/Benehiko/vee/internal/vm"
@@ -50,8 +51,21 @@ const (
 	fieldDistroVersion
 	fieldMemory
 	fieldCPUs
+	fieldDiskMode
+	fieldDiskSize
+	fieldDiskDev
 	fieldCount
 )
+
+type diskMode int
+
+const (
+	diskModeNew         diskMode = iota // create a new qcow2 image
+	diskModePassthrough                 // raw block device passthrough
+	diskModeNone                        // no extra disk (template default only)
+)
+
+var diskModeNames = []string{"new", "passthrough", "none"}
 
 type createModel struct {
 	mgr          *vm.Manager
@@ -63,6 +77,10 @@ type createModel struct {
 	distroVerIdx int
 	memory       string
 	cpus         string
+	dMode        diskMode
+	diskSize     string
+	blockDevs    []blockdev.Device
+	blockDevIdx  int
 	err          string
 	submitting   bool
 }
@@ -70,11 +88,15 @@ type createModel struct {
 type createDoneMsg struct{ err error }
 
 func newCreateModel(mgr *vm.Manager, p provider.Provider) createModel {
+	devs, _ := blockdev.ListUnmounted()
 	return createModel{
-		mgr:    mgr,
-		prov:   p,
-		memory: "2G",
-		cpus:   "2",
+		mgr:       mgr,
+		prov:      p,
+		memory:    "2G",
+		cpus:      "2",
+		dMode:     diskModeNone,
+		diskSize:  "20G",
+		blockDevs: devs,
 	}
 }
 
@@ -114,12 +136,21 @@ func (m createModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// Skip distro/version fields for non-distro-aware templates.
+		// Skip distro/version fields for non-distro-aware templates,
+		// and skip disk size/dev fields based on selected disk mode.
 		nextField := func(cur createField, delta int) createField {
 			n := int(cur) + delta
 			for {
 				f := createField((n + int(fieldCount)) % int(fieldCount))
 				if (f == fieldDistro || f == fieldDistroVersion) && !m.isDistroAware() {
+					n += delta
+					continue
+				}
+				if f == fieldDiskSize && m.dMode != diskModeNew {
+					n += delta
+					continue
+				}
+				if f == fieldDiskDev && m.dMode != diskModePassthrough {
 					n += delta
 					continue
 				}
@@ -135,7 +166,8 @@ func (m createModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "shift+tab", "up":
 			m.field = nextField(m.field, -1)
 		case "enter":
-			if m.field == fieldCPUs {
+			isLast := m.isLastField()
+			if isLast {
 				m.submitting = true
 				return m, m.doSubmit()
 			}
@@ -154,6 +186,10 @@ func (m createModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if len(m.cpus) > 0 {
 					m.cpus = m.cpus[:len(m.cpus)-1]
 				}
+			case fieldDiskSize:
+				if len(m.diskSize) > 0 {
+					m.diskSize = m.diskSize[:len(m.diskSize)-1]
+				}
 			}
 		case "left":
 			switch m.field {
@@ -171,6 +207,14 @@ func (m createModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case fieldDistroVersion:
 				if m.distroVerIdx > 0 {
 					m.distroVerIdx--
+				}
+			case fieldDiskMode:
+				if m.dMode > diskModeNew {
+					m.dMode--
+				}
+			case fieldDiskDev:
+				if m.blockDevIdx > 0 {
+					m.blockDevIdx--
 				}
 			}
 		case "right":
@@ -192,6 +236,14 @@ func (m createModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.distroVerIdx < len(versions)-1 {
 					m.distroVerIdx++
 				}
+			case fieldDiskMode:
+				if int(m.dMode) < len(diskModeNames)-1 {
+					m.dMode++
+				}
+			case fieldDiskDev:
+				if m.blockDevIdx < len(m.blockDevs)-1 {
+					m.blockDevIdx++
+				}
 			}
 		default:
 			ch := msg.String()
@@ -203,6 +255,8 @@ func (m createModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.memory += ch
 				case fieldCPUs:
 					m.cpus += ch
+				case fieldDiskSize:
+					m.diskSize += ch
 				}
 			}
 		}
@@ -239,6 +293,9 @@ func (m createModel) View() string {
 		{"Version", versionSelector(m.selectedDistro(), m.distroVerIdx, m.field == fieldDistroVersion), fieldDistroVersion, !m.isDistroAware()},
 		{"Memory", m.memory + cursor(m.field == fieldMemory), fieldMemory, false},
 		{"CPUs", m.cpus + cursor(m.field == fieldCPUs), fieldCPUs, false},
+		{"Disk", diskModeSelector(m.dMode, m.field == fieldDiskMode), fieldDiskMode, false},
+		{"Disk Size", m.diskSize + cursor(m.field == fieldDiskSize), fieldDiskSize, m.dMode != diskModeNew},
+		{"Disk Device", diskDevSelector(m.blockDevs, m.blockDevIdx, m.field == fieldDiskDev), fieldDiskDev, m.dMode != diskModePassthrough},
 	}
 
 	for _, f := range fields {
@@ -327,6 +384,55 @@ func cursor(focused bool) string {
 	return ""
 }
 
+// isLastField reports whether the current field is the final one given the
+// selected disk mode, so Enter knows to submit rather than advance.
+func (m createModel) isLastField() bool {
+	switch m.dMode {
+	case diskModeNew:
+		return m.field == fieldDiskSize
+	case diskModePassthrough:
+		return m.field == fieldDiskDev
+	default:
+		return m.field == fieldDiskMode
+	}
+}
+
+func diskModeSelector(mode diskMode, focused bool) string {
+	var parts []string
+	for i, n := range diskModeNames {
+		if diskMode(i) == mode {
+			if focused {
+				parts = append(parts, styleFieldFocus.Render("[ "+n+" ]"))
+			} else {
+				parts = append(parts, styleFieldValue.Render("[ "+n+" ]"))
+			}
+		} else {
+			parts = append(parts, styleFaint.Render(n))
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+func diskDevSelector(devs []blockdev.Device, idx int, focused bool) string {
+	if len(devs) == 0 {
+		return styleFaint.Render("(no unmounted devices)")
+	}
+	var parts []string
+	for i, d := range devs {
+		label := d.Label()
+		if i == idx {
+			if focused {
+				parts = append(parts, styleFieldFocus.Render("[ "+label+" ]"))
+			} else {
+				parts = append(parts, styleFieldValue.Render("[ "+label+" ]"))
+			}
+		} else {
+			parts = append(parts, styleFaint.Render(d.ByIDPath))
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
 func (m createModel) doSubmit() tea.Cmd {
 	name := m.name
 	tmpl := templateNames[m.tmplIdx]
@@ -334,12 +440,18 @@ func (m createModel) doSubmit() tea.Cmd {
 	cpus := m.cpus
 	distro := m.selectedDistro()
 	distroVer := m.selectedDistroVersion()
+	dMode := m.dMode
+	diskSize := m.diskSize
+	var blockDevPath string
+	if m.dMode == diskModePassthrough && len(m.blockDevs) > 0 {
+		blockDevPath = m.blockDevs[m.blockDevIdx].ByIDPath
+	}
 
 	mgr := m.mgr
 	prov := m.prov
 
 	return func() tea.Msg {
-		cfg, err := buildConfig(context.Background(), prov, mgr, name, tmpl, memory, cpus, distro, distroVer)
+		cfg, err := buildConfig(context.Background(), prov, mgr, name, tmpl, memory, cpus, distro, distroVer, dMode, diskSize, blockDevPath)
 		if err != nil {
 			return createDoneMsg{err: err}
 		}
@@ -350,7 +462,7 @@ func (m createModel) doSubmit() tea.Cmd {
 	}
 }
 
-func buildConfig(ctx context.Context, p provider.Provider, mgr *vm.Manager, name, tmpl, memory, cpusStr, distro, distroVer string) (*vm.VMConfig, error) {
+func buildConfig(ctx context.Context, p provider.Provider, mgr *vm.Manager, name, tmpl, memory, cpusStr, distro, distroVer string, dMode diskMode, diskSize, blockDevPath string) (*vm.VMConfig, error) {
 	if name == "" {
 		return nil, fmt.Errorf("name is required")
 	}
@@ -430,6 +542,25 @@ func buildConfig(ctx context.Context, p provider.Provider, mgr *vm.Manager, name
 	if cpus > 0 {
 		cfg.CPUs = cpus
 		cfg.Cores = cpus
+	}
+
+	switch dMode {
+	case diskModeNew:
+		if diskSize != "" {
+			cfg.Disks = append([]vm.DiskConfig{{
+				Size:      diskSize,
+				Format:    "qcow2",
+				Interface: "virtio",
+				Media:     "disk",
+			}}, cfg.Disks...)
+		}
+	case diskModePassthrough:
+		if blockDevPath != "" {
+			cfg.Disks = append(cfg.Disks, vm.DiskConfig{
+				Path:        blockDevPath,
+				Passthrough: true,
+			})
+		}
 	}
 
 	_ = mgr
