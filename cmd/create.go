@@ -86,6 +86,16 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
 		}
 		name := args[0]
 
+		// If no --template flag was given, drop into the TUI create wizard
+		// with the name pre-filled so the user can configure disk, memory, etc.
+		if !cmd.Flags().Changed("template") {
+			p, err := provider.NewProvider()
+			if err != nil {
+				return err
+			}
+			return tui.RunCreate(cmd.Context(), p, name)
+		}
+
 		var sshKeys []string
 		if createSSHKeyFile != "" {
 			data, err := os.ReadFile(createSSHKeyFile)

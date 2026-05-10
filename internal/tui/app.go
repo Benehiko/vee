@@ -129,3 +129,23 @@ func Run(ctx context.Context, p provider.Provider) error {
 	}
 	return nil
 }
+
+// RunCreate launches the TUI directly on the create screen with name pre-filled.
+func RunCreate(ctx context.Context, p provider.Provider, name string) error {
+	mgr := vm.NewManager(p)
+	cm := newCreateModel(mgr, p)
+	cm.name = name
+	a := app{
+		prov:   p,
+		mgr:    mgr,
+		active: screenCreate,
+		list:   newListModel(mgr),
+		create: cm,
+	}
+	prog := tea.NewProgram(a, tea.WithAltScreen(), tea.WithContext(ctx))
+	_, err := prog.Run()
+	if err != nil {
+		return fmt.Errorf("tui: %w", err)
+	}
+	return nil
+}
