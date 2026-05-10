@@ -119,6 +119,7 @@ func NewGamingArchConfig(ctx context.Context, p provider.Provider, name string, 
 			WriteFiles:  writeFiles,
 		},
 		SSHUser:   user,
+		RTC:       "base=localtime,clock=host",
 		CreatedAt: time.Now(),
 	}
 
@@ -126,7 +127,11 @@ func NewGamingArchConfig(ctx context.Context, p provider.Provider, name string, 
 		// Add a secondary virtio-gpu for SPICE/KasmVNC alongside the VFIO GPU.
 		cfg.VGA = "none"
 		cfg.ExtraDevices = []string{"virtio-gpu-pci,edid=on,xres=1920,yres=1080"}
-		cfg.SPICE = &vm.SPICEConfig{Port: 5930, DisableTicketing: true}
+		cfg.SPICE = &vm.SPICEConfig{Port: 0, DisableTicketing: true}
+		cfg.Services = []vm.ServiceEntry{
+			{Name: "spice", Port: 0, Protocol: vm.ServiceSPICE}, // port filled by manager
+			{Name: "kasmvnc", Port: 8443, Protocol: vm.ServiceHTTPS},
+		}
 	}
 
 	if opts.VirtiofsMountDir != "" {
@@ -199,20 +204,26 @@ func NewGamingBazziteConfig(ctx context.Context, p provider.Provider, name strin
 			},
 			{
 				// Boot from the Bazzite ISO for first-time install.
-				Path:      img.AbsolutePath(),
-				Format:    "raw",
-				Interface: "ide",
-				Media:     "cdrom",
-				Readonly:  true,
+				Path:       img.AbsolutePath(),
+				Format:     "raw",
+				Interface:  "ide",
+				Media:      "cdrom",
+				Readonly:   true,
+				InstallISO: true,
 			},
 		},
+		RTC:       "base=localtime,clock=host",
 		CreatedAt: time.Now(),
 	}
 
 	if opts.Passthrough {
 		cfg.VGA = "none"
 		cfg.ExtraDevices = []string{"virtio-gpu-pci,edid=on,xres=1920,yres=1080"}
-		cfg.SPICE = &vm.SPICEConfig{Port: 5930, DisableTicketing: true}
+		cfg.SPICE = &vm.SPICEConfig{Port: 0, DisableTicketing: true}
+		cfg.Services = []vm.ServiceEntry{
+			{Name: "spice", Port: 0, Protocol: vm.ServiceSPICE},
+			{Name: "kasmvnc", Port: 8443, Protocol: vm.ServiceHTTPS},
+		}
 	}
 
 	if opts.VirtiofsMountDir != "" {

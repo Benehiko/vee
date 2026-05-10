@@ -51,11 +51,12 @@ func NewWindowsConfig(ctx context.Context, p provider.Provider, version images.W
 		},
 		Disks: []vm.DiskConfig{
 			{
-				Path:      img.AbsolutePath(),
-				Interface: "virtio",
-				Media:     "cdrom",
-				Cache:     "none",
-				Readonly:  true,
+				Path:       img.AbsolutePath(),
+				Interface:  "virtio",
+				Media:      "cdrom",
+				Cache:      "none",
+				Readonly:   true,
+				InstallISO: true,
 			},
 			{
 				Path:      "",
@@ -66,6 +67,7 @@ func NewWindowsConfig(ctx context.Context, p provider.Provider, version images.W
 				Cache:     "writeback",
 			},
 		},
+		RTC:       "base=localtime,clock=host",
 		CreatedAt: time.Now(),
 	}, nil
 }

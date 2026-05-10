@@ -46,9 +46,9 @@ func NewTruenasConfig(ctx context.Context, p provider.Provider, name, version st
 	if bridge == "" {
 		bridge = "br0"
 	}
-	if spicePort == 0 {
-		spicePort = 5933
-	}
+	// port 0 → manager assigns a random free port at create time
+	_ = spicePort
+	spicePort = 0
 
 	img, err := images.NewImage(p, images.DistroTrueNAS, version)
 	if err != nil {
@@ -64,12 +64,13 @@ func NewTruenasConfig(ctx context.Context, p provider.Provider, name, version st
 	disks := []vm.DiskConfig{
 		{
 			// TrueNAS installer ISO — booted via USB storage device emulation.
-			Path:      img.AbsolutePath(),
-			Format:    "raw",
-			Interface: "none",
-			Media:     "cdrom",
-			Cache:     "none",
-			Readonly:  true,
+			Path:       img.AbsolutePath(),
+			Format:     "raw",
+			Interface:  "none",
+			Media:      "cdrom",
+			Cache:      "none",
+			Readonly:   true,
+			InstallISO: true,
 		},
 		{
 			// Primary OS disk on AHCI/SATA for ZFS boot pool.
@@ -122,6 +123,10 @@ func NewTruenasConfig(ctx context.Context, p provider.Provider, name, version st
 		SPICE: &vm.SPICEConfig{
 			Port:             spicePort,
 			DisableTicketing: true,
+		},
+		Services: []vm.ServiceEntry{
+			{Name: "spice", Port: 0, Protocol: vm.ServiceSPICE},
+			{Name: "truenas-ui", Port: 443, Protocol: vm.ServiceHTTPS},
 		},
 		Disks:     disks,
 		CreatedAt: time.Now(),

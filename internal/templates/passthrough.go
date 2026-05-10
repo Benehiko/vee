@@ -44,7 +44,7 @@ func NewPassthroughConfig(p provider.Provider, name, nvmeDev, ovmfVarsPath, pciA
 			VarsPath: ovmfVarsPath,
 		},
 		SPICE: &vm.SPICEConfig{
-			Port:             5930,
+			Port:             0,
 			DisableTicketing: true,
 		},
 		VGA: "none",
@@ -59,6 +59,9 @@ func NewPassthroughConfig(p provider.Provider, name, nvmeDev, ovmfVarsPath, pciA
 				Cache:       "none",
 				Passthrough: true,
 			},
+		},
+		Services: []vm.ServiceEntry{
+			{Name: "spice", Port: 0, Protocol: vm.ServiceSPICE},
 		},
 		CreatedAt: time.Now(),
 	}

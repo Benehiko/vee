@@ -46,12 +46,13 @@ func NewUbuntuServerConfig(ctx context.Context, p provider.Provider, version ima
 		},
 		Disks: []vm.DiskConfig{
 			{
-				Path:      img.AbsolutePath(),
-				Format:    "",
-				Interface: "virtio",
-				Media:     "cdrom",
-				Cache:     "none",
-				Readonly:  true,
+				Path:       img.AbsolutePath(),
+				Format:     "",
+				Interface:  "virtio",
+				Media:      "cdrom",
+				Cache:      "none",
+				Readonly:   true,
+				InstallISO: true,
 			},
 			{
 				Path:      filepath.Join(vmDir, "storage", "disk-os.qcow2"),

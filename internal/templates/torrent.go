@@ -29,9 +29,9 @@ type ShareMount struct {
 // Only one of nordConf or wgConf should be set; nordConf takes precedence.
 func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, sshKeys []string, mounts []ShareMount, nordConf *vpn.NordVPNConfig, wgConf *vpn.WireGuardConfig, vpnProvider string, spicePort int) (*vm.VMConfig, error) {
 	conf := p.Config()
-	if spicePort == 0 {
-		spicePort = 5934
-	}
+	// port 0 → manager assigns a random free port at create time
+	_ = spicePort
+	spicePort = 0
 
 	img, err := images.NewImage(p, images.DistroUbuntu, "latest")
 	if err != nil {
@@ -168,6 +168,10 @@ func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, ssh
 			Packages:    packages,
 			RunCmds:     runCmds,
 			WriteFiles:  writeFiles,
+		},
+		Services: []vm.ServiceEntry{
+			{Name: "spice", Port: 0, Protocol: vm.ServiceSPICE},
+			{Name: "qbittorrent", Port: 8080, Protocol: vm.ServiceHTTP},
 		},
 		CreatedAt: time.Now(),
 	}, nil

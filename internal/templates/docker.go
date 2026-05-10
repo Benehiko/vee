@@ -97,6 +97,9 @@ func NewDockerConfig(ctx context.Context, p provider.Provider, name string, sshK
 			SSHKeys:     sshKeys,
 			RunCmds:     runCmds,
 		},
+		Services: []vm.ServiceEntry{
+			{Name: "docker", Port: DockerTCPPort, Protocol: vm.ServiceTCP},
+		},
 		CreatedAt: time.Now(),
 	}
 
