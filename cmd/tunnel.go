@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"syscall"
 
-	"github.com/Benehiko/vee/vm"
+	"github.com/Benehiko/vee/internal/vm"
 	"github.com/spf13/cobra"
 )
 
@@ -177,16 +177,6 @@ func runSSHTunnel(vmName string, localPort int, sshHost string, sshPort int, rem
 	fmt.Println("\nclosing tunnel")
 	_ = exec.Command(sshBin, "-S", controlPath, "-O", "exit", dest).Run()
 	return nil
-}
-
-func freeLocalPort() (int, error) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return 0, err
-	}
-	port := ln.Addr().(*net.TCPAddr).Port
-	_ = ln.Close()
-	return port, nil
 }
 
 func tempTunnelControlPath() (string, error) {

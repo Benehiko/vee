@@ -5,7 +5,7 @@ import (
 	"os"
 	"text/tabwriter"
 
-	"github.com/Benehiko/vee/vm"
+	"github.com/Benehiko/vee/internal/vm"
 	"github.com/spf13/cobra"
 )
 

@@ -6,7 +6,7 @@ import (
 	"os/exec"
 	"syscall"
 
-	"github.com/Benehiko/vee/vm"
+	"github.com/Benehiko/vee/internal/vm"
 	"github.com/spf13/cobra"
 )
 
@@ -39,37 +39,22 @@ Examples:
 		name := args[0]
 		extra := args[1:]
 
-		mgr := vm.NewManager(prov)
-		entries, err := mgr.List()
+		cfg, state, err := loadRunningVM(name)
 		if err != nil {
 			return err
 		}
 
-		var entry *vm.ListEntry
-		for _, e := range entries {
-			if e.Config.Name == name {
-				entry = e
-				break
-			}
-		}
-		if entry == nil {
-			return fmt.Errorf("VM %q not found", name)
-		}
-		if !entry.State.Running {
-			return fmt.Errorf("VM %q is not running", name)
-		}
-
 		user := sshUser
 		if user == "" {
-			user = entry.Config.SSHUser
+			user = cfg.SSHUser
 		}
-		if user == "" && entry.Config.CloudInit != nil && entry.Config.CloudInit.User != "" {
-			user = entry.Config.CloudInit.User
+		if user == "" && cfg.CloudInit != nil && cfg.CloudInit.User != "" {
+			user = cfg.CloudInit.User
 		}
 
 		// For TrueNAS, default to stored admin user.
-		if entry.Config.Template == "truenas" && user == "" {
-			user = entry.Config.TrueNASUser
+		if cfg.Template == "truenas" && user == "" {
+			user = cfg.TrueNASUser
 		}
 
 		// Always prefer the vee SSH keypair when no identity is specified.
@@ -87,18 +72,18 @@ Examples:
 		var port int
 
 		switch {
-		case entry.State.SSHPort > 0:
+		case state.SSHPort > 0:
 			// Headless user-mode port-forward.
 			host = "127.0.0.1"
-			port = entry.State.SSHPort
+			port = state.SSHPort
 
-		case entry.Config.NIC.Mode == "bridge" || entry.Config.NIC.Mode == "":
+		case cfg.NIC.Mode == "bridge" || cfg.NIC.Mode == "":
 			// Bridge mode — try to resolve IP from neighbour table via MAC.
-			mac := entry.Config.NIC.MAC
+			mac := cfg.NIC.MAC
 			if mac == "" {
 				return fmt.Errorf("VM %q has no MAC address recorded; cannot resolve IP", name)
 			}
-			ip, resolveErr := resolveIPFromMAC(mac)
+			ip, resolveErr := vm.ResolveIPFromMAC(mac)
 			if resolveErr != nil {
 				return fmt.Errorf("could not resolve IP for VM %q (MAC %s): %w\nTry: ssh %s<ip>", name, mac, resolveErr, userPrefix(user))
 			}
@@ -141,10 +126,6 @@ func buildSSHArgs(user, host string, port int, identity string, positional, extr
 	// positional holds remote command args — after host.
 	args = append(args, positional...)
 	return args
-}
-
-func resolveIPFromMAC(mac string) (string, error) {
-	return vm.ResolveIPFromMAC(mac)
 }
 
 func userPrefix(user string) string {

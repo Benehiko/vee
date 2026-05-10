@@ -6,8 +6,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	veessh "github.com/Benehiko/vee/ssh"
-	"github.com/Benehiko/vee/vm"
+	veessh "github.com/Benehiko/vee/internal/ssh"
+	"github.com/Benehiko/vee/internal/vm"
 	"github.com/spf13/cobra"
 )
 

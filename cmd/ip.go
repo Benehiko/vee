@@ -5,7 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Benehiko/vee/qemu"
 	"github.com/spf13/cobra"
 )
 
@@ -25,11 +24,11 @@ var ipCmd = &cobra.Command{
 			return fmt.Errorf("VM %q was not started with guest agent support; recreate with a template that enables guest_agent", name)
 		}
 
-		client, err := qemu.NewQGAClient(state.QGASocket, 5*time.Second)
+		client, closeClient, err := openQGAClient(state.QGASocket, 5*time.Second)
 		if err != nil {
-			return fmt.Errorf("connect to guest agent: %w", err)
+			return err
 		}
-		defer func() { _ = client.Close() }()
+		defer closeClient()
 
 		ifaces, err := client.GuestNetworkGetInterfaces()
 		if err != nil {

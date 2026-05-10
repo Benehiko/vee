@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	veeserver "github.com/Benehiko/vee/server"
-	"github.com/Benehiko/vee/vm"
+	veeserver "github.com/Benehiko/vee/internal/server"
+	"github.com/Benehiko/vee/internal/vm"
 	"github.com/spf13/cobra"
 )
 

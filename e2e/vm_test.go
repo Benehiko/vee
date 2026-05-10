@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Benehiko/vee/sshkeys"
+	"github.com/Benehiko/vee/internal/sshkeys"
 	"golang.org/x/crypto/ssh"
 )
 

@@ -3,8 +3,8 @@ package cmd
 import (
 	"os"
 
+	"github.com/Benehiko/vee/internal/tui"
 	"github.com/Benehiko/vee/provider"
-	"github.com/Benehiko/vee/tui"
 	"github.com/spf13/cobra"
 )
 

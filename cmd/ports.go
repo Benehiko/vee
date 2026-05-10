@@ -5,27 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Benehiko/vee/qemu"
-	"github.com/Benehiko/vee/vm"
 	"github.com/spf13/cobra"
 )
-
-func loadRunningVM(name string) (*vm.VMConfig, *vm.VMState, error) {
-	mgr := vm.NewManager(prov)
-	entries, err := mgr.List()
-	if err != nil {
-		return nil, nil, err
-	}
-	for _, e := range entries {
-		if e.Config.Name == name {
-			if !e.State.Running {
-				return nil, nil, fmt.Errorf("VM %q is not running", name)
-			}
-			return e.Config, e.State, nil
-		}
-	}
-	return nil, nil, fmt.Errorf("VM %q not found", name)
-}
 
 var portsCmd = &cobra.Command{
 	Use:               "ports <name>",
@@ -43,11 +24,11 @@ var portsCmd = &cobra.Command{
 			return fmt.Errorf("VM %q was not started with guest agent support; recreate with a template that enables guest_agent", name)
 		}
 
-		client, err := qemu.NewQGAClient(state.QGASocket, 5*time.Second)
+		client, close, err := openQGAClient(state.QGASocket, 5*time.Second)
 		if err != nil {
-			return fmt.Errorf("connect to guest agent: %w", err)
+			return err
 		}
-		defer func() { _ = client.Close() }()
+		defer close()
 
 		stdout, _, _, err := client.RunCommand("/bin/ss", []string{"-tlnp"})
 		if err != nil {

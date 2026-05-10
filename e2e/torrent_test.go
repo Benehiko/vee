@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Benehiko/vee/internal/templates"
+	"github.com/Benehiko/vee/internal/vm"
 	"github.com/Benehiko/vee/provider"
-	"github.com/Benehiko/vee/templates"
-	"github.com/Benehiko/vee/vm"
 )
 
 // TestVMTorrentWireGuard spins up two VMs:

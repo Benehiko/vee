@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Benehiko/vee/vm"
+	"github.com/Benehiko/vee/internal/vm"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"

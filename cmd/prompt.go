@@ -6,9 +6,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/Benehiko/vee/templates"
-	"github.com/Benehiko/vee/tui"
-	"github.com/Benehiko/vee/vpn"
+	"github.com/Benehiko/vee/internal/templates"
+	"github.com/Benehiko/vee/internal/tui"
+	"github.com/Benehiko/vee/internal/vpn"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -16,62 +16,67 @@ import (
 
 var ghostStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 
-// promptPath displays prompt and reads a filesystem path from stdin with
-// tab-completion and inline ghost text preview. Returns empty string if blank.
-func promptPath(prompt string) (string, error) {
-	ti := textinput.New()
-	ti.Placeholder = "leave blank to skip"
-	ti.Focus()
-	ti.ShowSuggestions = true
-
-	m := &pathInputModel{
-		prompt: prompt,
-		input:  ti,
-	}
-	p := tea.NewProgram(m)
-	result, err := p.Run()
-	if err != nil {
-		return "", err
-	}
-	final := result.(*pathInputModel)
-	if final.cancelled {
-		return "", nil
-	}
-	return strings.TrimSpace(final.input.Value()), nil
+// textInputModel is a generic single-line text input bubbletea model.
+// suggestions is called with the current value and returns tab-completion candidates.
+type textInputModel struct {
+	prompt      string
+	input       textinput.Model
+	suggestions func(string) []string
+	cancelled   bool
 }
 
-type pathInputModel struct {
-	prompt    string
-	input     textinput.Model
-	cancelled bool
-	done      bool
-}
+func (m *textInputModel) Init() tea.Cmd { return textinput.Blink }
 
-func (m *pathInputModel) Init() tea.Cmd {
-	return textinput.Blink
-}
-
-func (m *pathInputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *textInputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.Type {
 		case tea.KeyEnter:
-			m.done = true
 			return m, tea.Quit
 		case tea.KeyCtrlC, tea.KeyEsc:
 			m.cancelled = true
 			return m, tea.Quit
 		}
 	}
-
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
-	m.input.SetSuggestions(tui.PathSuggestions(m.input.Value()))
+	if m.suggestions != nil {
+		m.input.SetSuggestions(m.suggestions(m.input.Value()))
+	}
 	return m, cmd
 }
 
-func (m *pathInputModel) View() string {
+func (m *textInputModel) View() string {
 	return m.prompt + "\n" + m.input.View() + "\n" + ghostStyle.Render("Tab: complete  Enter: confirm  Esc: skip") + "\n"
+}
+
+func runTextInput(prompt, placeholder string, suggestions func(string) []string) (string, bool, error) {
+	ti := textinput.New()
+	ti.Placeholder = placeholder
+	ti.Focus()
+	if suggestions != nil {
+		ti.ShowSuggestions = true
+	}
+	m := &textInputModel{prompt: prompt, input: ti, suggestions: suggestions}
+	p := tea.NewProgram(m)
+	result, err := p.Run()
+	if err != nil {
+		return "", false, err
+	}
+	final := result.(*textInputModel)
+	return strings.TrimSpace(final.input.Value()), final.cancelled, nil
+}
+
+// promptPath displays prompt and reads a filesystem path from stdin with
+// tab-completion and inline ghost text preview. Returns empty string if blank.
+func promptPath(prompt string) (string, error) {
+	val, cancelled, err := runTextInput(prompt, "leave blank to skip", func(v string) []string {
+		return tui.PathSuggestions(v)
+	})
+	if err != nil || cancelled {
+		return "", err
+	}
+	return val, nil
 }
 
 // promptShareMounts interactively collects host→guest directory pairs until the
@@ -178,56 +183,10 @@ func promptNordVPN(stdin *bufio.Reader) (*vpn.NordVPNConfig, error) {
 // promptCountry shows a text input with ghost-text completion from the given
 // country list. Returns empty string if the user leaves it blank.
 func promptCountry(prompt string, countries []string) (string, error) {
-	ti := textinput.New()
-	ti.Placeholder = "leave blank for auto"
-	ti.Focus()
-	ti.ShowSuggestions = true
-
-	m := &countryInputModel{
-		prompt:    prompt,
-		input:     ti,
-		countries: countries,
-	}
-	p := tea.NewProgram(m)
-	result, err := p.Run()
-	if err != nil {
-		return "", err
-	}
-	final := result.(*countryInputModel)
-	if final.cancelled {
-		return "", nil
-	}
-	return strings.TrimSpace(final.input.Value()), nil
-}
-
-type countryInputModel struct {
-	prompt    string
-	input     textinput.Model
-	countries []string
-	cancelled bool
-}
-
-func (m *countryInputModel) Init() tea.Cmd { return textinput.Blink }
-
-func (m *countryInputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.Type {
-		case tea.KeyEnter:
-			return m, tea.Quit
-		case tea.KeyCtrlC, tea.KeyEsc:
-			m.cancelled = true
-			return m, tea.Quit
-		}
-	}
-	var cmd tea.Cmd
-	m.input, cmd = m.input.Update(msg)
-	m.input.SetSuggestions(countrySuggestions(m.input.Value(), m.countries))
-	return m, cmd
-}
-
-func (m *countryInputModel) View() string {
-	return m.prompt + "\n" + m.input.View() + "\n" + ghostStyle.Render("Tab: complete  Enter: confirm  Esc: skip") + "\n"
+	val, _, err := runTextInput(prompt, "leave blank for auto", func(v string) []string {
+		return countrySuggestions(v, countries)
+	})
+	return val, err
 }
 
 // countrySuggestions returns country names that have the given prefix (case-insensitive).

@@ -7,8 +7,6 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/Benehiko/vee/qemu"
-	"github.com/Benehiko/vee/vm"
 	"github.com/spf13/cobra"
 )
 
@@ -19,21 +17,10 @@ var statusCmd = &cobra.Command{
 	ValidArgsFunction: completeVMNames,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
-		mgr := vm.NewManager(prov)
-		entries, err := mgr.List()
+
+		entry, err := findVM(name)
 		if err != nil {
 			return err
-		}
-
-		var entry *vm.ListEntry
-		for _, e := range entries {
-			if e.Config.Name == name {
-				entry = e
-				break
-			}
-		}
-		if entry == nil {
-			return fmt.Errorf("VM %q not found", name)
 		}
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
@@ -72,12 +59,12 @@ var statusCmd = &cobra.Command{
 		}
 
 		fmt.Println()
-		client, err := qemu.NewQGAClient(entry.State.QGASocket, 3*time.Second)
+		client, closeClient, err := openQGAClient(entry.State.QGASocket, 3*time.Second)
 		if err != nil {
 			fmt.Printf("guest-agent: unavailable (%v)\n", err)
 			return nil
 		}
-		defer func() { _ = client.Close() }()
+		defer closeClient()
 
 		if err := client.GuestPing(); err != nil {
 			fmt.Printf("guest-agent: not responding (%v)\n", err)

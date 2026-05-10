@@ -2,10 +2,9 @@ package cmd
 
 import (
 	"fmt"
-	"net"
 	"os/exec"
 
-	"github.com/Benehiko/vee/vm"
+	"github.com/Benehiko/vee/internal/vm"
 	"github.com/spf13/cobra"
 )
 
@@ -66,30 +65,6 @@ var viewCmd = &cobra.Command{
 
 		return fmt.Errorf("VM %q has no SPICE port configured and no GPU display; use --foreground to run it in the terminal", name)
 	},
-}
-
-// localIP returns the first non-loopback IPv4 address, falling back to 127.0.0.1.
-func localIP() string {
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		return "127.0.0.1"
-	}
-	for _, addr := range addrs {
-		var ip net.IP
-		switch v := addr.(type) {
-		case *net.IPNet:
-			ip = v.IP
-		case *net.IPAddr:
-			ip = v.IP
-		}
-		if ip == nil || ip.IsLoopback() {
-			continue
-		}
-		if ip = ip.To4(); ip != nil {
-			return ip.String()
-		}
-	}
-	return "127.0.0.1"
 }
 
 func init() {

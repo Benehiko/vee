@@ -7,11 +7,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Benehiko/vee/images"
-	"github.com/Benehiko/vee/sshkeys"
-	"github.com/Benehiko/vee/templates"
-	"github.com/Benehiko/vee/tui"
-	"github.com/Benehiko/vee/vm"
+	"github.com/Benehiko/vee/internal/images"
+	"github.com/Benehiko/vee/internal/sshkeys"
+	"github.com/Benehiko/vee/internal/templates"
+	"github.com/Benehiko/vee/internal/tui"
+	"github.com/Benehiko/vee/internal/vm"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )

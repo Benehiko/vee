@@ -6,7 +6,7 @@ import (
 	"sort"
 	"text/tabwriter"
 
-	"github.com/Benehiko/vee/gpu"
+	"github.com/Benehiko/vee/internal/gpu"
 	"github.com/spf13/cobra"
 )
 

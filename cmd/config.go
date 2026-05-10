@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"github.com/Benehiko/vee/tui"
+	"github.com/Benehiko/vee/internal/tui"
 	"github.com/spf13/cobra"
 )
 

@@ -48,7 +48,7 @@ func newDefaultConfig() (*Config, error) {
 		OVMFCodePath:        "/usr/share/OVMF/x64/OVMF_CODE.4m.fd",
 		OVMFVarsPath:        "/usr/share/OVMF/x64/OVMF_VARS.4m.fd",
 		OVMFSecbootCodePath: "/usr/share/OVMF/x64/OVMF_CODE.secboot.4m.fd",
-		LogPath:             filepath.Join(home, ".float/state/logs"),
+		LogPath:             filepath.Join(home, ".vee", "logs"),
 		DefaultMachineType:  "q35",
 		DefaultCPUs:         2,
 		DefaultMemory:       "2G",
