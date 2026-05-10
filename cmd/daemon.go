@@ -4,8 +4,12 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"text/template"
+
+	dbus "github.com/godbus/dbus/v5"
 
 	"github.com/Benehiko/vee/internal/qemubin"
 	"github.com/Benehiko/vee/internal/vm"
@@ -35,6 +39,10 @@ var daemonInstallCmd = &cobra.Command{
 	Use:   "install",
 	Short: "Install and enable the vee systemd user service",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := enableLinger(); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not enable systemd linger: %v\n", err)
+			fmt.Fprintln(os.Stderr, "  Run manually: loginctl enable-linger $USER")
+		}
 		return installSystemdUnit()
 	},
 }
@@ -64,6 +72,48 @@ StandardError=journal
 [Install]
 WantedBy=default.target
 `
+
+// enableLinger enables systemd linger for the current user so the user service
+// survives logout and starts at boot. Tries loginctl first (always present on
+// systemd hosts); falls back to the D-Bus org.freedesktop.login1 API directly.
+func enableLinger() error {
+	u, err := user.Current()
+	if err != nil {
+		return fmt.Errorf("get current user: %w", err)
+	}
+
+	// Try loginctl first — it's part of systemd and always available alongside systemctl.
+	if path, err := exec.LookPath("loginctl"); err == nil {
+		out, cmdErr := exec.Command(path, "enable-linger", u.Username).CombinedOutput()
+		if cmdErr == nil {
+			return nil
+		}
+		// loginctl found but failed — fall through to D-Bus.
+		_ = out
+	}
+
+	// Fall back: call org.freedesktop.login1.Manager.SetUserLinger over D-Bus.
+	uid, err := strconv.ParseUint(u.Uid, 10, 32)
+	if err != nil {
+		return fmt.Errorf("parse uid: %w", err)
+	}
+	conn, err := dbus.ConnectSystemBus()
+	if err != nil {
+		return fmt.Errorf("connect to system D-Bus: %w", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	obj := conn.Object("org.freedesktop.login1", "/org/freedesktop/login1")
+	call := obj.Call("org.freedesktop.login1.Manager.SetUserLinger", 0,
+		uint32(uid), // uid
+		true,        // enable
+		true,        // interactive (polkit prompt if needed)
+	)
+	if call.Err != nil {
+		return fmt.Errorf("SetUserLinger D-Bus call: %w", call.Err)
+	}
+	return nil
+}
 
 func unitDir() (string, error) {
 	home, err := os.UserHomeDir()
@@ -116,13 +166,13 @@ func installSystemdUnit() error {
 	}
 
 	// daemon-reload + enable + start
-	for _, args := range [][]string{
+	for _, sargs := range [][]string{
 		{"--user", "daemon-reload"},
 		{"--user", "enable", "--now", "vee.service"},
 	} {
-		out, cmdErr := exec.Command("systemctl", args...).CombinedOutput()
+		out, cmdErr := exec.Command("systemctl", sargs...).CombinedOutput()
 		if cmdErr != nil {
-			return fmt.Errorf("systemctl %v: %w\n%s", args, cmdErr, out)
+			return fmt.Errorf("systemctl %v: %w\n%s", sargs, cmdErr, out)
 		}
 	}
 
@@ -132,12 +182,12 @@ func installSystemdUnit() error {
 }
 
 func uninstallSystemdUnit() error {
-	for _, args := range [][]string{
+	for _, sargs := range [][]string{
 		{"--user", "disable", "--now", "vee.service"},
 	} {
-		out, err := exec.Command("systemctl", args...).CombinedOutput()
+		out, err := exec.Command("systemctl", sargs...).CombinedOutput()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "systemctl %v: %v\n%s\n", args, err, out)
+			fmt.Fprintf(os.Stderr, "systemctl %v: %v\n%s\n", sargs, err, out)
 		}
 	}
 

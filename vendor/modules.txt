@@ -61,6 +61,9 @@ github.com/fsnotify/fsnotify
 ## explicit; go 1.18
 github.com/go-viper/mapstructure/v2
 github.com/go-viper/mapstructure/v2/internal/errors
+# github.com/godbus/dbus/v5 v5.2.2
+## explicit; go 1.20
+github.com/godbus/dbus/v5
 # github.com/google/uuid v1.6.0
 ## explicit
 github.com/google/uuid
