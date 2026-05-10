@@ -94,9 +94,11 @@ const (
 
 var diskModeNames = []string{"new", "passthrough", "none"}
 
-var nicModeNames = []string{"user", "bridge"}
-var gpuModeNames = []string{"none", "virtio", "passthrough"}
-var gpuVendorNames = []string{"amd", "nvidia", "virtio"}
+var (
+	nicModeNames   = []string{"user", "bridge"}
+	gpuModeNames   = []string{"none", "virtio", "passthrough"}
+	gpuVendorNames = []string{"amd", "nvidia", "virtio"}
+)
 
 // createModel is the form for `vee create` in the TUI. Every flag exposed by
 // the cobra `vee create` command has a corresponding field here. Less-common
