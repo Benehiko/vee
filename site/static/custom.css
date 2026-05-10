@@ -1,0 +1,181 @@
+/* Cyberpunk theme override for hugo-geekdoc */
+
+@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;600;700&display=swap');
+
+html { font-size: 17px; }
+body { font-size: 1rem; line-height: 1.65; }
+
+:root {
+  --accent-color: #00ffe1;
+  --accent-color-lite: #00ffe133;
+  --body-background: #0a0a0f;
+  --body-font-color: #c8d6e5;
+  --body-font-family: 'Rajdhani', 'Share Tech Mono', monospace;
+  --button-background: #00ffe122;
+  --button-border-color: #00ffe1;
+  --code-accent-color-lite: #ff007022;
+  --code-background: #0d0d1a;
+  --code-copy-background: #0d0d1a;
+  --code-copy-border-color: #00ffe155;
+  --code-copy-font-color: #00ffe1;
+  --code-copy-success-color: #00ffe1;
+  --code-font-color: #e0f0ff;
+  --code-font-family: 'Share Tech Mono', 'Courier New', monospace;
+  --control-icons: #00ffe1;
+  --footer-background: #07070f;
+  --footer-font-color: #556677;
+  --footer-link-color: #00ffe1;
+  --footer-link-color-visited: #00b8a9;
+  --header-background: #07070f;
+  --header-font-color: #00ffe1;
+  --header-font-family: 'Share Tech Mono', monospace;
+  --link-color: #00ffe1;
+  --link-color-visited: #00b8a9;
+  --mark-color: #ff007044;
+}
+
+
+/* Header */
+.gdoc-header {
+  border-bottom: 1px solid #00ffe133;
+  box-shadow: 0 0 10px #00ffe111;
+}
+
+.gdoc-header__link {
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  font-family: 'Share Tech Mono', monospace;
+}
+
+/* Nav / sidebar */
+.gdoc-nav {
+  background: #07070f;
+  border-right: 1px solid #00ffe122;
+  font-size: 1rem;
+}
+
+.gdoc-nav__entry:hover,
+.gdoc-nav__entry--active {
+  color: #00ffe1 !important;
+  text-shadow: 0 0 4px #00ffe155;
+}
+
+/* Headings */
+h1, h2, h3, h4, h5, h6 {
+  font-family: 'Share Tech Mono', monospace;
+  color: #00ffe1;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+h1 { text-shadow: 0 0 6px #00ffe155; }
+h2 { border-bottom: 1px solid #00ffe133; padding-bottom: 0.25em; }
+
+/* Links */
+a {
+  color: var(--link-color);
+  text-decoration: none;
+}
+a:hover {
+  text-shadow: 0 0 4px #00ffe177;
+}
+
+/* Code blocks */
+pre, code {
+  font-family: var(--code-font-family);
+  background: var(--code-background) !important;
+  border: 1px solid #00ffe122;
+  border-radius: 2px;
+}
+
+pre {
+  border-left: 3px solid #00ffe166;
+  box-shadow: none;
+}
+
+/* Tables */
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 0.9em;
+}
+
+th {
+  background: #00ffe115;
+  color: #00ffe1;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  border: 1px solid #00ffe133;
+  padding: 0.5em 0.75em;
+}
+
+td {
+  border: 1px solid #00ffe122;
+  padding: 0.4em 0.75em;
+  color: #c8d6e5;
+}
+
+tr:hover td {
+  background: #00ffe108;
+}
+
+/* Blockquotes */
+blockquote {
+  border-left: 3px solid #ff0070;
+  background: #ff007010;
+  color: #c8d6e5;
+  padding: 0.5em 1em;
+  margin: 1em 0;
+  box-shadow: inset 0 0 20px #ff007008;
+}
+
+/* Hint / callout boxes */
+.gdoc-hint {
+  border-left: 3px solid #00ffe1;
+  background: #00ffe108;
+}
+
+.gdoc-hint.warning {
+  border-left-color: #ffd700;
+  background: #ffd70008;
+}
+
+.gdoc-hint.danger {
+  border-left-color: #ff0070;
+  background: #ff007008;
+}
+
+/* Search */
+.gdoc-search__input {
+  background: #0d0d1a;
+  border: 1px solid #00ffe133;
+  color: #00ffe1;
+  font-family: 'Share Tech Mono', monospace;
+}
+
+.gdoc-search__input:focus {
+  outline: none;
+  border-color: #00ffe1;
+  box-shadow: 0 0 10px #00ffe144;
+}
+
+/* Footer */
+.gdoc-footer {
+  border-top: 1px solid #00ffe122;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 0.8em;
+  letter-spacing: 0.05em;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #07070f; }
+::-webkit-scrollbar-thumb { background: #00ffe144; border-radius: 0; }
+::-webkit-scrollbar-thumb:hover { background: #00ffe1aa; }
+
+/* Selection */
+::selection {
+  background: #00ffe133;
+  color: #00ffe1;
+}

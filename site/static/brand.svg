@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 32" height="32">
+  <rect width="120" height="32" fill="none"/>
+  <!-- glitch bar -->
+  <rect x="0" y="14" width="4" height="2" fill="#00ffe1" opacity="0.7"/>
+  <!-- wordmark -->
+  <text x="10" y="23"
+    font-family="'Share Tech Mono', monospace"
+    font-size="18"
+    font-weight="700"
+    fill="#00ffe1"
+    letter-spacing="4"
+    style="text-transform:uppercase;filter:drop-shadow(0 0 2px #00ffe166)">vee</text>
+  <!-- trailing bracket -->
+  <text x="62" y="23"
+    font-family="'Share Tech Mono', monospace"
+    font-size="14"
+    fill="#00ffe166"
+    letter-spacing="0">_</text>
+</svg>
