@@ -18,7 +18,7 @@ var autostartCmd = &cobra.Command{
 		mgr := vm.NewManager(prov)
 
 		if len(args) == 1 {
-			cfg, err := vm.LoadConfig(prov.Config().StoragePath, name)
+			cfg, err := mgr.LoadConfig(name)
 			if err != nil {
 				return err
 			}

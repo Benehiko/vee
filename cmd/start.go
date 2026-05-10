@@ -121,7 +121,7 @@ func runStartSpinner(cmd *cobra.Command, mgr *vm.Manager, name string) error {
 
 // printTemplateHints prints actionable next-step hints for specific templates.
 func printTemplateHints(mgr *vm.Manager, name string) {
-	cfg, err := vm.LoadConfig(prov.Config().StoragePath, name)
+	cfg, err := mgr.LoadConfig(name)
 	if err != nil {
 		return
 	}
@@ -139,7 +139,8 @@ func printTemplateHints(mgr *vm.Manager, name string) {
 // background for templates that forward guest journals (gaming-arch).
 // The listener runs until ctx is cancelled; errors are logged but not fatal.
 func maybeStartJournalListener(cmd *cobra.Command, name string) {
-	cfg, err := vm.LoadConfig(prov.Config().StoragePath, name)
+	mgr := vm.NewManager(prov)
+	cfg, err := mgr.LoadConfig(name)
 	if err != nil || cfg.Template != "gaming-arch" {
 		return
 	}

@@ -44,21 +44,32 @@ func (m *Manager) vmDir(name string) string {
 	return filepath.Join(m.storagePath(), name)
 }
 
+func (m *Manager) SaveConfig(cfg *VMConfig) error {
+	return m.saveConfig(cfg)
+}
+
+func (m *Manager) LoadConfig(name string) (*VMConfig, error) {
+	return m.loadConfig(name)
+}
+
+func (m *Manager) LoadState(name string) (*VMState, error) {
+	return m.loadState(name)
+}
+
+func (m *Manager) SaveState(name string, state *VMState) error {
+	return m.saveState(name, state)
+}
+
 func (m *Manager) saveConfig(cfg *VMConfig) error {
 	if m.db != nil {
-		if err := dbSaveConfig(m.db, cfg); err != nil {
-			return err
-		}
+		return dbSaveConfig(m.db, cfg)
 	}
 	return SaveConfig(m.storagePath(), cfg)
 }
 
 func (m *Manager) loadConfig(name string) (*VMConfig, error) {
 	if m.db != nil {
-		cfg, err := dbLoadConfig(m.db, name)
-		if err == nil {
-			return cfg, nil
-		}
+		return dbLoadConfig(m.db, name)
 	}
 	return LoadConfig(m.storagePath(), name)
 }
@@ -67,29 +78,21 @@ func (m *Manager) saveState(name string, state *VMState) error {
 	if m.db != nil {
 		// Ensure the vms row exists before inserting state (foreign key).
 		_ = dbEnsureVM(m.db, name, "")
-		if err := dbSaveState(m.db, name, state); err != nil {
-			return err
-		}
+		return dbSaveState(m.db, name, state)
 	}
 	return SaveStateForVM(m.storagePath(), name, state)
 }
 
 func (m *Manager) loadState(name string) (*VMState, error) {
 	if m.db != nil {
-		state, err := dbLoadState(m.db, name)
-		if err == nil {
-			return state, nil
-		}
+		return dbLoadState(m.db, name)
 	}
 	return LoadState(m.storagePath(), name)
 }
 
 func (m *Manager) listAllConfigs() ([]*VMConfig, error) {
 	if m.db != nil {
-		configs, err := dbListAll(m.db)
-		if err == nil && len(configs) > 0 {
-			return configs, nil
-		}
+		return dbListAll(m.db)
 	}
 	return ListAll(m.storagePath())
 }

@@ -85,6 +85,7 @@ const (
 
 type editModel struct {
 	prov       provider.Provider
+	mgr        *vm.Manager
 	cfg        *vm.VMConfig
 	field      editField
 	inputs     [efCount]textinput.Model
@@ -185,6 +186,7 @@ func newEditModel(p provider.Provider, cfg *vm.VMConfig) editModel {
 	devs, _ := blockdev.ListUnmounted()
 	return editModel{
 		prov:      p,
+		mgr:       vm.NewManager(p),
 		cfg:       cfg,
 		field:     0,
 		inputs:    inputs,
@@ -567,7 +569,7 @@ func renderCycle(opts []string, cur string, focused bool) string {
 
 func (m editModel) doSave() tea.Cmd {
 	cfg := m.cfg
-	p := m.prov
+	mgr := m.mgr
 	inputs := m.inputs
 
 	return func() tea.Msg {
@@ -612,7 +614,7 @@ func (m editModel) doSave() tea.Cmd {
 
 		// cfg.Disks is mutated in-place during the TUI session.
 
-		if err := vm.SaveConfig(p.Config().StoragePath, cfg); err != nil {
+		if err := mgr.SaveConfig(cfg); err != nil {
 			return editSavedMsg{err: err}
 		}
 		return editSavedMsg{}
@@ -623,7 +625,8 @@ func (m editModel) doSave() tea.Cmd {
 // If name is empty it launches the list screen first (user picks from there).
 func RunConfigEditor(ctx context.Context, p provider.Provider, name string) error {
 	if name != "" {
-		cfg, err := vm.LoadConfig(p.Config().StoragePath, name)
+		mgr := vm.NewManager(p)
+		cfg, err := mgr.LoadConfig(name)
 		if err != nil {
 			return fmt.Errorf("load config %q: %w", name, err)
 		}

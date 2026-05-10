@@ -23,12 +23,13 @@ var viewCmd = &cobra.Command{
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
+		mgr := vm.NewManager(prov)
 
-		cfg, err := vm.LoadConfig(prov.Config().StoragePath, name)
+		cfg, err := mgr.LoadConfig(name)
 		if err != nil {
 			return fmt.Errorf("load config for %q: %w", name, err)
 		}
-		state, err := vm.LoadState(prov.Config().StoragePath, name)
+		state, err := mgr.LoadState(name)
 		if err != nil || !state.Running {
 			return fmt.Errorf("VM %q is not running", name)
 		}

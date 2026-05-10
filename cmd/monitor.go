@@ -17,7 +17,8 @@ var monitorCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
 
-		state, err := vm.LoadState(prov.Config().StoragePath, name)
+		mgr := vm.NewManager(prov)
+		state, err := mgr.LoadState(name)
 		if err != nil {
 			return fmt.Errorf("load state for %q: %w", name, err)
 		}
