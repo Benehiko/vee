@@ -17,6 +17,7 @@ var (
 	styleBackupDim      = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	styleBackupHelp     = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Padding(0, 1)
 	styleBackupCheck    = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+	styleBackupPartial  = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
 	styleBackupFilter   = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
 	styleBackupFilterPf = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("11"))
 )
@@ -209,12 +210,62 @@ func (m *BackupPickerModel) clampScroll() {
 	}
 }
 
+// hasCheckedDescendant returns true if any node under parent has checked=true.
+func (m *BackupPickerModel) hasCheckedDescendant(parent *dirNode) bool {
+	depth := parent.entry.Depth
+	inRange := false
+	for _, n := range m.nodes {
+		if n == parent {
+			inRange = true
+			continue
+		}
+		if !inRange {
+			continue
+		}
+		if n.entry.Depth <= depth {
+			break
+		}
+		if n.checked {
+			return true
+		}
+	}
+	return false
+}
+
+// setDescendantsChecked sets checked on all nodes under parent.
+func (m *BackupPickerModel) setDescendantsChecked(parent *dirNode, val bool) {
+	depth := parent.entry.Depth
+	inRange := false
+	for _, n := range m.nodes {
+		if n == parent {
+			inRange = true
+			continue
+		}
+		if !inRange {
+			continue
+		}
+		if n.entry.Depth <= depth {
+			break
+		}
+		n.checked = val
+	}
+}
+
 func (m *BackupPickerModel) toggleCheck() {
 	vis := m.visibleFiltered()
 	if m.cursor >= len(vis) {
 		return
 	}
-	vis[m.cursor].checked = !vis[m.cursor].checked
+	node := vis[m.cursor]
+	if node.checked {
+		// Fully checked → uncheck node and all descendants.
+		node.checked = false
+		m.setDescendantsChecked(node, false)
+	} else {
+		// Unchecked or partial → check node and all descendants.
+		node.checked = true
+		m.setDescendantsChecked(node, true)
+	}
 }
 
 func (m *BackupPickerModel) expandAll() {
@@ -451,6 +502,8 @@ func (m BackupPickerModel) View() string {
 		check := "[ ]"
 		if node.checked {
 			check = styleBackupCheck.Render("[✓]")
+		} else if m.hasCheckedDescendant(node) {
+			check = styleBackupPartial.Render("[-]")
 		}
 
 		name := node.entry.Name
