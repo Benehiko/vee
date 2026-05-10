@@ -998,15 +998,19 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 			// which causes "error getting device from group N: No such device".
 			// D3hot/suspended is handled by vfio-pci during open — warn only.
 			allAddrs := append([]string{cfg.GPU.PCIAddr}, cfg.GPU.ExtraVFIOAddrs...)
+			var stuck []string
 			for _, addr := range allAddrs {
 				ds, resetErr := gpu.EnsureReady(addr)
 				if resetErr != nil {
-					m.provider.Logger().Warn("VFIO device D3cold reset failed — cold reboot required",
+					m.provider.Logger().Warn("VFIO device wake/reset failed",
 						zap.String("pci_addr", addr),
 						zap.String("power_state", string(ds.PowerState)),
 						zap.String("runtime_status", ds.RuntimeStatus),
 						zap.Error(resetErr),
 					)
+					if ds.NeedsReset() {
+						stuck = append(stuck, fmt.Sprintf("%s (%s/%s)", addr, ds.PowerState, ds.RuntimeStatus))
+					}
 				} else if ds.NeedsAttention() {
 					m.provider.Logger().Warn("VFIO device in D3hot/suspended — vfio-pci will attempt runtime resume",
 						zap.String("pci_addr", addr),
@@ -1020,6 +1024,21 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 						zap.String("runtime_status", ds.RuntimeStatus),
 					)
 				}
+			}
+			// QEMU asserts immediately (pci_irq_handler) when asked to attach
+			// a device stuck in D3cold, so refuse to launch instead of
+			// crashing into a confusing core dump. Wake requires writing
+			// /sys/bus/pci/.../power/control which is root-only on most
+			// kernels — installing the daemon polkit rules grants vee that
+			// access. Past that, only a host cold reboot can revive a GPU
+			// that lost power across an unclean exit.
+			if len(stuck) > 0 {
+				return nil, nil, fmt.Errorf(
+					"VFIO device(s) stuck in D3cold: %s — fix with one of: "+
+						"(1) sudo vee daemon install (one-time polkit setup so vee can wake the device), "+
+						"(2) sudo bash -c 'echo on > /sys/bus/pci/devices/<addr>/power/control' for each address, "+
+						"(3) cold reboot the host",
+					strings.Join(stuck, ", "))
 			}
 			primary := qemu.NewVFIODevice(cfg.GPU.PCIAddr)
 			if cfg.GPU.ROMFile != "" {
