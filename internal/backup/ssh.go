@@ -40,13 +40,10 @@ type DirEntry struct {
 	Children []*DirEntry
 }
 
-// EnumerateHome lists directories under the guest home dir up to maxDepth
-// levels deep via SSH find. Returns a flat list sorted by path.
-func EnumerateHome(conn SSHConn, maxDepth int) ([]*DirEntry, error) {
-	cmd := fmt.Sprintf(
-		"find ~ -maxdepth %d -mindepth 1 -type d ! -path '*/proc/*' ! -path '*/sys/*' ! -path '*/.git/*' 2>/dev/null | sort",
-		maxDepth,
-	)
+// EnumerateHome lists all directories under the guest home dir via SSH find.
+// Returns a flat list sorted by path.
+func EnumerateHome(conn SSHConn) ([]*DirEntry, error) {
+	cmd := "find ~ -mindepth 1 -type d ! -path '*/proc/*' ! -path '*/sys/*' ! -path '*/.git/*' 2>/dev/null | sort"
 	c := exec.Command("ssh", conn.args(cmd)...)
 	var stderr strings.Builder
 	c.Stderr = &stderr
