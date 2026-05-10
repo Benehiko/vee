@@ -57,6 +57,7 @@ Templates apply sane defaults automatically:
   torrent        Lightweight 4G / 2 CPUs, SPICE, qbittorrent-nox via cloud-init
   devbox         8G / 4 CPUs, Docker + zsh via cloud-init (supports --distro)
   server         8G / 2 CPUs, openssh + ufw + fail2ban via cloud-init (supports --distro)
+  docker         2G / 2 CPUs, Alpine Linux, Docker daemon on tcp://localhost:2375
   windows        24G / 4 CPUs, UEFI secboot, TPM 2.0
   truenas        4G / 1 CPU, UEFI, AHCI OS disk, bridge NIC, SPICE display
 
@@ -145,6 +146,12 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
 			}
 			var err error
 			cfg, err = templates.NewWindowsConfig(cmd.Context(), prov, winVersion, name)
+			if err != nil {
+				return err
+			}
+		case "docker":
+			var err error
+			cfg, err = templates.NewDockerConfig(cmd.Context(), prov, name, sshKeys, createDistroVersion)
 			if err != nil {
 				return err
 			}
@@ -318,6 +325,7 @@ func init() {
 			"server\tMinimal server with openssh + ufw + fail2ban",
 			"windows\tWindows VM with UEFI + TPM",
 			"truenas\tTrueNAS SCALE VM",
+			"docker\tAlpine Linux VM with Docker daemon on tcp://localhost:2375",
 		}, cobra.ShellCompDirectiveNoFileComp
 	})
 	_ = createCmd.RegisterFlagCompletionFunc("distro", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {

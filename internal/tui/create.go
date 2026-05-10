@@ -27,6 +27,7 @@ var templateNames = []string{
 	"ubuntu-server",
 	"devbox",
 	"server",
+	"docker",
 	"torrent",
 	"gaming",
 	"passthrough",
@@ -378,6 +379,12 @@ func buildConfig(ctx context.Context, p provider.Provider, mgr *vm.Manager, name
 	case "server":
 		var err error
 		cfg, err = templates.NewServerConfig(ctx, p, name, nil, distro, distroVer)
+		if err != nil {
+			return nil, err
+		}
+	case "docker":
+		var err error
+		cfg, err = templates.NewDockerConfig(ctx, p, name, nil, distroVer)
 		if err != nil {
 			return nil, err
 		}
