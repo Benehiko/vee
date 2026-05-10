@@ -432,10 +432,9 @@ func (m *BackupPickerModel) visibleFiltered() []*dirNode {
 		return false
 	}
 
+	// Iterate all nodes (ignoring visible flag) so the filter can surface
+	// directories that are collapsed/hidden by default.
 	for _, n := range m.nodes {
-		if !n.visible {
-			continue
-		}
 		if !m.showHidden && isDotfile(n.entry.Name) {
 			continue
 		}
@@ -446,7 +445,7 @@ func (m *BackupPickerModel) visibleFiltered() []*dirNode {
 			addNode(n, pri)
 		case isAnc:
 			addNode(n, 1)
-		case isUnderExpanded(n):
+		case n.visible && isUnderExpanded(n):
 			// Child of an expanded included node — show it in the same group as
 			// its parent (mid), preserving tree order.
 			addNode(n, 1)
