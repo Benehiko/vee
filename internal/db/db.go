@@ -10,7 +10,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const currentVersion = 1
+const currentVersion = 2
 
 const schema = `
 CREATE TABLE IF NOT EXISTS vms (
@@ -42,6 +42,20 @@ CREATE TABLE IF NOT EXISTS backup_dirs (
 	run_id     INTEGER NOT NULL REFERENCES backup_runs(id) ON DELETE CASCADE,
 	guest_path TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS dir_cache (
+	vm_name    TEXT PRIMARY KEY,
+	paths_json TEXT NOT NULL,
+	cached_at  DATETIME NOT NULL
+);
+`
+
+const migration2 = `
+CREATE TABLE IF NOT EXISTS dir_cache (
+	vm_name    TEXT PRIMARY KEY,
+	paths_json TEXT NOT NULL,
+	cached_at  DATETIME NOT NULL
+);
 `
 
 // Open opens (or creates) the vee SQLite database at the given path, applies
@@ -70,14 +84,39 @@ func Open(dbPath, storagePath string) (*sql.DB, error) {
 		return nil, err
 	}
 
-	if ver == 0 {
+	switch {
+	case ver == 0:
 		if err := initSchema(db, storagePath); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+	case ver < currentVersion:
+		if err := runMigrations(db, ver); err != nil {
 			_ = db.Close()
 			return nil, err
 		}
 	}
 
 	return db, nil
+}
+
+func runMigrations(db *sql.DB, fromVersion int) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if fromVersion < 2 {
+		if _, err := tx.Exec(migration2); err != nil {
+			return fmt.Errorf("migration 2: %w", err)
+		}
+	}
+
+	if _, err := tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", currentVersion)); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func userVersion(db *sql.DB) (int, error) {

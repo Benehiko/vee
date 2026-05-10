@@ -1,9 +1,9 @@
 package backup
 
 import (
+	"bufio"
 	"fmt"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -40,11 +40,24 @@ type DirEntry struct {
 	Children []*DirEntry
 }
 
+func pathToEntry(p string) *DirEntry {
+	name := p
+	if slash := strings.LastIndex(p, "/"); slash >= 0 {
+		name = p[slash+1:]
+	}
+	return &DirEntry{
+		Path:  p,
+		Name:  name,
+		Depth: strings.Count(p, "/"),
+	}
+}
+
+const findCmd = "find ~ -mindepth 1 -type d ! -path '*/proc/*' ! -path '*/sys/*' ! -path '*/.git/*' 2>/dev/null | sort"
+
 // EnumerateHome lists all directories under the guest home dir via SSH find.
 // Returns a flat list sorted by path.
 func EnumerateHome(conn SSHConn) ([]*DirEntry, error) {
-	cmd := "find ~ -mindepth 1 -type d ! -path '*/proc/*' ! -path '*/sys/*' ! -path '*/.git/*' 2>/dev/null | sort"
-	c := exec.Command("ssh", conn.args(cmd)...)
+	c := exec.Command("ssh", conn.args(findCmd)...)
 	var stderr strings.Builder
 	c.Stderr = &stderr
 	out, err := c.Output()
@@ -59,16 +72,38 @@ func EnumerateHome(conn SSHConn) ([]*DirEntry, error) {
 		if line == "" {
 			continue
 		}
-		entries = append(entries, &DirEntry{
-			Path:  line,
-			Name:  filepath.Base(line),
-			Depth: strings.Count(line, "/"),
-		})
+		entries = append(entries, pathToEntry(line))
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].Path < entries[j].Path
 	})
 	return entries, nil
+}
+
+// EnumerateHomeStream runs find over SSH and sends entries line-by-line to ch.
+// Closes ch when done. Send errors to errCh (buffered 1). Caller owns both channels.
+func EnumerateHomeStream(conn SSHConn, ch chan<- *DirEntry, errCh chan<- error) {
+	c := exec.Command("ssh", conn.args(findCmd)...)
+	stdout, err := c.StdoutPipe()
+	if err != nil {
+		errCh <- fmt.Errorf("stdout pipe: %w", err)
+		close(ch)
+		return
+	}
+	if err := c.Start(); err != nil {
+		errCh <- fmt.Errorf("ssh start: %w", err)
+		close(ch)
+		return
+	}
+	scanner := bufio.NewScanner(stdout)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line != "" {
+			ch <- pathToEntry(line)
+		}
+	}
+	_ = c.Wait()
+	close(ch)
 }
 
 // RunRsync executes rsync for a single guest path into dest over SSH.

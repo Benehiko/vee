@@ -78,17 +78,7 @@ Examples:
 		}
 
 		if runID == 0 {
-			// New run: enumerate guest dirs and show picker.
-			fmt.Println("Enumerating guest directories...")
-			entries, err := backup.EnumerateHome(conn)
-			if err != nil {
-				return fmt.Errorf("enumerate: %w", err)
-			}
-			if len(entries) == 0 {
-				return fmt.Errorf("no directories found on guest")
-			}
-
-			dirs, err = tui.RunBackupPicker(entries)
+			dirs, err = tui.RunBackupLoader(conn, db, name)
 			if err != nil {
 				return fmt.Errorf("picker: %w", err)
 			}
