@@ -94,6 +94,31 @@ func (m *Manager) listAllConfigs() ([]*VMConfig, error) {
 	return ListAll(m.storagePath())
 }
 
+// SetAutoStart toggles the auto_start flag for a VM and persists the config.
+func (m *Manager) SetAutoStart(name string, enabled bool) error {
+	cfg, err := m.loadConfig(name)
+	if err != nil {
+		return err
+	}
+	cfg.AutoStart = enabled
+	return m.saveConfig(cfg)
+}
+
+// ListAutoStart returns configs for all VMs that have AutoStart=true.
+func (m *Manager) ListAutoStart() ([]*VMConfig, error) {
+	all, err := m.listAllConfigs()
+	if err != nil {
+		return nil, err
+	}
+	var out []*VMConfig
+	for _, c := range all {
+		if c.AutoStart {
+			out = append(out, c)
+		}
+	}
+	return out, nil
+}
+
 // Create validates and persists a new VMConfig, creating disk images and OVMF vars.
 func (m *Manager) Create(ctx context.Context, cfg *VMConfig) error {
 	dir := m.vmDir(cfg.Name)

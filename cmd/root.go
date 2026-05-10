@@ -55,4 +55,6 @@ func init() {
 	rootCmd.AddCommand(ipCmd)
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(backupCmd)
+	rootCmd.AddCommand(autostartCmd)
+	rootCmd.AddCommand(daemonCmd)
 }

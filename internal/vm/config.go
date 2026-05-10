@@ -152,6 +152,8 @@ type VMConfig struct {
 	CPUPinning []int `yaml:"cpu_pinning,omitempty" json:"cpu_pinning,omitempty"`
 	// RTC overrides the -rtc argument (e.g. "base=localtime,clock=host").
 	// Leave empty for the default (UTC). Set for Windows and gaming VMs.
-	RTC       string    `yaml:"rtc,omitempty"         json:"rtc,omitempty"`
+	RTC string `yaml:"rtc,omitempty"         json:"rtc,omitempty"`
+	// AutoStart marks the VM to be started automatically by the vee daemon on boot.
+	AutoStart bool      `yaml:"auto_start,omitempty"  json:"auto_start,omitempty"`
 	CreatedAt time.Time `yaml:"created_at"            json:"created_at"`
 }
