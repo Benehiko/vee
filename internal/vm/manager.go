@@ -3,6 +3,7 @@ package vm
 import (
 	"context"
 	"crypto/sha1"
+	"database/sql"
 	"fmt"
 	"io"
 	"net"
@@ -24,13 +25,14 @@ import (
 
 type Manager struct {
 	provider provider.Provider
+	db       *sql.DB
 	// PromptFn is called when interactive input is needed (e.g. TrueNAS password).
 	// If nil, operations requiring prompts are skipped with a warning.
 	PromptFn func(prompt string) (string, error)
 }
 
 func NewManager(p provider.Provider) *Manager {
-	return &Manager{provider: p}
+	return &Manager{provider: p, db: p.DB()}
 }
 
 func (m *Manager) storagePath() string {
@@ -39,6 +41,56 @@ func (m *Manager) storagePath() string {
 
 func (m *Manager) vmDir(name string) string {
 	return filepath.Join(m.storagePath(), name)
+}
+
+func (m *Manager) saveConfig(cfg *VMConfig) error {
+	if m.db != nil {
+		if err := dbSaveConfig(m.db, cfg); err != nil {
+			return err
+		}
+	}
+	return SaveConfig(m.storagePath(), cfg)
+}
+
+func (m *Manager) loadConfig(name string) (*VMConfig, error) {
+	if m.db != nil {
+		cfg, err := dbLoadConfig(m.db, name)
+		if err == nil {
+			return cfg, nil
+		}
+	}
+	return LoadConfig(m.storagePath(), name)
+}
+
+func (m *Manager) saveState(name string, state *VMState) error {
+	if m.db != nil {
+		// Ensure the vms row exists before inserting state (foreign key).
+		_ = dbEnsureVM(m.db, name, "")
+		if err := dbSaveState(m.db, name, state); err != nil {
+			return err
+		}
+	}
+	return SaveStateForVM(m.storagePath(), name, state)
+}
+
+func (m *Manager) loadState(name string) (*VMState, error) {
+	if m.db != nil {
+		state, err := dbLoadState(m.db, name)
+		if err == nil {
+			return state, nil
+		}
+	}
+	return LoadState(m.storagePath(), name)
+}
+
+func (m *Manager) listAllConfigs() ([]*VMConfig, error) {
+	if m.db != nil {
+		configs, err := dbListAll(m.db)
+		if err == nil && len(configs) > 0 {
+			return configs, nil
+		}
+	}
+	return ListAll(m.storagePath())
 }
 
 // Create validates and persists a new VMConfig, creating disk images and OVMF vars.
@@ -95,17 +147,17 @@ func (m *Manager) Create(ctx context.Context, cfg *VMConfig) error {
 		})
 	}
 
-	return SaveConfig(m.storagePath(), cfg)
+	return m.saveConfig(cfg)
 }
 
 // Start launches a VM. If foreground is true it blocks; otherwise it detaches.
 func (m *Manager) Start(ctx context.Context, name string, foreground bool) error {
-	cfg, err := LoadConfig(m.storagePath(), name)
+	cfg, err := m.loadConfig(name)
 	if err != nil {
 		return err
 	}
 
-	state, err := LoadState(m.storagePath(), name)
+	state, err := m.loadState(name)
 	if err != nil {
 		return err
 	}
@@ -140,7 +192,7 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 		// First boot: mark install as pending only for cloud-init VMs.
 		if hasCloudInitISO {
 			state.InstallState = InstallStatePending
-			if err := SaveStateForVM(m.storagePath(), name, state); err != nil {
+			if err := m.saveState(name, state); err != nil {
 				return fmt.Errorf("save install state: %w", err)
 			}
 		}
@@ -168,7 +220,7 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 	}
 
 	// Persist any fields assigned during buildMachine (e.g. deterministic MAC).
-	if err := SaveConfig(m.storagePath(), cfg); err != nil {
+	if err := m.saveConfig(cfg); err != nil {
 		return fmt.Errorf("save config: %w", err)
 	}
 
@@ -193,7 +245,7 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 	if cfg.SSHPort > 0 {
 		newState.SSHPort = cfg.SSHPort
 	}
-	if err := SaveStateForVM(m.storagePath(), name, newState); err != nil {
+	if err := m.saveState(name, newState); err != nil {
 		return err
 	}
 
@@ -236,7 +288,7 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 // the QEMU process is still alive — readiness cannot be probed without them.
 // timeout is how long to wait total. Polls every 5s.
 func (m *Manager) WaitReady(ctx context.Context, name string, timeout time.Duration) error {
-	state, err := LoadState(m.storagePath(), name)
+	state, err := m.loadState(name)
 	if err != nil {
 		return err
 	}
@@ -299,7 +351,7 @@ func (m *Manager) WaitReady(ctx context.Context, name string, timeout time.Durat
 				return fmt.Errorf("VM %q did not become ready within %s", name, timeout)
 			}
 			// Reload state in case SSH port changed.
-			if s, lerr := LoadState(m.storagePath(), name); lerr == nil {
+			if s, lerr := m.loadState(name); lerr == nil {
 				state = s
 			}
 			if probe() {
@@ -310,13 +362,13 @@ func (m *Manager) WaitReady(ctx context.Context, name string, timeout time.Durat
 }
 
 func (m *Manager) markReady(name string) error {
-	state, err := LoadState(m.storagePath(), name)
+	state, err := m.loadState(name)
 	if err != nil {
 		return err
 	}
 	state.InstallState = InstallStateReady
 	state.InstalledAt = ptr(time.Now())
-	return SaveStateForVM(m.storagePath(), name, state)
+	return m.saveState(name, state)
 }
 
 func ptr[T any](v T) *T { return &v }
@@ -442,7 +494,7 @@ func ResolveIPFromQGA(qgaSocket string) (string, error) {
 
 // Stop sends a graceful QMP powerdown and waits for the process to exit.
 func (m *Manager) Stop(ctx context.Context, name string) error {
-	state, err := LoadState(m.storagePath(), name)
+	state, err := m.loadState(name)
 	if err != nil {
 		return err
 	}
@@ -484,7 +536,7 @@ func (m *Manager) Stop(ctx context.Context, name string) error {
 	}
 
 	// Unregister hostname if configured.
-	cfg, cfgErr := LoadConfig(m.storagePath(), name)
+	cfg, cfgErr := m.loadConfig(name)
 	if cfgErr == nil && cfg.Hostname != "" {
 		if unregErr := UnregisterHostname(cfg.Hostname); unregErr != nil {
 			m.provider.Logger().Warn("hostname unregistration failed",
@@ -501,7 +553,7 @@ func (m *Manager) Stop(ctx context.Context, name string) error {
 		InstallState: installState,
 		InstalledAt:  state.InstalledAt,
 	}
-	return SaveStateForVM(m.storagePath(), name, preserved)
+	return m.saveState(name, preserved)
 }
 
 // cleanupStaleVM clears persisted running state for a VM whose process died on
@@ -518,14 +570,17 @@ func (m *Manager) cleanupStaleVM(name string, _ *VMConfig, state *VMState) {
 		preserved.InstallState = installState
 		preserved.InstalledAt = state.InstalledAt
 	}
-	_ = SaveStateForVM(m.storagePath(), name, preserved)
+	_ = m.saveState(name, preserved)
 }
 
-// Delete removes a VM directory. Refuses if the VM is running.
+// Delete removes a VM directory and its DB records. Refuses if the VM is running.
 func (m *Manager) Delete(name string) error {
-	state, err := LoadState(m.storagePath(), name)
+	state, err := m.loadState(name)
 	if err == nil && state.Running && isAlive(state.PID) {
 		return fmt.Errorf("VM %q is running; stop it first", name)
+	}
+	if m.db != nil {
+		_ = dbDeleteVM(m.db, name)
 	}
 	return os.RemoveAll(m.vmDir(name))
 }
@@ -537,13 +592,13 @@ type ListEntry struct {
 
 // List returns all VMs with their current state.
 func (m *Manager) List() ([]*ListEntry, error) {
-	configs, err := ListAll(m.storagePath())
+	configs, err := m.listAllConfigs()
 	if err != nil {
 		return nil, err
 	}
 	var entries []*ListEntry
 	for _, cfg := range configs {
-		state, _ := LoadState(m.storagePath(), cfg.Name)
+		state, _ := m.loadState(cfg.Name)
 		if state == nil {
 			state = &VMState{}
 		}
