@@ -530,12 +530,49 @@ func (m *Manager) waitIP(ctx context.Context, cfg *VMConfig, state *VMState, tim
 }
 
 // ResolveIPFromMAC scans the kernel neighbour table for the IP matching a MAC.
+// If the MAC is not found on the first pass, it sends a broadcast ping on each
+// local subnet to trigger ARP responses, then retries the neighbour table once.
 func ResolveIPFromMAC(mac string) (string, error) {
 	out, err := exec.Command("ip", "neigh").Output()
 	if err != nil {
 		return "", fmt.Errorf("ip neigh: %w", err)
 	}
+	if ip, err := parseIPNeigh(string(out), mac); err == nil {
+		return ip, nil
+	}
+
+	// MAC not in neighbour table — ping each local broadcast address to
+	// stimulate ARP, then scan again.
+	pingBroadcasts()
+	out, err = exec.Command("ip", "neigh").Output()
+	if err != nil {
+		return "", fmt.Errorf("ip neigh: %w", err)
+	}
 	return parseIPNeigh(string(out), mac)
+}
+
+// pingBroadcasts sends a single broadcast ping on each local IPv4 subnet so
+// hosts reply with ARP, populating the neighbour table.
+func pingBroadcasts() {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return
+	}
+	for _, addr := range addrs {
+		ipNet, ok := addr.(*net.IPNet)
+		if !ok || ipNet.IP.IsLoopback() || ipNet.IP.To4() == nil {
+			continue
+		}
+		// Compute broadcast: host bits all 1.
+		ip4 := ipNet.IP.To4()
+		mask := ipNet.Mask
+		bcast := make(net.IP, 4)
+		for i := range 4 {
+			bcast[i] = ip4[i] | ^mask[i]
+		}
+		// Fire-and-forget; ignore errors — some interfaces block broadcast ping.
+		_ = exec.Command("ping", "-c1", "-W1", "-b", bcast.String()).Run()
+	}
 }
 
 func parseIPNeigh(output, wantMAC string) (string, error) {
