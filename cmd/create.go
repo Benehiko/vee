@@ -246,6 +246,17 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
 		}
 		if cmd.Flags().Changed("gpu-pci") {
 			cfg.GPU.PCIAddr = createGPUPCI
+			// Auto-detect companion audio device from the same IOMMU group and
+			// add it to ExtraVFIOAddrs if not already listed. GPU passthrough
+			// requires all devices in an IOMMU group to be bound to vfio-pci.
+			if cfg.GPU.PCIAddr != "" && len(cfg.GPU.ExtraVFIOAddrs) == 0 {
+				for _, peer := range gpu.IOMMUGroupPeers(cfg.GPU.PCIAddr) {
+					if gpu.IsAudioDevice(peer) {
+						cfg.GPU.ExtraVFIOAddrs = append(cfg.GPU.ExtraVFIOAddrs, peer.Address)
+						fmt.Printf("Auto-detected companion audio device: %s\n", peer.Address)
+					}
+				}
+			}
 		}
 		if cmd.Flags().Changed("anti-detect") {
 			cfg.GPU.AntiDetect = createAntiDetect
@@ -408,6 +419,18 @@ func init() {
 	})
 	_ = createCmd.RegisterFlagCompletionFunc("gpu-vendor", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 		return []string{"amd", "nvidia", "virtio"}, cobra.ShellCompDirectiveNoFileComp
+	})
+	_ = createCmd.RegisterFlagCompletionFunc("gpu-pci", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+		gpus := gpu.ListGPUAddresses()
+		completions := make([]string, 0, len(gpus))
+		for _, d := range gpus {
+			name := gpu.LookupDeviceName(d.Vendor, d.Device)
+			if name == "" {
+				name = d.Vendor + ":" + d.Device
+			}
+			completions = append(completions, d.Address+"\t"+name)
+		}
+		return completions, cobra.ShellCompDirectiveNoFileComp
 	})
 	_ = createCmd.RegisterFlagCompletionFunc("distro", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 		return images.SupportedDistros(), cobra.ShellCompDirectiveNoFileComp

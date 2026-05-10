@@ -180,9 +180,27 @@ var gpuUnbindCmd = &cobra.Command{
 	},
 }
 
+func completePCIAddresses(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+	devices := gpu.ListGPUAddresses()
+	completions := make([]string, 0, len(devices))
+	for _, d := range devices {
+		name := gpu.LookupDeviceName(d.Vendor, d.Device)
+		if name == "" {
+			name = d.Vendor + ":" + d.Device
+		}
+		completions = append(completions, d.Address+"\t"+name)
+	}
+	return completions, cobra.ShellCompDirectiveNoFileComp
+}
+
 func init() {
 	gpuStatusCmd.Flags().StringVar(&gpuStatusMemory, "memory", "", "VM RAM size (e.g. 16G) to check memlock sufficiency")
 	gpuUnbindCmd.Flags().StringVar(&unbindOriginalDriver, "driver", "", "Original driver to rebind to (auto-detected if omitted)")
+
+	gpuBindCmd.ValidArgsFunction = completePCIAddresses
+	gpuUnbindCmd.ValidArgsFunction = completePCIAddresses
+	gpuStatusCmd.ValidArgsFunction = completePCIAddresses
+
 	gpuCmd.AddCommand(gpuListCmd, gpuBindCmd, gpuUnbindCmd, gpuStatusCmd)
 	rootCmd.AddCommand(gpuCmd)
 }
