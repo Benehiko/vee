@@ -132,8 +132,8 @@ Signed-By: /etc/apt/keyrings/jellyfin.asc" > /etc/apt/sources.list.d/jellyfin.so
 		Memory:   "1G",
 		CPUs:     2,
 		Sockets:  1,
-		Cores:    2,
-		Threads:  1,
+		Cores:    1,
+		Threads:  2,
 		CPUModel: conf.DefaultCPUModel,
 		NIC: vm.NICConfig{
 			Mode:   "bridge",

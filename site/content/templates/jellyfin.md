@@ -22,7 +22,7 @@ Bridge networking is required — the template refuses `--nic-mode=user` because
 | Setting | Value |
 |---------|-------|
 | Memory | 1G |
-| CPUs | 2 |
+| CPUs | 2 (1 core, 2 threads / SMT) |
 | Network | Bridge (`br0`) |
 | Display | Headless |
 | Firewall | `ufw` open on 8096/tcp, 8920/tcp, 1900/udp, 7359/udp, 5353/udp |
