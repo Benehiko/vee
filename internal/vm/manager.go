@@ -348,6 +348,12 @@ func (m *Manager) WaitReady(ctx context.Context, name string, timeout time.Durat
 		if !isAlive(state.PID) {
 			return fmt.Errorf("VM %q process (PID %d) exited immediately — check: vee logs %s", name, state.PID, name)
 		}
+		// Don't mark ready during a first-boot install — the VM is doing its
+		// install run and will shut itself down when done. Marking ready here
+		// would cause the next start to strip the install ISO prematurely.
+		if state.InstallState == InstallStatePending {
+			return nil
+		}
 		return m.markReady(name)
 	}
 

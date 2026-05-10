@@ -110,7 +110,7 @@ func NewGamingArchConfig(ctx context.Context, p provider.Provider, name string, 
 			},
 			{
 				Path:       img.AbsolutePath(),
-				Interface:  "virtio",
+				Interface:  "ide",
 				Media:      "cdrom",
 				Cache:      "none",
 				Readonly:   true,
