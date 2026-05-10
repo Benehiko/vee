@@ -298,6 +298,10 @@ mount "${DISK}2" /mnt
 mkdir -p /mnt/boot/efi
 mount "${DISK}1" /mnt/boot/efi
 
+# Pick fastest mirrors before pacstrap
+pacman -Sy --noconfirm reflector
+reflector --latest 10 --sort rate --save /etc/pacman.d/mirrorlist
+
 # Enable multilib in the live env pacman so pacstrap can pull 32-bit libs
 sed -i '/^\[multilib\]/{n;s/^#//}' /etc/pacman.conf
 sed -i 's/^#\[multilib\]/[multilib]/' /etc/pacman.conf
