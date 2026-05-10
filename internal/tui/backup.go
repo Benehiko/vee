@@ -115,9 +115,9 @@ func (m BackupPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.toggleExpand()
 
 		case "right":
-			m.expand()
+			m.expandAll()
 
-		case "left", "h":
+		case "left":
 			m.collapse()
 
 		case "a":
@@ -132,7 +132,7 @@ func (m BackupPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				n.checked = !anyChecked
 			}
 
-		case ".":
+		case ".", "h":
 			m.showHidden = !m.showHidden
 			// Reset cursor to avoid pointing past the new list length.
 			m.cursor = 0
@@ -215,15 +215,37 @@ func (m *BackupPickerModel) toggleCheck() {
 	vis[m.cursor].checked = !vis[m.cursor].checked
 }
 
-func (m *BackupPickerModel) expand() {
+func (m *BackupPickerModel) expandAll() {
 	vis := m.visibleFiltered()
 	if m.cursor >= len(vis) {
 		return
 	}
-	node := vis[m.cursor]
-	if !node.expanded && hasChildren(m.nodes, node) {
-		node.expanded = true
-		m.setChildrenVisible(node, true)
+	m.expandRecursive(vis[m.cursor])
+}
+
+func (m *BackupPickerModel) expandRecursive(node *dirNode) {
+	if !hasChildren(m.nodes, node) {
+		return
+	}
+	node.expanded = true
+	// Make direct children visible and recurse into them.
+	depth := node.entry.Depth
+	inRange := false
+	for _, n := range m.nodes {
+		if n == node {
+			inRange = true
+			continue
+		}
+		if !inRange {
+			continue
+		}
+		if n.entry.Depth <= depth {
+			break
+		}
+		if n.entry.Depth == depth+1 {
+			n.visible = true
+			m.expandRecursive(n)
+		}
 	}
 }
 
@@ -307,9 +329,58 @@ func (m *BackupPickerModel) toggleExpand() {
 }
 
 // visibleFiltered returns nodes that are visible, pass the hidden filter,
-// and match the current filter string.
+// and match the current filter string (or are ancestors of matching nodes).
+// When a filter is active, results are ordered: prefix matches first, then
+// middle/suffix matches, preserving original order within each group.
 func (m *BackupPickerModel) visibleFiltered() []*dirNode {
-	var out []*dirNode
+	if m.filter == "" {
+		var out []*dirNode
+		for _, n := range m.nodes {
+			if !n.visible {
+				continue
+			}
+			if !m.showHidden && isDotfile(n.entry.Name) {
+				continue
+			}
+			out = append(out, n)
+		}
+		return out
+	}
+
+	// Build set of paths that match directly, plus all their ancestor paths.
+	lf := strings.ToLower(m.filter)
+	ancestorOf := make(map[string]bool) // paths that are ancestors of a match
+	directMatch := make(map[string]int) // path → matchPriority
+	for _, n := range m.nodes {
+		if !m.showHidden && isDotfile(n.entry.Name) {
+			continue
+		}
+		lname := strings.ToLower(n.entry.Name)
+		if idx := strings.Index(lname, lf); idx >= 0 {
+			pri := 0
+			if idx > 0 {
+				pri = 1
+			}
+			directMatch[n.entry.Path] = pri
+			// Mark all ancestor paths.
+			p := n.entry.Path
+			for {
+				parent := p[:strings.LastIndex(p, "/")]
+				if parent == "" || parent == p {
+					break
+				}
+				ancestorOf[parent] = true
+				p = parent
+			}
+		}
+	}
+
+	// Collect matching nodes in two passes: prefix matches then mid matches.
+	// Ancestors are included in whichever group their best descendant belongs to,
+	// but only once, preserving tree order.
+	seen := make(map[string]bool)
+	var prefix, mid []*dirNode
+
 	for _, n := range m.nodes {
 		if !n.visible {
 			continue
@@ -317,12 +388,23 @@ func (m *BackupPickerModel) visibleFiltered() []*dirNode {
 		if !m.showHidden && isDotfile(n.entry.Name) {
 			continue
 		}
-		if m.filter != "" && !strings.Contains(strings.ToLower(n.entry.Name), strings.ToLower(m.filter)) {
+		pri, direct := directMatch[n.entry.Path]
+		isAnc := ancestorOf[n.entry.Path]
+		if !direct && !isAnc {
 			continue
 		}
-		out = append(out, n)
+		if seen[n.entry.Path] {
+			continue
+		}
+		seen[n.entry.Path] = true
+		if direct && pri == 0 {
+			prefix = append(prefix, n)
+		} else {
+			mid = append(mid, n)
+		}
 	}
-	return out
+
+	return append(prefix, mid...)
 }
 
 func isDotfile(name string) bool {
@@ -394,9 +476,9 @@ func (m BackupPickerModel) View() string {
 
 	hidden := ""
 	if !m.showHidden {
-		hidden = "  . show hidden"
+		hidden = "  h show hidden"
 	} else {
-		hidden = "  . hide hidden"
+		hidden = "  h hide hidden"
 	}
 
 	statusLine := fmt.Sprintf("%d selected  %d/%d", len(sel), m.cursor+1, total)
@@ -412,7 +494,7 @@ func (m BackupPickerModel) View() string {
 			filterHint = fmt.Sprintf("  filter:%q  esc clear", m.filter)
 		}
 		b.WriteString(styleBackupHelp.Render(
-			"↑/↓/pgup/pgdn move  →/← expand/collapse  space toggle  a all  / filter  c confirm  q quit" +
+			"↑/↓/pgup/pgdn move  → expand all  ← collapse  space toggle  a all  / filter  c confirm  q quit" +
 				hidden + filterHint,
 		))
 	}

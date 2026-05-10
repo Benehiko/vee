@@ -54,4 +54,5 @@ func init() {
 	rootCmd.AddCommand(tunnelCmd)
 	rootCmd.AddCommand(ipCmd)
 	rootCmd.AddCommand(configCmd)
+	rootCmd.AddCommand(backupCmd)
 }
