@@ -128,15 +128,18 @@ func connectService(cmd *cobra.Command, cfg *vm.VMConfig, state *vm.VMState, s r
 	}
 
 	// SPICE: for bridge-mode VMs the SPICE port is already bound on the host
-	// (QEMU binds it). No tunnel needed — just print the spice:// URL.
+	// (QEMU binds it). No tunnel needed — launch a client directly.
 	if s.Protocol == vm.ServiceSPICE {
 		port := s.Port
 		if port == 0 {
 			return fmt.Errorf("SPICE port not yet assigned (has the VM started?)")
 		}
 		url := fmt.Sprintf("spice://localhost:%d", port)
+		if launchSPICEClient(url) {
+			return nil
+		}
 		fmt.Println(url)
-		fmt.Println("Open with: remote-viewer", url)
+		fmt.Println("No SPICE client found. Install one of: remote-viewer, spicy, remmina")
 		return nil
 	}
 
@@ -216,8 +219,11 @@ func openOrPrint(s resolvedService, port int) error {
 		url = fmt.Sprintf("https://localhost:%d", port)
 	case vm.ServiceSPICE:
 		url = fmt.Sprintf("spice://localhost:%d", port)
+		if launchSPICEClient(url) {
+			return nil
+		}
 		fmt.Println(url)
-		fmt.Println("Open with: remote-viewer", url)
+		fmt.Println("No SPICE client found. Install one of: remote-viewer, spicy, remmina")
 		return nil
 	default:
 		fmt.Printf("localhost:%d\n", port)
@@ -238,6 +244,33 @@ func maybeBrowser(s resolvedService, url string) {
 			return
 		}
 	}
+}
+
+// launchSPICEClient tries known SPICE clients in order of preference and
+// launches the first one found. Returns true if a client was launched.
+func launchSPICEClient(url string) bool {
+	candidates := []struct {
+		bin  string
+		args func(string) []string
+	}{
+		{"remote-viewer", func(u string) []string { return []string{u} }},
+		{"spicy", func(u string) []string {
+			// spicy takes --host and --port separately
+			// parse host:port from spice://localhost:PORT
+			u = strings.TrimPrefix(u, "spice://")
+			host, port, _ := strings.Cut(u, ":")
+			return []string{"--host", host, "--port", port}
+		}},
+		{"remmina", func(u string) []string { return []string{u} }},
+	}
+	for _, c := range candidates {
+		if path, err := exec.LookPath(c.bin); err == nil {
+			fmt.Printf("launching %s\n", c.bin)
+			_ = exec.Command(path, c.args(url)...).Start()
+			return true
+		}
+	}
+	return false
 }
 
 func tunnelResolveIP(cfg *vm.VMConfig, state *vm.VMState) (string, error) {
