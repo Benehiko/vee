@@ -551,8 +551,8 @@ func ResolveIPFromMAC(mac string) (string, error) {
 	return parseIPNeigh(string(out), mac)
 }
 
-// pingBroadcasts sends a single broadcast ping on each local IPv4 subnet so
-// hosts reply with ARP, populating the neighbour table.
+// pingBroadcasts sends a single ICMP echo request to each local IPv4 broadcast
+// address using a raw socket, stimulating ARP replies from guests on the subnet.
 func pingBroadcasts() {
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
@@ -563,16 +563,46 @@ func pingBroadcasts() {
 		if !ok || ipNet.IP.IsLoopback() || ipNet.IP.To4() == nil {
 			continue
 		}
-		// Compute broadcast: host bits all 1.
 		ip4 := ipNet.IP.To4()
 		mask := ipNet.Mask
 		bcast := make(net.IP, 4)
 		for i := range 4 {
 			bcast[i] = ip4[i] | ^mask[i]
 		}
-		// Fire-and-forget; ignore errors — some interfaces block broadcast ping.
-		_ = exec.Command("ping", "-c1", "-W1", "-b", bcast.String()).Run()
+		sendICMPEcho(bcast.String())
 	}
+}
+
+// sendICMPEcho sends a single ICMP echo request to addr using a UDP "ping"
+// socket (unprivileged on Linux 3.11+ with net.ipv4.ping_group_range set).
+// Falls back silently — this is best-effort ARP stimulation only.
+func sendICMPEcho(addr string) {
+	conn, err := net.DialTimeout("ip4:icmp", addr, time.Second)
+	if err != nil {
+		return
+	}
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetDeadline(time.Now().Add(time.Second))
+	// Minimal ICMP echo request: type=8 code=0 checksum id=0 seq=1 data=none.
+	msg := []byte{8, 0, 0, 0, 0, 1, 0, 1}
+	cs := icmpChecksum(msg)
+	msg[2] = byte(cs >> 8)
+	msg[3] = byte(cs)
+	_, _ = conn.Write(msg)
+}
+
+func icmpChecksum(b []byte) uint16 {
+	var sum uint32
+	for i := 0; i+1 < len(b); i += 2 {
+		sum += uint32(b[i])<<8 | uint32(b[i+1])
+	}
+	if len(b)%2 != 0 {
+		sum += uint32(b[len(b)-1]) << 8
+	}
+	for sum>>16 != 0 {
+		sum = (sum & 0xffff) + (sum >> 16)
+	}
+	return ^uint16(sum)
 }
 
 func parseIPNeigh(output, wantMAC string) (string, error) {
