@@ -376,10 +376,44 @@ func (m *BackupPickerModel) visibleFiltered() []*dirNode {
 	}
 
 	// Collect matching nodes in two passes: prefix matches then mid matches.
-	// Ancestors are included in whichever group their best descendant belongs to,
-	// but only once, preserving tree order.
+	// Ancestors of matches are included so tree context is visible.
+	// Expanded nodes always show their visible children, even under a filter,
+	// so that manually-expanded subtrees remain navigable.
 	seen := make(map[string]bool)
+	// expandedPaths tracks paths of included nodes that are expanded.
+	expandedPaths := make(map[string]bool)
 	var prefix, mid []*dirNode
+
+	addNode := func(n *dirNode, pri int) {
+		if seen[n.entry.Path] {
+			return
+		}
+		seen[n.entry.Path] = true
+		if n.expanded {
+			expandedPaths[n.entry.Path] = true
+		}
+		if pri == 0 {
+			prefix = append(prefix, n)
+		} else {
+			mid = append(mid, n)
+		}
+	}
+
+	// isUnderExpanded returns true if any ancestor of n is in expandedPaths.
+	isUnderExpanded := func(n *dirNode) bool {
+		p := n.entry.Path
+		for {
+			slash := strings.LastIndex(p, "/")
+			if slash <= 0 {
+				break
+			}
+			p = p[:slash]
+			if expandedPaths[p] {
+				return true
+			}
+		}
+		return false
+	}
 
 	for _, n := range m.nodes {
 		if !n.visible {
@@ -390,17 +424,15 @@ func (m *BackupPickerModel) visibleFiltered() []*dirNode {
 		}
 		pri, direct := directMatch[n.entry.Path]
 		isAnc := ancestorOf[n.entry.Path]
-		if !direct && !isAnc {
-			continue
-		}
-		if seen[n.entry.Path] {
-			continue
-		}
-		seen[n.entry.Path] = true
-		if direct && pri == 0 {
-			prefix = append(prefix, n)
-		} else {
-			mid = append(mid, n)
+		switch {
+		case direct:
+			addNode(n, pri)
+		case isAnc:
+			addNode(n, 1)
+		case isUnderExpanded(n):
+			// Child of an expanded included node — show it in the same group as
+			// its parent (mid), preserving tree order.
+			addNode(n, 1)
 		}
 	}
 
