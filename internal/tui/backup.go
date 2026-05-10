@@ -256,9 +256,17 @@ func (m *BackupPickerModel) collapse() {
 	}
 	node := vis[m.cursor]
 	if node.expanded {
-		// Collapse this node.
 		node.expanded = false
 		m.setChildrenVisible(node, false)
+		// Children are gone; find the collapsed node in the updated list and
+		// move the cursor there so it doesn't land on an unrelated entry.
+		for i, n := range m.visibleFiltered() {
+			if n == node {
+				m.cursor = i
+				break
+			}
+		}
+		m.clampScroll()
 	} else {
 		// Already collapsed — jump to parent.
 		m.jumpToParent(node)
@@ -322,6 +330,13 @@ func (m *BackupPickerModel) toggleExpand() {
 	if node.expanded {
 		node.expanded = false
 		m.setChildrenVisible(node, false)
+		for i, n := range m.visibleFiltered() {
+			if n == node {
+				m.cursor = i
+				break
+			}
+		}
+		m.clampScroll()
 	} else {
 		node.expanded = true
 		m.setChildrenVisible(node, true)
