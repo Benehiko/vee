@@ -122,13 +122,13 @@ func sshRun(t *testing.T, addr, user, privKeyPath, command string) string {
 	if err != nil {
 		t.Fatalf("ssh dial %s: %v", addr, err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	sess, err := client.NewSession()
 	if err != nil {
 		t.Fatalf("ssh new session: %v", err)
 	}
-	defer sess.Close()
+	defer func() { _ = sess.Close() }()
 
 	out, err := sess.CombinedOutput(command)
 	if err != nil {
@@ -159,12 +159,12 @@ func sshRunLenient(t *testing.T, addr, user, privKeyPath, command string) string
 	if err != nil {
 		return fmt.Sprintf("dial error: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	sess, err := client.NewSession()
 	if err != nil {
 		return fmt.Sprintf("session error: %v", err)
 	}
-	defer sess.Close()
+	defer func() { _ = sess.Close() }()
 	out, _ := sess.CombinedOutput(command)
 	return strings.TrimSpace(string(out))
 }
