@@ -74,10 +74,9 @@ var (
 	styleWizDim    = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 )
 
-func newConfigModel(mgr *vm.Manager, p provider.Provider, autoStart bool) configModel {
+func newConfigModel(mgr *vm.Manager, p provider.Provider, autoStart bool, name string) configModel {
 	nameIn := textinput.New()
 	nameIn.Placeholder = "e.g. arch-gaming"
-	nameIn.Focus()
 
 	ovmfIn := textinput.New()
 	ovmfIn.Placeholder = filepath.Join(p.Config().StoragePath, "OVMF_VARS.fd")
@@ -90,10 +89,18 @@ func newConfigModel(mgr *vm.Manager, p provider.Provider, autoStart bool) config
 	macIn := textinput.New()
 	macIn.Placeholder = "leave blank for deterministic"
 
+	firstStep := stepName
+	if name != "" {
+		nameIn.SetValue(name)
+		firstStep = stepGPU
+	} else {
+		nameIn.Focus()
+	}
+
 	return configModel{
 		prov:        p,
 		mgr:         mgr,
-		step:        stepName,
+		step:        firstStep,
 		autoStart:   autoStart,
 		nameInput:   nameIn,
 		ovmfInput:   ovmfIn,
@@ -441,9 +448,10 @@ func (m configModel) doSubmit() tea.Cmd {
 }
 
 // RunConfigWizard launches the passthrough creation wizard as a standalone program.
-func RunConfigWizard(ctx context.Context, p provider.Provider, autoStart bool) error {
+// If name is non-empty the wizard skips the name step and pre-fills it.
+func RunConfigWizard(ctx context.Context, p provider.Provider, autoStart bool, name string) error {
 	mgr := vm.NewManager(p)
-	m := newConfigModel(mgr, p, autoStart)
+	m := newConfigModel(mgr, p, autoStart, name)
 	prog := tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(ctx))
 	_, err := prog.Run()
 	return err

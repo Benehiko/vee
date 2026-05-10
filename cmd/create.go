@@ -12,6 +12,7 @@ import (
 	"github.com/Benehiko/vee/internal/templates"
 	"github.com/Benehiko/vee/internal/tui"
 	"github.com/Benehiko/vee/internal/vm"
+	"github.com/Benehiko/vee/provider"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -68,8 +69,15 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
   vee create nas --template truenas \
     --data-disk /dev/disk/by-id/ata-ST22000NM000C_ZXA0S3H6:EXOS22TB-A \
     --data-disk /dev/disk/by-id/ata-ST22000NM000C_ZXA0WD9J:EXOS22TB-B`,
-	Args: cobra.ExactArgs(1),
+	Args: cobra.RangeArgs(0, 1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if len(args) == 0 {
+			p, err := provider.NewProvider()
+			if err != nil {
+				return err
+			}
+			return tui.Run(cmd.Context(), p)
+		}
 		name := args[0]
 
 		var sshKeys []string
@@ -105,7 +113,7 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
 			cfg = templates.NewGamingConfig(prov, name, createGPUPCI, createVirtiofsDir)
 		case "passthrough":
 			if createNVMeDev == "" || createOVMFVars == "" {
-				return tui.RunConfigWizard(cmd.Context(), prov, !createNoStart)
+				return tui.RunConfigWizard(cmd.Context(), prov, !createNoStart, name)
 			}
 			cfg = templates.NewPassthroughConfig(prov, name, createNVMeDev, createOVMFVars, createGPUPCI, createVirtiofsDir, createNICMAC)
 		case "torrent":
