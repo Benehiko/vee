@@ -62,6 +62,7 @@ func runStartSpinner(cmd *cobra.Command, mgr *vm.Manager, name string) error {
 			return fmt.Errorf("wait ready: %w", err)
 		}
 		fmt.Printf("VM %q is ready\n", name)
+		printTemplateHints(mgr, name)
 		return nil
 	}
 
@@ -103,7 +104,22 @@ func runStartSpinner(cmd *cobra.Command, mgr *vm.Manager, name string) error {
 		return fmt.Errorf("wait ready: %w", final.err)
 	}
 	fmt.Printf("VM %q is ready\n", name)
+	printTemplateHints(mgr, name)
 	return nil
+}
+
+// printTemplateHints prints actionable next-step hints for specific templates.
+func printTemplateHints(mgr *vm.Manager, name string) {
+	cfg, err := vm.LoadConfig(prov.Config().StoragePath, name)
+	if err != nil {
+		return
+	}
+	switch cfg.Template {
+	case "docker":
+		fmt.Printf("\nDocker daemon is ready. Point your client at this VM:\n")
+		fmt.Printf("  export DOCKER_HOST=tcp://localhost:2375\n")
+		fmt.Printf("  # fish:  set -x DOCKER_HOST tcp://localhost:2375\n")
+	}
 }
 
 type (
