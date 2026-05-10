@@ -6,7 +6,10 @@ GO        := go
 GOFLAGS   := -mod=vendor
 LDFLAGS   := -s -w
 
-.PHONY: all build install clean e2e
+CONTAINER_RUNTIME := $(shell command -v nerdctl 2>/dev/null || command -v docker 2>/dev/null)
+HUGO_IMAGE        := hugomods/hugo:go-git-0.147.0
+
+.PHONY: all build install clean e2e site
 
 all: build
 
@@ -103,6 +106,13 @@ _add_to_path:
 
 e2e: build
 	VEE_E2E=1 VEE_BIN=$(CURDIR)/$(BINARY) $(GO) test $(GOFLAGS) -v -timeout 20m -tags e2e ./e2e/...
+
+site:
+	$(CONTAINER_RUNTIME) run --rm \
+		-v $(CURDIR)/site:/src \
+		-p 1313:1313 \
+		$(HUGO_IMAGE) \
+		hugo server --bind 0.0.0.0 --baseURL http://localhost:1313/vee/
 
 clean:
 	rm -f $(BINARY)
