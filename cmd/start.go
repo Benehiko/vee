@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/Benehiko/vee/internal/journal"
 	"github.com/Benehiko/vee/internal/vm"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
@@ -42,6 +44,7 @@ var startCmd = &cobra.Command{
 		if startForeground {
 			return nil
 		}
+		maybeStartJournalListener(cmd, name)
 		return runStartSpinner(cmd, mgr, name)
 	},
 }
@@ -119,6 +122,34 @@ func printTemplateHints(mgr *vm.Manager, name string) {
 		fmt.Printf("\nDocker daemon is ready. Point your client at this VM:\n")
 		fmt.Printf("  export DOCKER_HOST=tcp://localhost:2375\n")
 		fmt.Printf("  # fish:  set -x DOCKER_HOST tcp://localhost:2375\n")
+	case "gaming-arch":
+		fmt.Printf("\nGuest journal forwarding: vee logs %s --journal -f\n", name)
+	}
+}
+
+// maybeStartJournalListener starts a systemd-journal-remote listener in the
+// background for templates that forward guest journals (gaming-arch).
+// The listener runs until ctx is cancelled; errors are logged but not fatal.
+func maybeStartJournalListener(cmd *cobra.Command, name string) {
+	cfg, err := vm.LoadConfig(prov.Config().StoragePath, name)
+	if err != nil || cfg.Template != "gaming-arch" {
+		return
+	}
+
+	dir := filepath.Join(prov.Config().StoragePath, name, "journal")
+	port, err := journal.FreePort()
+	if err != nil {
+		prov.Logger().Sugar().Warnf("journal listener: %v", err)
+		return
+	}
+
+	l := journal.NewListener(name, dir, port)
+	if err := l.Start(cmd.Context()); err != nil {
+		prov.Logger().Sugar().Warnf("journal listener: %v", err)
+		return
+	}
+	if port != 19532 {
+		fmt.Printf("Journal listener on port %d (standard port busy)\n", port)
 	}
 }
 

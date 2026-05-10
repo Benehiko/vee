@@ -263,12 +263,13 @@ net.core.wmem_max=26214400`
 		Permissions: "0644",
 	})
 
-	// systemd-journal-remote: forward guest journals to host
-	journalRemoteConf := `[Remote]
-ServerURL=http://10.0.2.2:19532/`
+	// systemd-journal-upload: push guest journals to the vee host listener.
+	// The host IP is resolved dynamically at boot via the default gateway.
+	journalUploadConf := `[Upload]
+URL=http://vee-host:19532`
 	writeFiles = append(writeFiles, vm.CloudInitWriteFile{
-		Path:        "/etc/systemd/journal-remote.conf",
-		Content:     journalRemoteConf,
+		Path:        "/etc/systemd/journal-upload.conf",
+		Content:     journalUploadConf,
 		Permissions: "0644",
 	})
 
@@ -298,8 +299,10 @@ Session=plasma-wayland`, user)
 		// Rebuild grub config
 		`mkdir -p /etc/default/grub.d`,
 		`grub-mkconfig -o /boot/grub/grub.cfg`,
-		// Enable journal-remote upload
-		`systemctl enable --now systemd-journal-remote`,
+		// Resolve the default gateway and register it as "vee-host" in /etc/hosts,
+		// then enable journal-upload so guest journals stream to the vee host listener.
+		`bash -c 'GW=$(ip route show default | awk "/default/{print \$3; exit}"); if [ -n "$GW" ]; then sed -i "/vee-host/d" /etc/hosts; echo "$GW vee-host" >> /etc/hosts; fi'`,
+		`systemctl enable --now systemd-journal-upload`,
 		// Set gamer user password placeholder (user should change on first login)
 		`echo '`+user+`:vee' | chpasswd`,
 		// gamemode permissions
