@@ -111,8 +111,14 @@ func (m BackupPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case " ":
 			m.toggleCheck()
 
-		case "enter", "right", "l":
+		case "enter", "l":
 			m.toggleExpand()
+
+		case "right":
+			m.expand()
+
+		case "left", "h":
+			m.collapse()
 
 		case "a":
 			anyChecked := false
@@ -209,18 +215,39 @@ func (m *BackupPickerModel) toggleCheck() {
 	vis[m.cursor].checked = !vis[m.cursor].checked
 }
 
-func (m *BackupPickerModel) toggleExpand() {
+func (m *BackupPickerModel) expand() {
 	vis := m.visibleFiltered()
 	if m.cursor >= len(vis) {
 		return
 	}
 	node := vis[m.cursor]
-	node.expanded = !node.expanded
-	depth := node.entry.Depth
+	if !node.expanded && hasChildren(m.nodes, node) {
+		node.expanded = true
+		m.setChildrenVisible(node, true)
+	}
+}
 
+func (m *BackupPickerModel) collapse() {
+	vis := m.visibleFiltered()
+	if m.cursor >= len(vis) {
+		return
+	}
+	node := vis[m.cursor]
+	if node.expanded {
+		// Collapse this node.
+		node.expanded = false
+		m.setChildrenVisible(node, false)
+	} else {
+		// Already collapsed — jump to parent.
+		m.jumpToParent(node)
+	}
+}
+
+func (m *BackupPickerModel) setChildrenVisible(parent *dirNode, show bool) {
+	depth := parent.entry.Depth
 	inRange := false
 	for _, n := range m.nodes {
-		if n == node {
+		if n == parent {
 			inRange = true
 			continue
 		}
@@ -231,10 +258,51 @@ func (m *BackupPickerModel) toggleExpand() {
 			break
 		}
 		if n.entry.Depth == depth+1 {
-			n.visible = node.expanded
-		} else if !node.expanded {
+			n.visible = show
+		} else if !show {
 			n.visible = false
 		}
+	}
+}
+
+func (m *BackupPickerModel) jumpToParent(node *dirNode) {
+	vis := m.visibleFiltered()
+	depth := node.entry.Depth
+	// Walk backward in the full node list from this node's position to find the parent.
+	found := false
+	for i := len(m.nodes) - 1; i >= 0; i-- {
+		if m.nodes[i] == node {
+			found = true
+			continue
+		}
+		if !found {
+			continue
+		}
+		if m.nodes[i].entry.Depth < depth {
+			// Found parent — locate it in vis.
+			for j, v := range vis {
+				if v == m.nodes[i] {
+					m.cursor = j
+					m.clampScroll()
+					return
+				}
+			}
+			return
+		}
+	}
+}
+
+func (m *BackupPickerModel) toggleExpand() {
+	if m.cursor >= len(m.visibleFiltered()) {
+		return
+	}
+	node := m.visibleFiltered()[m.cursor]
+	if node.expanded {
+		node.expanded = false
+		m.setChildrenVisible(node, false)
+	} else {
+		node.expanded = true
+		m.setChildrenVisible(node, true)
 	}
 }
 
@@ -344,7 +412,7 @@ func (m BackupPickerModel) View() string {
 			filterHint = fmt.Sprintf("  filter:%q  esc clear", m.filter)
 		}
 		b.WriteString(styleBackupHelp.Render(
-			"↑/↓/pgup/pgdn move  space toggle  enter expand  a all  / filter  c confirm  q quit" +
+			"↑/↓/pgup/pgdn move  →/← expand/collapse  space toggle  a all  / filter  c confirm  q quit" +
 				hidden + filterHint,
 		))
 	}
