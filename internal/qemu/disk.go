@@ -381,5 +381,8 @@ func (q *Disk) Args() []string {
 	if q.Media == DiskMediaDisk {
 		driveArgs = append(driveArgs, "format="+string(q.Format))
 	}
+	if q.Cache != "" {
+		driveArgs = append(driveArgs, "cache="+string(q.Cache))
+	}
 	return []string{"-drive", strings.Join(driveArgs, ",")}
 }

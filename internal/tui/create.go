@@ -382,7 +382,11 @@ func buildConfig(ctx context.Context, p provider.Provider, mgr *vm.Manager, name
 			return nil, err
 		}
 	case "windows":
-		cfg = templates.NewWindowsConfig(p, name)
+		var err error
+		cfg, err = templates.NewWindowsConfig(ctx, p, images.Windows11, name)
+		if err != nil {
+			return nil, err
+		}
 	default:
 		conf := p.Config()
 		cfg = &vm.VMConfig{

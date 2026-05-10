@@ -139,7 +139,15 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
 				return err
 			}
 		case "windows":
-			cfg = templates.NewWindowsConfig(prov, name)
+			winVersion := images.Windows11
+			if createDistroVersion != "" && createDistroVersion != "latest" {
+				winVersion = images.WindowsVersion(createDistroVersion)
+			}
+			var err error
+			cfg, err = templates.NewWindowsConfig(cmd.Context(), prov, winVersion, name)
+			if err != nil {
+				return err
+			}
 		case "ubuntu-server":
 			version := images.UbuntuVersion(createDistroVersion)
 			if createDistroVersion == "" || createDistroVersion == "latest" {
