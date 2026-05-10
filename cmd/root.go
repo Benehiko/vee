@@ -11,6 +11,7 @@ import (
 var (
 	prov       provider.Provider
 	configPath string
+	verbose    bool
 )
 
 var rootCmd = &cobra.Command{
@@ -18,7 +19,7 @@ var rootCmd = &cobra.Command{
 	Short: "QEMU VM manager",
 	Long:  "Vee manages QEMU virtual machines with GPU passthrough, virtiofs sharing, and cloud-init templates.",
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-		p, err := provider.NewProvider()
+		p, err := provider.New(verbose)
 		if err != nil {
 			return err
 		}
@@ -26,11 +27,7 @@ var rootCmd = &cobra.Command{
 		return nil
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
-		p, err := provider.NewProviderSilent()
-		if err != nil {
-			return err
-		}
-		return tui.Run(cmd.Context(), p)
+		return tui.Run(cmd.Context(), prov)
 	},
 }
 
@@ -42,6 +39,7 @@ func Execute() {
 
 func init() {
 	rootCmd.PersistentFlags().StringVar(&configPath, "config", "", "config file (default ~/.vee/config.yaml)")
+	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Stream logs to stderr (default: file only at ~/.vee/logs/vee.log)")
 	rootCmd.AddCommand(createCmd)
 	rootCmd.AddCommand(startCmd)
 	rootCmd.AddCommand(stopCmd)

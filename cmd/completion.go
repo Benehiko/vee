@@ -10,7 +10,7 @@ func completeVMNames(_ *cobra.Command, args []string, _ string) ([]string, cobra
 	if len(args) > 0 {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
-	p, err := provider.NewProviderSilent()
+	p, err := provider.New(false)
 	if err != nil {
 		return nil, cobra.ShellCompDirectiveError
 	}

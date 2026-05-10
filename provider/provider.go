@@ -23,14 +23,12 @@ type provider struct {
 	db     *sql.DB
 }
 
-func NewProvider() (Provider, error) {
-	return newProvider(false)
-}
-
-// NewProviderSilent returns a Provider that logs only to file, not stderr.
-// Use this when a TUI owns the terminal.
-func NewProviderSilent() (Provider, error) {
-	return newProvider(true)
+// New returns a Provider. When verbose is false, info-level logs go only to
+// ~/.vee/logs/vee.log; when true, they are also streamed to stderr. CLI
+// commands pass false by default so spinners and step output stay clean; pass
+// true via the global --verbose flag for debugging.
+func New(verbose bool) (Provider, error) {
+	return newProvider(!verbose)
 }
 
 func newProvider(silent bool) (Provider, error) {
