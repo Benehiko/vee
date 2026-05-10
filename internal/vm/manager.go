@@ -315,7 +315,8 @@ func (m *Manager) WaitReady(ctx context.Context, name string, timeout time.Durat
 	}
 
 	// No probe configured — just confirm the process is alive and return.
-	if state.SSHPort == 0 && state.QMPSocket == "" {
+	// QMP socket is always present; QGA socket only when GuestAgent=true.
+	if state.SSHPort == 0 && state.QGASocket == "" {
 		if !isAlive(state.PID) {
 			return fmt.Errorf("VM %q process (PID %d) exited immediately — check: vee logs %s", name, state.PID, name)
 		}
@@ -337,10 +338,10 @@ func (m *Manager) WaitReady(ctx context.Context, name string, timeout time.Durat
 			}
 		}
 
-		// QMP guest-agent probe (works for non-headless too).
-		if state.QMPSocket != "" {
-			client, qmpErr := qemu.NewQMPClient(state.QMPSocket, 2*time.Second)
-			if qmpErr == nil {
+		// QGA guest-ping probe — requires GuestAgent=true in the VM config.
+		if state.QGASocket != "" {
+			client, qgaErr := qemu.NewQGAClient(state.QGASocket, 2*time.Second)
+			if qgaErr == nil {
 				pingErr := client.GuestPing()
 				_ = client.Close()
 				if pingErr == nil {
