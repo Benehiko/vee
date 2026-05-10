@@ -348,10 +348,16 @@ func (m *BackupPickerModel) toggleExpand() {
 	}
 }
 
-// visibleFiltered returns nodes that are visible, pass the hidden filter,
-// and match the current filter string (or are ancestors of matching nodes).
-// When a filter is active, results are ordered: prefix matches first, then
-// middle/suffix matches, preserving original order within each group.
+// visibleFiltered returns the nodes to display.
+//
+// No filter: nodes with visible=true that pass the dotfile gate.
+//
+// With filter: tree order is preserved. A node is included if:
+//   - its name contains the filter string (direct match), OR
+//   - it is an ancestor of a direct match (context breadcrumb).
+//
+// Dotfile visibility is respected in both modes. The visible flag is ignored
+// when a filter is active so deep/collapsed nodes are still searchable.
 func (m *BackupPickerModel) visibleFiltered() []*dirNode {
 	if m.filter == "" {
 		var out []*dirNode
@@ -367,98 +373,41 @@ func (m *BackupPickerModel) visibleFiltered() []*dirNode {
 		return out
 	}
 
-	// Build set of paths that match directly, plus all their ancestor paths.
 	lf := strings.ToLower(m.filter)
-	ancestorOf := make(map[string]bool) // paths that are ancestors of a match
-	directMatch := make(map[string]int) // path → matchPriority
+
+	// Pass 1: find all direct matches and collect their ancestor paths.
+	ancestorOf := make(map[string]bool)
+	directMatch := make(map[string]bool)
 	for _, n := range m.nodes {
 		if !m.showHidden && isDotfile(n.entry.Name) {
 			continue
 		}
-		lname := strings.ToLower(n.entry.Name)
-		if idx := strings.Index(lname, lf); idx >= 0 {
-			pri := 0
-			if idx > 0 {
-				pri = 1
-			}
-			directMatch[n.entry.Path] = pri
-			// Mark all ancestor paths.
+		if strings.Contains(strings.ToLower(n.entry.Name), lf) {
+			directMatch[n.entry.Path] = true
 			p := n.entry.Path
 			for {
-				parent := p[:strings.LastIndex(p, "/")]
-				if parent == "" || parent == p {
+				slash := strings.LastIndex(p, "/")
+				if slash <= 0 {
 					break
 				}
-				ancestorOf[parent] = true
-				p = parent
+				p = p[:slash]
+				ancestorOf[p] = true
 			}
 		}
 	}
 
-	// Build a path→node index for ancestor lookup.
-	nodeByPath := make(map[string]*dirNode, len(m.nodes))
-	for _, n := range m.nodes {
-		nodeByPath[n.entry.Path] = n
-	}
-
-	// isCollapsedAbove returns true if any ancestor in the tree is not expanded,
-	// meaning this node would be hidden in normal (no-filter) navigation.
-	isCollapsedAbove := func(n *dirNode) bool {
-		p := n.entry.Path
-		for {
-			slash := strings.LastIndex(p, "/")
-			if slash <= 0 {
-				break
-			}
-			p = p[:slash]
-			if anc, ok := nodeByPath[p]; ok && !anc.expanded {
-				return true
-			}
-		}
-		return false
-	}
-
-	seen := make(map[string]bool)
-	var prefix, mid []*dirNode
-
-	addNode := func(n *dirNode, pri int) {
-		if seen[n.entry.Path] {
-			return
-		}
-		seen[n.entry.Path] = true
-		if pri == 0 {
-			prefix = append(prefix, n)
-		} else {
-			mid = append(mid, n)
-		}
-	}
-
-	// Single pass over all nodes in order.
-	// Direct matches always surface (even if collapsed), bringing their ancestor
-	// chain with them. Ancestors only show if not hidden by a collapsed ancestor
-	// above them — i.e. they would be visible in the normal tree.
+	// Pass 2: emit in original tree order — ancestors first, then their matched
+	// descendants. Tree order is preserved so indentation is correct.
+	var out []*dirNode
 	for _, n := range m.nodes {
 		if !m.showHidden && isDotfile(n.entry.Name) {
 			continue
 		}
-		pri, direct := directMatch[n.entry.Path]
-		isAnc := ancestorOf[n.entry.Path]
-		switch {
-		case direct:
-			addNode(n, pri)
-		case isAnc && !isCollapsedAbove(n):
-			addNode(n, 1)
-		case n.visible && !direct && !isAnc:
-			// Visible non-match child of an expanded ancestor-of-match.
-			// Only include if its parent is already in seen (was added as ancestor).
-			slash := strings.LastIndex(n.entry.Path, "/")
-			if slash > 0 && seen[n.entry.Path[:slash]] {
-				addNode(n, 1)
-			}
+		if directMatch[n.entry.Path] || ancestorOf[n.entry.Path] {
+			out = append(out, n)
 		}
 	}
-
-	return append(prefix, mid...)
+	return out
 }
 
 func isDotfile(name string) bool {
@@ -483,7 +432,7 @@ func (m BackupPickerModel) View() string {
 
 	vis := m.visibleFiltered()
 	total := len(vis)
-	base := minDepth(m.nodes)
+	base := minDepth(vis)
 
 	// Viewport slice
 	end := min(m.scrollOff+m.height, total)
