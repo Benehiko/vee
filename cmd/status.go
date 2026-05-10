@@ -1,14 +1,19 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"text/tabwriter"
 	"time"
 
+	"github.com/Benehiko/vee/internal/vm"
 	"github.com/spf13/cobra"
 )
+
+var statusWatch bool
 
 var statusCmd = &cobra.Command{
 	Use:               "status <name>",
@@ -35,7 +40,11 @@ var statusCmd = &cobra.Command{
 		printRow("cpus", fmt.Sprintf("%d", entry.Config.CPUs))
 
 		if entry.State.Running {
-			printRow("status", "running")
+			status := "running"
+			if entry.State.InstallState == vm.InstallStatePending {
+				status = "installing"
+			}
+			printRow("status", status)
 			printRow("pid", fmt.Sprintf("%d", entry.State.PID))
 			if entry.State.StartedAt != nil && !entry.State.StartedAt.IsZero() {
 				uptime := time.Since(*entry.State.StartedAt).Truncate(time.Second)
@@ -52,6 +61,16 @@ var statusCmd = &cobra.Command{
 		}
 
 		_ = w.Flush()
+
+		// Cloud-init progress — shown when install is pending and VM is reachable via SSH.
+		if entry.State.Running && entry.State.InstallState == vm.InstallStatePending {
+			fmt.Println()
+			if statusWatch {
+				return watchCloudInitProgress(entry.Config, entry.State)
+			}
+			printCloudInitProgress(entry.Config, entry.State)
+			return nil
+		}
 
 		// QGA section — only if VM is running and has a QGA socket.
 		if !entry.State.Running || entry.State.QGASocket == "" {
@@ -98,7 +117,6 @@ var statusCmd = &cobra.Command{
 		}
 		_ = w2.Flush()
 
-		// Hostname and OS info via guest-exec.
 		hostname, _, _, herr := client.RunCommand("/bin/hostname", nil)
 		if herr == nil {
 			fmt.Printf("\nhostname: %s", hostname)
@@ -118,6 +136,126 @@ var statusCmd = &cobra.Command{
 	},
 }
 
+// cloudInitStatus mirrors the relevant fields of /run/cloud-init/status.json.
+type cloudInitStatus struct {
+	V1 struct {
+		Modules map[string]struct {
+			Errors []string `json:"errors"`
+			Start  *float64 `json:"start"`
+			End    *float64 `json:"end"`
+		} `json:"stage-module-results"`
+		Stage  string   `json:"stage"`
+		Errors []string `json:"errors"`
+	} `json:"v1"`
+}
+
+func sshRunQuiet(cfg *vm.VMConfig, state *vm.VMState, command string) (string, error) {
+	ip, err := resolveVMIP(cfg, state)
+	if err != nil {
+		return "", err
+	}
+	home, _ := os.UserHomeDir()
+	identity := home + "/.vee/ssh/id_ed25519"
+
+	user := cfg.SSHUser
+	if user == "" && cfg.CloudInit != nil {
+		user = cfg.CloudInit.DefaultUser
+	}
+	if user == "" {
+		user = "root"
+	}
+
+	args := []string{
+		"-i", identity,
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "ConnectTimeout=3",
+		"-o", "LogLevel=ERROR",
+		user + "@" + ip,
+		command,
+	}
+	out, err := exec.Command("ssh", args...).Output()
+	return strings.TrimSpace(string(out)), err
+}
+
+func resolveVMIP(cfg *vm.VMConfig, state *vm.VMState) (string, error) {
+	if cfg.NIC.MAC != "" {
+		if ip, err := vm.ResolveIPFromMAC(cfg.NIC.MAC); err == nil {
+			return ip, nil
+		}
+	}
+	if state.QGASocket != "" {
+		return vm.ResolveIPFromQGA(state.QGASocket)
+	}
+	return "", fmt.Errorf("cannot resolve VM IP")
+}
+
+func fetchCloudInitStatus(cfg *vm.VMConfig, state *vm.VMState) (*cloudInitStatus, error) {
+	out, err := sshRunQuiet(cfg, state, "cat /run/cloud-init/status.json 2>/dev/null || echo '{}'")
+	if err != nil {
+		return nil, err
+	}
+	var s cloudInitStatus
+	if jsonErr := json.Unmarshal([]byte(out), &s); jsonErr != nil {
+		return nil, jsonErr
+	}
+	return &s, nil
+}
+
+func printCloudInitProgress(cfg *vm.VMConfig, state *vm.VMState) {
+	s, err := fetchCloudInitStatus(cfg, state)
+	if err != nil {
+		fmt.Printf("cloud-init: unreachable (%v)\n", err)
+		fmt.Println("  VM may still be booting — check the SPICE console")
+		return
+	}
+
+	stage := s.V1.Stage
+	if stage == "" {
+		stage = "booting"
+	}
+	fmt.Printf("cloud-init stage: %s\n", stage)
+
+	done, total := 0, 0
+	for _, m := range s.V1.Modules {
+		total++
+		if m.End != nil {
+			done++
+		}
+	}
+	if total > 0 {
+		width := 40
+		filled := width * done / total
+		bar := strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
+		fmt.Printf("modules: [%s] %d/%d\n", bar, done, total)
+	}
+	if len(s.V1.Errors) > 0 {
+		fmt.Printf("errors: %s\n", strings.Join(s.V1.Errors, ", "))
+	}
+}
+
+func watchCloudInitProgress(cfg *vm.VMConfig, state *vm.VMState) error {
+	fmt.Println("watching cloud-init progress (Ctrl+C to stop)…")
+	fmt.Println()
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		// Clear previous output with ANSI escape (4 lines up).
+		fmt.Print("\033[4A\033[J")
+		printCloudInitProgress(cfg, state)
+
+		// Check if done.
+		out, err := sshRunQuiet(cfg, state, "cloud-init status 2>/dev/null")
+		if err == nil && strings.Contains(out, "done") {
+			fmt.Println("\ncloud-init: complete")
+			return nil
+		}
+
+		<-ticker.C
+	}
+}
+
 func init() {
+	statusCmd.Flags().BoolVarP(&statusWatch, "watch", "w", false, "Watch cloud-init progress live (during install)")
 	rootCmd.AddCommand(statusCmd)
 }
