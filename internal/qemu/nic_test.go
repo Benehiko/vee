@@ -1,6 +1,7 @@
 package qemu_test
 
 import (
+	"database/sql"
 	"strings"
 	"testing"
 
@@ -40,6 +41,7 @@ func newTestProvider(t *testing.T) provider.Provider {
 
 func (p *testProvider) Config() *provider.Config { return p.cfg }
 func (p *testProvider) Logger() *zap.Logger      { return p.log }
+func (p *testProvider) DB() *sql.DB              { return nil }
 
 func TestDeterministicMAC(t *testing.T) {
 	mac1 := qemu.DeterministicMAC("my-vm")

@@ -1,21 +1,26 @@
 package provider
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+
+	"github.com/Benehiko/vee/internal/db"
 )
 
 type Provider interface {
 	Config() *Config
 	Logger() *zap.Logger
+	DB() *sql.DB
 }
 
 type provider struct {
 	config *Config
 	logger *zap.Logger
+	db     *sql.DB
 }
 
 func NewProvider() (Provider, error) {
@@ -43,7 +48,17 @@ func newProvider(silent bool) (Provider, error) {
 		return nil, err
 	}
 
-	return &provider{config: config, logger: logger}, nil
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	dbPath := filepath.Join(home, ".vee", "vee.db")
+	database, err := db.Open(dbPath, config.StoragePath)
+	if err != nil {
+		return nil, err
+	}
+
+	return &provider{config: config, logger: logger, db: database}, nil
 }
 
 func newLogger(logPath string, silent bool) (*zap.Logger, error) {
@@ -86,4 +101,8 @@ func (p *provider) Config() *Config {
 
 func (p *provider) Logger() *zap.Logger {
 	return p.logger
+}
+
+func (p *provider) DB() *sql.DB {
+	return p.db
 }
