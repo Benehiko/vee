@@ -1,6 +1,7 @@
 package gpu
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,4 +64,32 @@ func IOMMUGroupPeers(addr string) []PCIDevice {
 func IsAudioDevice(d PCIDevice) bool {
 	classHex := strings.ToLower(strings.TrimPrefix(d.Class, "0x"))
 	return strings.HasPrefix(classHex, "0403") || strings.HasPrefix(classHex, "0480")
+}
+
+// SiblingFunctions returns the other PCI functions on the same physical
+// device as addr (i.e. same domain:bus:slot, different function number).
+// Unlike IOMMUGroupPeers this is independent of IOMMU group membership —
+// kernels with PCIe ACS support can place sibling functions in different
+// groups, but qemu still needs them all attached together so that bus-level
+// FLR works. Returns nil if addr is malformed or has no siblings on the host.
+func SiblingFunctions(addr string) []PCIDevice {
+	pciAddr := normalizePCIAddr(addr)
+	dot := strings.LastIndex(pciAddr, ".")
+	if dot < 0 || dot+2 > len(pciAddr) {
+		return nil
+	}
+	prefix := pciAddr[:dot+1]
+
+	var siblings []PCIDevice
+	for fn := 0; fn < 8; fn++ {
+		sibAddr := fmt.Sprintf("%s%d", prefix, fn)
+		if sibAddr == pciAddr {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join("/sys/bus/pci/devices", sibAddr)); err != nil {
+			continue
+		}
+		siblings = append(siblings, readPCIDevice(sibAddr))
+	}
+	return siblings
 }

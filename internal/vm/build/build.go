@@ -244,11 +244,24 @@ func applyOverrides(cfg *vm.VMConfig, opts Opts, prov provider.Provider) {
 	}
 	if opts.GPUPCI != "" {
 		cfg.GPU.PCIAddr = opts.GPUPCI
-		// Auto-detect companion audio device from the same IOMMU group and
-		// add it to ExtraVFIOAddrs if not already listed. GPU passthrough
-		// requires all devices in an IOMMU group to be bound to vfio-pci.
+		// Auto-detect the companion audio function and add it to
+		// ExtraVFIOAddrs. GPU passthrough requires every device qemu will
+		// touch during reset to be owned by the same VFIO container, so the
+		// HDMI/DP audio function on a discrete GPU must be attached
+		// alongside the VGA function. We look in two places: same IOMMU
+		// group (typical), and same physical device (kernels with PCIe ACS
+		// can place sibling functions in separate groups — without this
+		// fallback qemu fails with "depends on group N which is not owned"
+		// on bus-level FLR).
 		if cfg.GPU.PCIAddr != "" && len(cfg.GPU.ExtraVFIOAddrs) == 0 {
-			for _, peer := range gpu.IOMMUGroupPeers(cfg.GPU.PCIAddr) {
+			seen := map[string]bool{cfg.GPU.PCIAddr: true}
+			candidates := append([]gpu.PCIDevice{}, gpu.IOMMUGroupPeers(cfg.GPU.PCIAddr)...)
+			candidates = append(candidates, gpu.SiblingFunctions(cfg.GPU.PCIAddr)...)
+			for _, peer := range candidates {
+				if seen[peer.Address] {
+					continue
+				}
+				seen[peer.Address] = true
 				if gpu.IsAudioDevice(peer) {
 					cfg.GPU.ExtraVFIOAddrs = append(cfg.GPU.ExtraVFIOAddrs, peer.Address)
 				}
