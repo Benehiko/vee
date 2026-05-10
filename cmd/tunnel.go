@@ -45,7 +45,7 @@ For user-mode VMs, opens an SSH -L tunnel.`,
 		}
 
 		if len(args) == 1 {
-			return printServiceMenu(services)
+			return printServiceMenu(cfg, services)
 		}
 
 		svcName := args[1]
@@ -81,27 +81,43 @@ func resolvedServices(cfg *vm.VMConfig, state *vm.VMState) []resolvedService {
 	return out
 }
 
-func printServiceMenu(services []resolvedService) error {
+func printServiceMenu(cfg *vm.VMConfig, services []resolvedService) error {
 	fmt.Printf("%-16s  %-10s  %s\n", "SERVICE", "PROTOCOL", "CONNECTION")
 	fmt.Println(strings.Repeat("─", 60))
 	for _, s := range services {
-		fmt.Printf("%-16s  %-10s  %s\n", s.Name, s.Protocol, serviceURL(s))
+		fmt.Printf("%-16s  %-10s  %s\n", s.Name, s.Protocol, serviceURL(cfg, s))
 	}
 	fmt.Println()
 	fmt.Println("Run: vee tunnel <vm> <service>  to connect")
 	return nil
 }
 
-func serviceURL(s resolvedService) string {
+func serviceURL(cfg *vm.VMConfig, s resolvedService) string {
+	// SPICE is always bound on the host by QEMU — show direct URL.
+	if s.Protocol == vm.ServiceSPICE {
+		return fmt.Sprintf("spice://localhost:%d", s.Port)
+	}
+	// user-mode with hostfwd — port is already on the host.
+	if cfg.NIC.Mode == "user" {
+		if hostPort := findHostFwd(cfg.NIC.HostFwds, s.Port); hostPort > 0 {
+			switch s.Protocol {
+			case vm.ServiceHTTP:
+				return fmt.Sprintf("http://localhost:%d", hostPort)
+			case vm.ServiceHTTPS:
+				return fmt.Sprintf("https://localhost:%d", hostPort)
+			default:
+				return fmt.Sprintf("localhost:%d", hostPort)
+			}
+		}
+	}
+	// Bridge / no hostfwd — a proxy will be opened on a random local port.
 	switch s.Protocol {
 	case vm.ServiceHTTP:
-		return fmt.Sprintf("http://localhost:%d", s.Port)
+		return fmt.Sprintf("http://localhost:<proxy> → guest:%d", s.Port)
 	case vm.ServiceHTTPS:
-		return fmt.Sprintf("https://localhost:%d", s.Port)
-	case vm.ServiceSPICE:
-		return fmt.Sprintf("spice://localhost:%d", s.Port)
+		return fmt.Sprintf("https://localhost:<proxy> → guest:%d", s.Port)
 	default:
-		return fmt.Sprintf("localhost:%d", s.Port)
+		return fmt.Sprintf("localhost:<proxy> → guest:%d", s.Port)
 	}
 }
 
