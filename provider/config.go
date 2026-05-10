@@ -15,6 +15,7 @@ type Config struct {
 	ISOCachePath        string `koanf:"iso_cache_path"`
 	VirtiofsdPath       string `koanf:"virtiofsd_path"`
 	QemuBinaryPath      string `koanf:"qemu_binary_path"`
+	BridgeHelperPath    string `koanf:"bridge_helper_path"`
 	OVMFCodePath        string `koanf:"ovmf_code_path"`
 	OVMFVarsPath        string `koanf:"ovmf_vars_path"`
 	OVMFSecbootCodePath string `koanf:"ovmf_secboot_code_path"`
@@ -47,11 +48,25 @@ func newDefaultConfig() (*Config, error) {
 		qemuBinPath = veeManagedQemu
 	}
 
+	// Probe common qemu-bridge-helper locations.
+	bridgeHelper := "/usr/lib/qemu/qemu-bridge-helper"
+	for _, candidate := range []string{
+		"/usr/lib/qemu/qemu-bridge-helper",
+		"/usr/lib/qemu-kvm/qemu-bridge-helper",
+		"/usr/libexec/qemu-bridge-helper",
+	} {
+		if _, err := os.Stat(candidate); err == nil {
+			bridgeHelper = candidate
+			break
+		}
+	}
+
 	return &Config{
 		StoragePath:         filepath.Join(home, ".vee/vms"),
 		ISOCachePath:        filepath.Join(home, ".vee/iso"),
 		VirtiofsdPath:       virtiofsdPath,
 		QemuBinaryPath:      qemuBinPath,
+		BridgeHelperPath:    bridgeHelper,
 		OVMFCodePath:        "/usr/share/OVMF/x64/OVMF_CODE.4m.fd",
 		OVMFVarsPath:        "/usr/share/OVMF/x64/OVMF_VARS.4m.fd",
 		OVMFSecbootCodePath: "/usr/share/OVMF/x64/OVMF_CODE.secboot.4m.fd",

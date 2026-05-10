@@ -21,6 +21,8 @@ type NIC struct {
 	HostFwds []string
 	// Queues enables multiqueue virtio-net when > 1. Only applied in bridge mode.
 	Queues int
+	// BridgeHelper is the path to qemu-bridge-helper. Only used when Queues > 1.
+	BridgeHelper string
 }
 
 var _ Builder = &NIC{}
@@ -45,10 +47,17 @@ func DeterministicMAC(name string) string {
 func (n *NIC) Args() []string {
 	switch n.Mode {
 	case NICBridge:
-		val := fmt.Sprintf("bridge,br=%s,model=%s,mac=%s", n.Bridge, n.Model, n.MAC)
 		if n.Queues > 1 {
-			val += fmt.Sprintf(",queues=%d", n.Queues)
+			// -nic shorthand does not support queues=; use -netdev tap + -device split.
+			helper := n.BridgeHelper
+			if helper == "" {
+				helper = "/usr/lib/qemu/qemu-bridge-helper"
+			}
+			netdev := fmt.Sprintf("bridge,id=net0,br=%s,helper=%s", n.Bridge, helper)
+			device := fmt.Sprintf("%s,netdev=net0,mac=%s,mq=on,vectors=%d", n.Model, n.MAC, 2*n.Queues+2)
+			return []string{"-netdev", netdev, "-device", device}
 		}
+		val := fmt.Sprintf("bridge,br=%s,model=%s,mac=%s", n.Bridge, n.Model, n.MAC)
 		return []string{"-nic", val}
 	default:
 		parts := []string{fmt.Sprintf("user,model=%s,mac=%s", n.Model, n.MAC)}

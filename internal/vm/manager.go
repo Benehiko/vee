@@ -676,7 +676,16 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 	}
 	nic := qemu.NewNIC(qemu.NICMode(cfg.NIC.Mode), cfg.NIC.Bridge, cfg.NIC.MAC, nicHostFwds...)
 	if cfg.NIC.Mode == "bridge" && cfg.CPUs > 1 {
-		nic.Queues = min(cfg.CPUs, 8)
+		helperPath := m.provider.Config().BridgeHelperPath
+		if helperPath != "" {
+			if _, statErr := os.Stat(helperPath); statErr == nil {
+				nic.Queues = min(cfg.CPUs, 8)
+				nic.BridgeHelper = helperPath
+			} else {
+				m.provider.Logger().Warn("qemu-bridge-helper not found, multiqueue disabled",
+					zap.String("path", helperPath))
+			}
+		}
 	}
 	opts = append(opts, qemu.WithNIC(nic))
 
