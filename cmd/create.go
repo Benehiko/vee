@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Benehiko/vee/internal/gpu"
 	"github.com/Benehiko/vee/internal/images"
 	"github.com/Benehiko/vee/internal/sshkeys"
 	"github.com/Benehiko/vee/internal/templates"
@@ -113,12 +114,15 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
 
 		var cfg *vm.VMConfig
 
+		// For gaming templates, resolve GPU vendor: explicit flag > auto-detect > amd.
+		resolvedGPUVendor := resolveGPUVendor(cmd, createGPUVendor)
+
 		switch createTemplate {
 		case "gaming-arch":
 			var err error
 			cfg, err = templates.NewGamingArchConfig(cmd.Context(), prov, name, sshKeys, templates.GamingOptions{
 				VirtiofsMountDir: createVirtiofsDir,
-				GPUVendor:        templates.GPUVendor(createGPUVendor),
+				GPUVendor:        resolvedGPUVendor,
 				Passthrough:      createGPUMode == "passthrough",
 				PCIAddr:          createGPUPCI,
 				Bridge:           createNicBridge,
@@ -131,7 +135,7 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
 			var err error
 			cfg, err = templates.NewGamingBazziteConfig(cmd.Context(), prov, name, templates.GamingOptions{
 				VirtiofsMountDir: createVirtiofsDir,
-				GPUVendor:        templates.GPUVendor(createGPUVendor),
+				GPUVendor:        resolvedGPUVendor,
 				Passthrough:      createGPUMode == "passthrough",
 				PCIAddr:          createGPUPCI,
 				Bridge:           createNicBridge,
@@ -145,7 +149,7 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
 			var err error
 			cfg, err = templates.NewGamingArchConfig(cmd.Context(), prov, name, sshKeys, templates.GamingOptions{
 				VirtiofsMountDir: createVirtiofsDir,
-				GPUVendor:        templates.GPUVendor(createGPUVendor),
+				GPUVendor:        resolvedGPUVendor,
 				Passthrough:      createGPUMode == "passthrough" || createGPUPCI != "",
 				PCIAddr:          createGPUPCI,
 				Bridge:           createNicBridge,
@@ -312,6 +316,26 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
 		}
 		return nil
 	},
+}
+
+// resolveGPUVendor returns the GPU vendor to use for gaming templates.
+// If --gpu-vendor was explicitly set, that value is used as-is.
+// Otherwise, the host GPU is auto-detected via /sys; falls back to "amd".
+func resolveGPUVendor(cmd *cobra.Command, flagVal string) templates.GPUVendor {
+	if cmd.Flags().Changed("gpu-vendor") {
+		return templates.GPUVendor(flagVal)
+	}
+	detected := gpu.DetectHostGPU()
+	switch detected {
+	case gpu.VendorAMD:
+		return templates.GPUVendorAMD
+	case gpu.VendorNvidia:
+		return templates.GPUVendorNvidia
+	case gpu.VendorVirtio:
+		return templates.GPUVendorVirtio
+	default:
+		return templates.GPUVendorAMD
+	}
 }
 
 func defaultConfig(name string) *vm.VMConfig {
