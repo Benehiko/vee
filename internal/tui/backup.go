@@ -17,6 +17,8 @@ var (
 	styleBackupDim      = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	styleBackupHelp     = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Padding(0, 1)
 	styleBackupCheck    = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+	styleBackupFilter   = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+	styleBackupFilterPf = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("11"))
 )
 
 type dirNode struct {
@@ -29,16 +31,21 @@ type dirNode struct {
 // BackupPickerModel is a standalone bubbletea model for selecting guest dirs.
 // Run it with tea.NewProgram; when confirmed it quits and Result holds chosen paths.
 type BackupPickerModel struct {
-	nodes  []*dirNode
-	cursor int
-	Result []string
-	done   bool
+	nodes      []*dirNode
+	cursor     int
+	scrollOff  int    // index into visibleFiltered() of the top rendered row
+	height     int    // terminal rows available for the list
+	width      int    // terminal columns
+	filter     string // current filter string
+	filtering  bool   // true while user is typing a filter
+	showHidden bool   // show dotfiles
+	Result     []string
 }
 
-// NewBackupPicker returns a model that will load dirs via the provided fetch func.
+// NewBackupPicker returns a model populated with the given entries.
 func NewBackupPicker(entries []*backup.DirEntry) BackupPickerModel {
 	nodes := buildNodes(entries)
-	return BackupPickerModel{nodes: nodes}
+	return BackupPickerModel{nodes: nodes, height: 24}
 }
 
 func buildNodes(entries []*backup.DirEntry) []*dirNode {
@@ -63,10 +70,21 @@ func (m BackupPickerModel) Init() tea.Cmd { return nil }
 
 func (m BackupPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		// Reserve: 1 title + 1 blank + 1 status + 1 help + 1 filter line = 5
+		m.height = max(msg.Height-5, 4)
+		m.clampScroll()
+
 	case tea.KeyMsg:
+		if m.filtering {
+			return m.updateFilter(msg)
+		}
 		switch msg.String() {
-		case "ctrl+c", "q":
-			m.done = true
+		case "ctrl+c":
+			return m, tea.Quit
+
+		case "q":
 			return m, tea.Quit
 
 		case "up", "k":
@@ -75,6 +93,21 @@ func (m BackupPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "down", "j":
 			m.moveCursor(1)
 
+		case "pgup":
+			m.moveCursor(-m.height)
+
+		case "pgdown":
+			m.moveCursor(m.height)
+
+		case "g":
+			m.cursor = 0
+			m.scrollOff = 0
+
+		case "G":
+			vis := m.visibleFiltered()
+			m.cursor = len(vis) - 1
+			m.clampScroll()
+
 		case " ":
 			m.toggleCheck()
 
@@ -82,30 +115,62 @@ func (m BackupPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.toggleExpand()
 
 		case "a":
-			// Select/deselect all visible.
 			anyChecked := false
-			for _, n := range m.visible() {
+			for _, n := range m.visibleFiltered() {
 				if n.checked {
 					anyChecked = true
 					break
 				}
 			}
-			for _, n := range m.visible() {
+			for _, n := range m.visibleFiltered() {
 				n.checked = !anyChecked
 			}
 
+		case ".":
+			m.showHidden = !m.showHidden
+			// Reset cursor to avoid pointing past the new list length.
+			m.cursor = 0
+			m.scrollOff = 0
+
+		case "/":
+			m.filtering = true
+			m.filter = ""
+
+		case "esc":
+			m.filter = ""
+			m.cursor = 0
+			m.scrollOff = 0
+
 		case "c":
-			// Confirm selection.
 			m.Result = m.selected()
-			m.done = true
 			return m, tea.Quit
 		}
 	}
 	return m, nil
 }
 
+func (m BackupPickerModel) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter", "esc":
+		m.filtering = false
+		m.cursor = 0
+		m.scrollOff = 0
+	case "ctrl+c":
+		return m, tea.Quit
+	case "backspace", "ctrl+h":
+		if len(m.filter) > 0 {
+			m.filter = m.filter[:len(m.filter)-1]
+		}
+	default:
+		if len(msg.Runes) == 1 {
+			m.filter += string(msg.Runes)
+		}
+	}
+	return m, nil
+}
+
 func (m *BackupPickerModel) moveCursor(delta int) {
-	vis := m.visible()
+	vis := m.visibleFiltered()
 	if len(vis) == 0 {
 		return
 	}
@@ -116,10 +181,28 @@ func (m *BackupPickerModel) moveCursor(delta int) {
 	if m.cursor >= len(vis) {
 		m.cursor = len(vis) - 1
 	}
+	m.clampScroll()
+}
+
+func (m *BackupPickerModel) clampScroll() {
+	vis := m.visibleFiltered()
+	total := len(vis)
+	if m.cursor < m.scrollOff {
+		m.scrollOff = m.cursor
+	}
+	if m.cursor >= m.scrollOff+m.height {
+		m.scrollOff = m.cursor - m.height + 1
+	}
+	if m.scrollOff > total-m.height {
+		m.scrollOff = total - m.height
+	}
+	if m.scrollOff < 0 {
+		m.scrollOff = 0
+	}
 }
 
 func (m *BackupPickerModel) toggleCheck() {
-	vis := m.visible()
+	vis := m.visibleFiltered()
 	if m.cursor >= len(vis) {
 		return
 	}
@@ -127,7 +210,7 @@ func (m *BackupPickerModel) toggleCheck() {
 }
 
 func (m *BackupPickerModel) toggleExpand() {
-	vis := m.visible()
+	vis := m.visibleFiltered()
 	if m.cursor >= len(vis) {
 		return
 	}
@@ -135,7 +218,6 @@ func (m *BackupPickerModel) toggleExpand() {
 	node.expanded = !node.expanded
 	depth := node.entry.Depth
 
-	// Show/hide direct children.
 	inRange := false
 	for _, n := range m.nodes {
 		if n == node {
@@ -156,14 +238,27 @@ func (m *BackupPickerModel) toggleExpand() {
 	}
 }
 
-func (m *BackupPickerModel) visible() []*dirNode {
+// visibleFiltered returns nodes that are visible, pass the hidden filter,
+// and match the current filter string.
+func (m *BackupPickerModel) visibleFiltered() []*dirNode {
 	var out []*dirNode
 	for _, n := range m.nodes {
-		if n.visible {
-			out = append(out, n)
+		if !n.visible {
+			continue
 		}
+		if !m.showHidden && isDotfile(n.entry.Name) {
+			continue
+		}
+		if m.filter != "" && !strings.Contains(strings.ToLower(n.entry.Name), strings.ToLower(m.filter)) {
+			continue
+		}
+		out = append(out, n)
 	}
 	return out
+}
+
+func isDotfile(name string) bool {
+	return strings.HasPrefix(name, ".")
 }
 
 func (m *BackupPickerModel) selected() []string {
@@ -178,11 +273,20 @@ func (m *BackupPickerModel) selected() []string {
 
 func (m BackupPickerModel) View() string {
 	var b strings.Builder
+
+	// Header
 	b.WriteString(styleBackupTitle.Render("Select directories to back up") + "\n\n")
 
-	vis := m.visible()
-	for i, node := range vis {
-		indent := strings.Repeat("  ", node.entry.Depth-minDepth(m.nodes))
+	vis := m.visibleFiltered()
+	total := len(vis)
+	base := minDepth(m.nodes)
+
+	// Viewport slice
+	end := min(m.scrollOff+m.height, total)
+
+	for i := m.scrollOff; i < end; i++ {
+		node := vis[i]
+		indent := strings.Repeat("  ", node.entry.Depth-base)
 
 		expand := " "
 		if node.expanded {
@@ -196,24 +300,68 @@ func (m BackupPickerModel) View() string {
 			check = styleBackupCheck.Render("[✓]")
 		}
 
-		line := fmt.Sprintf("%s%s %s %s", indent, expand, check, node.entry.Name)
+		name := node.entry.Name
+		// Highlight filter match inside name.
+		if m.filter != "" {
+			name = highlightMatch(name, m.filter)
+		}
 
-		if i == m.cursor {
+		line := fmt.Sprintf("%s%s %s %s", indent, expand, check, name)
+
+		switch {
+		case i == m.cursor:
 			line = styleBackupCursor.Render(line)
-		} else if node.checked {
+		case node.checked:
 			line = styleBackupSelected.Render(line)
-		} else {
+		default:
 			line = styleBackupDim.Render(line)
 		}
 
 		b.WriteString(line + "\n")
 	}
 
+	// Scroll indicator
 	sel := m.selected()
 	b.WriteString("\n")
-	b.WriteString(styleBackupDim.Render(fmt.Sprintf("%d selected", len(sel))) + "\n")
-	b.WriteString(styleBackupHelp.Render("↑/↓ move  space toggle  enter expand  a all  c confirm  q quit"))
+
+	hidden := ""
+	if !m.showHidden {
+		hidden = "  . show hidden"
+	} else {
+		hidden = "  . hide hidden"
+	}
+
+	statusLine := fmt.Sprintf("%d selected  %d/%d", len(sel), m.cursor+1, total)
+	b.WriteString(styleBackupDim.Render(statusLine) + "\n")
+
+	// Filter bar or help
+	if m.filtering {
+		b.WriteString(styleBackupFilterPf.Render("/") + styleBackupFilter.Render(m.filter+"█") + "\n")
+		b.WriteString(styleBackupHelp.Render("enter/esc exit filter"))
+	} else {
+		filterHint := ""
+		if m.filter != "" {
+			filterHint = fmt.Sprintf("  filter:%q  esc clear", m.filter)
+		}
+		b.WriteString(styleBackupHelp.Render(
+			"↑/↓/pgup/pgdn move  space toggle  enter expand  a all  / filter  c confirm  q quit" +
+				hidden + filterHint,
+		))
+	}
+
 	return b.String()
+}
+
+// highlightMatch wraps the matched substring in the filter style.
+func highlightMatch(name, filter string) string {
+	lower := strings.ToLower(name)
+	idx := strings.Index(lower, strings.ToLower(filter))
+	if idx < 0 {
+		return name
+	}
+	return name[:idx] +
+		styleBackupFilter.Render(name[idx:idx+len(filter)]) +
+		name[idx+len(filter):]
 }
 
 func minDepth(nodes []*dirNode) int {
