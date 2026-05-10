@@ -287,7 +287,9 @@ func (q *BaseMachine) Args() []string {
 	}
 
 	if q.headless {
-		args = append(args, "-display", "none", "-nographic")
+		// Use -display none only. -nographic would re-route the serial port
+		// to stdio, fighting our explicit -serial chardev:serial0 below.
+		args = append(args, "-display", "none")
 	} else if q.display != "" {
 		args = append(args, "-display", q.display)
 	}
@@ -300,6 +302,13 @@ func (q *BaseMachine) Args() []string {
 		args = append(args, "-qmp", fmt.Sprintf("unix:%s,server,nowait", q.qmpSocket))
 	}
 
+	// Capture the guest serial console (firmware POST, bootloader, kernel,
+	// systemd, cloud-init) to a file so the boot phase watcher can tail it
+	// and so users have a recoverable log even when the VM is wedged.
+	serialLog := filepath.Join(q.AbsolutePath(), "serial.log")
+	args = append(args, "-chardev", fmt.Sprintf("file,id=serial0,path=%s,signal=off", serialLog))
+	args = append(args, "-serial", "chardev:serial0")
+
 	if q.qgaSocket != "" {
 		args = append(args, "-device", "virtio-serial-pci,id=virtio-serial0")
 		args = append(args, "-chardev", fmt.Sprintf("socket,path=%s,server=on,wait=off,id=qga0", q.qgaSocket))
@@ -307,6 +316,12 @@ func (q *BaseMachine) Args() []string {
 	}
 
 	return args
+}
+
+// SerialLogPath returns the absolute path to this machine's captured serial
+// console log. The file is created by QEMU on start.
+func (q *BaseMachine) SerialLogPath() string {
+	return filepath.Join(q.AbsolutePath(), "serial.log")
 }
 
 // StartResult holds the outcome of a detached VM start.
