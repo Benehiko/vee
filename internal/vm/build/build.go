@@ -15,8 +15,11 @@ import (
 	"os"
 	"strings"
 
+	"go.uber.org/zap"
+
 	"github.com/Benehiko/vee/internal/gpu"
 	"github.com/Benehiko/vee/internal/images"
+	"github.com/Benehiko/vee/internal/mirror"
 	"github.com/Benehiko/vee/internal/sshkeys"
 	"github.com/Benehiko/vee/internal/templates"
 	"github.com/Benehiko/vee/internal/vm"
@@ -115,7 +118,45 @@ func Build(ctx context.Context, prov provider.Provider, opts Opts) (*vm.VMConfig
 	}
 
 	applyOverrides(cfg, opts, prov)
+	applyMirror(ctx, cfg, prov)
 	return cfg, nil
+}
+
+// applyMirror wires the host pacman caching proxy into Arch cloud-init
+// configs. It is a no-op for non-Arch templates, for VMs whose CloudInit is
+// nil (the gaming installer scripts handle their own mirror config), and when
+// the provider's mirror mode resolves to disabled.
+func applyMirror(ctx context.Context, cfg *vm.VMConfig, prov provider.Provider) {
+	if cfg.CloudInit == nil {
+		return
+	}
+	if !isArchDistro(cfg) {
+		return
+	}
+	pc := prov.Config()
+	d := mirror.Resolve(ctx, mirror.ParseMode(pc.MirrorMode), cfg.NIC.Mode, pc.MirrorAddress)
+	if !d.Enabled {
+		if d.Reason != "" {
+			prov.Logger().Info("mirror skipped", zap.String("vm", cfg.Name), zap.String("reason", d.Reason))
+		}
+		return
+	}
+	cfg.CloudInit.WriteFiles = append(cfg.CloudInit.WriteFiles, vm.CloudInitWriteFile{
+		Path:        "/etc/pacman.d/mirrorlist",
+		Content:     mirror.PacmanMirrorlistContent(d.GuestURL),
+		Permissions: "0644",
+	})
+	prov.Logger().Info("mirror enabled", zap.String("vm", cfg.Name), zap.String("url", d.GuestURL))
+}
+
+// isArchDistro reports whether the VM cloud-init was built for Arch. Templates
+// always set DefaultUser via images.DefaultUser; we match on that user as the
+// stable signal (Arch's default cloud-image user is "arch").
+func isArchDistro(cfg *vm.VMConfig) bool {
+	if cfg.CloudInit == nil {
+		return false
+	}
+	return cfg.CloudInit.DefaultUser == images.DefaultUser(images.DistroArch)
 }
 
 // loadSSHKeys reads the user's --ssh-keys file (if any) and always appends

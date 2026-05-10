@@ -26,6 +26,17 @@ type Config struct {
 	DefaultCPUModel     string `koanf:"default_cpu_model"`
 	DefaultMachineType  string `koanf:"default_machine_type"`
 	RecreateDisks       bool   `koanf:"recreate_disks"`
+
+	// MirrorMode selects whether VMs should be wired up to the host-side
+	// pacman caching proxy. One of "auto" (use if the unit is active),
+	// "on" (force-enable; error if not installed) or "off" (never inject).
+	// Default "auto". Set via the global --mirror flag.
+	MirrorMode string `koanf:"mirror_mode"`
+
+	// MirrorAddress overrides the guest-side address (host:port) of the
+	// host pacoloco proxy. Defaults to "10.0.2.2:9129" which only works in
+	// QEMU user-mode networking; bridge-mode VMs need an explicit host IP.
+	MirrorAddress string `koanf:"mirror_address"`
 }
 
 func newDefaultConfig() (*Config, error) {
@@ -77,6 +88,8 @@ func newDefaultConfig() (*Config, error) {
 		DefaultDiskSize:     "20G",
 		DefaultCPUModel:     "host",
 		RecreateDisks:       false,
+		MirrorMode:          "auto",
+		MirrorAddress:       "10.0.2.2:9129",
 	}, nil
 }
 

@@ -166,6 +166,10 @@ tail -f ~/.float/state/logs/vee.log
 ║ vee gpu bind <pci>                ║ Bind device to vfio-pci                              ║
 ║ vee gpu unbind <pci>              ║ Release device back to host driver                   ║
 ║ vee gpu status <pci>              ║ Pre-flight check for passthrough                     ║
+║ vee mirror start                  ║ Start host-side pacman caching proxy                 ║
+║ vee mirror status                 ║ Show pacoloco unit state and cache size              ║
+║ vee mirror stop                   ║ Stop the pacoloco user unit                          ║
+║ vee mirror purge                  ║ Delete all cached packages on disk                   ║
 ║ vee version                       ║ Print version, commit, and build date                ║
 ╚═══════════════════════════════════╩══════════════════════════════════════════════════════╝
 ```
@@ -191,6 +195,7 @@ vee completion fish | source
 
 - [docs/prerequisites.md](docs/prerequisites.md) — system setup, groups, bridge networking, OVMF
 - [docs/gpu-passthrough-gaming.md](docs/gpu-passthrough-gaming.md) — Sunshine + Moonlight streaming over GPU passthrough
+- [docs/pacman-mirror.md](docs/pacman-mirror.md) — host-side pacman caching proxy for Arch VMs
 
 ---
 

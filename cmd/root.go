@@ -12,6 +12,7 @@ var (
 	prov       provider.Provider
 	configPath string
 	verbose    bool
+	mirrorFlag string
 )
 
 var rootCmd = &cobra.Command{
@@ -22,6 +23,10 @@ var rootCmd = &cobra.Command{
 		p, err := provider.New(verbose)
 		if err != nil {
 			return err
+		}
+		// --mirror overrides the config file's mirror_mode when set.
+		if cmd.Flags().Changed("mirror") {
+			p.Config().MirrorMode = mirrorFlag
 		}
 		prov = p
 		return nil
@@ -40,6 +45,7 @@ func Execute() {
 func init() {
 	rootCmd.PersistentFlags().StringVar(&configPath, "config", "", "config file (default ~/.vee/config.yaml)")
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Stream logs to stderr (default: file only at ~/.vee/logs/vee.log)")
+	rootCmd.PersistentFlags().StringVar(&mirrorFlag, "mirror", "auto", "Pacman mirror cache: auto|on|off")
 	rootCmd.AddCommand(createCmd)
 	rootCmd.AddCommand(startCmd)
 	rootCmd.AddCommand(stopCmd)
@@ -55,4 +61,5 @@ func init() {
 	rootCmd.AddCommand(backupCmd)
 	rootCmd.AddCommand(autostartCmd)
 	rootCmd.AddCommand(daemonCmd)
+	rootCmd.AddCommand(mirrorCmd)
 }
