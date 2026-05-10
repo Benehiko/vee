@@ -105,16 +105,48 @@ func Reset(addr string) error {
 		pciAddr, s.PowerState, s.RuntimeStatus)
 }
 
-// EnsureReady checks the device state and attempts a reset if needed.
-// Returns the observed state and any error from the reset attempt.
-// If reset is not available (no root, no sysfs file), returns the state
-// and a descriptive error without attempting.
+// WakeDevice forces the PCI device to D0 by writing "on" to its power/control
+// sysfs knob, then polling until power_state is no longer D3cold/suspended.
+// This does not require root — only membership in the vfio group.
+func WakeDevice(addr string) error {
+	pciAddr := normalizePCIAddr(addr)
+	controlPath := filepath.Join("/sys/bus/pci/devices", pciAddr, "power", "control")
+
+	if err := os.WriteFile(controlPath, []byte("on"), 0o644); err != nil {
+		return fmt.Errorf("write power/control for %s: %w", pciAddr, err)
+	}
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		s := ReadDeviceState(pciAddr)
+		if s.PowerState != PowerStateD3cold && s.RuntimeStatus != "suspended" {
+			return nil
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	s := ReadDeviceState(pciAddr)
+	return fmt.Errorf("device %s still in %s/%s after wake — cold reboot may be required",
+		pciAddr, s.PowerState, s.RuntimeStatus)
+}
+
+// EnsureReady checks the device state and attempts a wake+reset if needed.
+// Returns the observed state and any error from the attempt.
 func EnsureReady(addr string) (DeviceState, error) {
 	s := ReadDeviceState(addr)
 	if !s.NeedsReset() {
 		return s, nil
 	}
 
+	// Try writing power/control=on first — works without root for vfio group members.
+	if wakeErr := WakeDevice(addr); wakeErr == nil {
+		s = ReadDeviceState(addr)
+		if !s.NeedsReset() {
+			return s, nil
+		}
+	}
+
+	// Fall back to sysfs reset (requires write access to /sys/.../reset).
 	if !s.ResetAvailable {
 		return s, fmt.Errorf(
 			"device %s is in %s/%s and has no sysfs reset — cold reboot required",
