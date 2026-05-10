@@ -9,6 +9,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/Benehiko/vee/internal/qemu"
 	"github.com/Benehiko/vee/internal/vm"
 	"github.com/spf13/cobra"
 )
@@ -50,6 +51,12 @@ var statusCmd = &cobra.Command{
 				uptime := time.Since(*entry.State.StartedAt).Truncate(time.Second)
 				printRow("uptime", uptime.String())
 			}
+			if entry.State.BootPhase != "" {
+				printRow("phase", formatBootPhase(entry.State))
+			}
+			if entry.State.LastPanicLine != "" {
+				printRow("panic", entry.State.LastPanicLine)
+			}
 			if entry.State.SPICEPort > 0 {
 				printRow("spice", fmt.Sprintf(":%d", entry.State.SPICEPort))
 			}
@@ -58,6 +65,9 @@ var statusCmd = &cobra.Command{
 			}
 		} else {
 			printRow("status", "stopped")
+			if entry.State.LastPanicLine != "" {
+				printRow("last panic", entry.State.LastPanicLine)
+			}
 		}
 
 		_ = w.Flush()
@@ -136,6 +146,16 @@ var statusCmd = &cobra.Command{
 	},
 }
 
+// formatBootPhase renders the BootPhase row, including the dwell time in the
+// current phase when PhaseStartedAt is populated.
+func formatBootPhase(state *vm.VMState) string {
+	if state.PhaseStartedAt == nil || state.PhaseStartedAt.IsZero() {
+		return state.BootPhase
+	}
+	dwell := time.Since(*state.PhaseStartedAt).Truncate(time.Second)
+	return fmt.Sprintf("%s — %s", state.BootPhase, dwell)
+}
+
 // cloudInitStatus mirrors the relevant fields of /run/cloud-init/status.json.
 type cloudInitStatus struct {
 	V1 struct {
@@ -191,9 +211,37 @@ func resolveVMIP(cfg *vm.VMConfig, state *vm.VMState) (string, error) {
 }
 
 func fetchCloudInitStatus(cfg *vm.VMConfig, state *vm.VMState) (*cloudInitStatus, error) {
+	// Prefer the guest agent — it works before networking is up and before
+	// cloud-init has installed any host SSH keys. Fall back to SSH for guests
+	// without QGA (GuestAgent=false in the VM config).
+	if state.QGASocket != "" {
+		if s, err := fetchCloudInitStatusViaQGA(state); err == nil {
+			return s, nil
+		}
+	}
 	out, err := sshRunQuiet(cfg, state, "cat /run/cloud-init/status.json 2>/dev/null || echo '{}'")
 	if err != nil {
 		return nil, err
+	}
+	var s cloudInitStatus
+	if jsonErr := json.Unmarshal([]byte(out), &s); jsonErr != nil {
+		return nil, jsonErr
+	}
+	return &s, nil
+}
+
+func fetchCloudInitStatusViaQGA(state *vm.VMState) (*cloudInitStatus, error) {
+	client, err := qemu.NewQGAClient(state.QGASocket, 3*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = client.Close() }()
+	out, _, _, err := client.RunCommand("/bin/cat", []string{"/run/cloud-init/status.json"})
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(out) == "" {
+		out = "{}"
 	}
 	var s cloudInitStatus
 	if jsonErr := json.Unmarshal([]byte(out), &s); jsonErr != nil {

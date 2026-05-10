@@ -18,4 +18,10 @@ type VMState struct {
 	Running       bool       `json:"running"`
 	InstallState  string     `json:"install_state,omitempty"`
 	InstalledAt   *time.Time `json:"installed_at,omitempty"`
+
+	// Boot phase tracking — populated by the phase watcher tailing serial.log
+	// during the start sequence. Reset to empty on Stop.
+	BootPhase      string     `json:"boot_phase,omitempty"`
+	PhaseStartedAt *time.Time `json:"phase_started_at,omitempty"`
+	LastPanicLine  string     `json:"last_panic_line,omitempty"`
 }

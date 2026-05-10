@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Benehiko/vee/internal/boot"
 	"github.com/Benehiko/vee/internal/cloudinit"
 	cputil "github.com/Benehiko/vee/internal/cpu"
 	"github.com/Benehiko/vee/internal/gpu"
@@ -398,84 +399,171 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 // If neither SSHPort nor QMPSocket is configured, returns immediately as long as
 // the QEMU process is still alive — readiness cannot be probed without them.
 // timeout is how long to wait total. Polls every 5s.
+//
+// WaitReady is a thin wrapper around WaitReadyWithPhases that drains the phase
+// channel and returns only the terminal error. Callers that want to render a
+// live phase spinner should use WaitReadyWithPhases directly.
 func (m *Manager) WaitReady(ctx context.Context, name string, timeout time.Duration) error {
-	state, err := m.loadState(name)
-	if err != nil {
-		return err
+	phaseCh, errCh := m.WaitReadyWithPhases(ctx, name, timeout)
+	for range phaseCh {
+		// drain — caller doesn't want phase events
 	}
-	if !state.Running || state.PID == 0 {
-		return fmt.Errorf("VM %q is not running", name)
-	}
+	return <-errCh
+}
 
-	// No probe configured — just confirm the process is alive and return.
-	// QMP socket is always present; QGA socket only when GuestAgent=true.
-	if state.SSHPort == 0 && state.QGASocket == "" {
-		if !isAlive(state.PID) {
-			return fmt.Errorf("VM %q process (PID %d) exited immediately — check: vee logs %s", name, state.PID, name)
+// WaitReadyWithPhases is the same as WaitReady but also streams boot phase
+// transitions on a channel. The channel is closed when readiness is reached or
+// an error occurs; the error channel always receives exactly one value (nil on
+// success). Phase events come from a serial-log watcher and are also persisted
+// into VMState so vee status can render them out-of-band.
+func (m *Manager) WaitReadyWithPhases(ctx context.Context, name string, timeout time.Duration) (<-chan boot.Event, <-chan error) {
+	phaseCh := make(chan boot.Event, 16)
+	errCh := make(chan error, 1)
+
+	go func() {
+		defer close(phaseCh)
+
+		state, err := m.loadState(name)
+		if err != nil {
+			errCh <- err
+			return
 		}
-		// Don't mark ready during a first-boot install — the VM is doing its
-		// install run and will shut itself down when done. Marking ready here
-		// would cause the next start to strip the install ISO prematurely.
-		if state.InstallState == InstallStatePending {
-			return nil
+		if !state.Running || state.PID == 0 {
+			errCh <- fmt.Errorf("VM %q is not running", name)
+			return
 		}
-		return m.markReady(name)
-	}
 
-	deadline := time.Now().Add(timeout)
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
+		watchCtx, cancelWatch := context.WithCancel(ctx)
+		defer cancelWatch()
 
-	probe := func() bool {
-		// SSH probe (headless VMs with port forwarding).
-		if state.SSHPort > 0 {
-			addr := fmt.Sprintf("127.0.0.1:%d", state.SSHPort)
-			conn, dialErr := net.DialTimeout("tcp", addr, 2*time.Second)
-			if dialErr == nil {
-				_ = conn.Close()
-				return true
+		// Phase watcher: tail serial.log and forward events both to the caller
+		// and into VMState. Failures abort the readiness probe.
+		watcherEvents := make(chan boot.Event, 16)
+		serialLogPath := filepath.Join(m.vmDir(name), "serial.log")
+		watcher := boot.NewWatcher(serialLogPath)
+		// IdleTimeout slightly less than the overall WaitReady timeout so a
+		// completely silent boot still gets a synthetic Failed event.
+		if timeout > 30*time.Second {
+			watcher.IdleTimeout = timeout - 30*time.Second
+		}
+
+		go func() {
+			defer close(watcherEvents)
+			_ = watcher.Run(watchCtx, watcherEvents)
+		}()
+
+		failedCh := make(chan boot.Event, 1)
+		go func() {
+			for ev := range watcherEvents {
+				m.persistPhase(name, ev)
+				select {
+				case phaseCh <- ev:
+				case <-watchCtx.Done():
+					return
+				}
+				if ev.Phase == boot.PhaseFailed {
+					select {
+					case failedCh <- ev:
+					default:
+					}
+				}
 			}
+		}()
+
+		// No probe configured — just confirm the process is alive and return.
+		// QMP socket is always present; QGA socket only when GuestAgent=true.
+		if state.SSHPort == 0 && state.QGASocket == "" {
+			if !isAlive(state.PID) {
+				errCh <- fmt.Errorf("VM %q process (PID %d) exited immediately — check: vee logs %s", name, state.PID, name)
+				return
+			}
+			if state.InstallState == InstallStatePending {
+				errCh <- nil
+				return
+			}
+			errCh <- m.markReady(name)
+			return
 		}
 
-		// QGA guest-ping probe — requires GuestAgent=true in the VM config.
-		if state.QGASocket != "" {
-			client, qgaErr := qemu.NewQGAClient(state.QGASocket, 2*time.Second)
-			if qgaErr == nil {
-				pingErr := client.GuestPing()
-				_ = client.Close()
-				if pingErr == nil {
+		deadline := time.Now().Add(timeout)
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+
+		probe := func() bool {
+			if state.SSHPort > 0 {
+				addr := fmt.Sprintf("127.0.0.1:%d", state.SSHPort)
+				conn, dialErr := net.DialTimeout("tcp", addr, 2*time.Second)
+				if dialErr == nil {
+					_ = conn.Close()
 					return true
 				}
 			}
+			if state.QGASocket != "" {
+				client, qgaErr := qemu.NewQGAClient(state.QGASocket, 2*time.Second)
+				if qgaErr == nil {
+					pingErr := client.GuestPing()
+					_ = client.Close()
+					if pingErr == nil {
+						return true
+					}
+				}
+			}
+			return false
 		}
 
-		return false
-	}
+		if probe() {
+			errCh <- m.markReady(name)
+			return
+		}
 
-	// Check immediately before first tick.
-	if probe() {
-		return m.markReady(name)
-	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case t := <-ticker.C:
-			if !isAlive(state.PID) {
-				return fmt.Errorf("VM %q process (PID %d) exited — check: vee logs %s", name, state.PID, name)
-			}
-			if t.After(deadline) {
-				return fmt.Errorf("VM %q did not become ready within %s", name, timeout)
-			}
-			// Reload state in case SSH port changed.
-			if s, lerr := m.loadState(name); lerr == nil {
-				state = s
-			}
-			if probe() {
-				return m.markReady(name)
+		for {
+			select {
+			case <-ctx.Done():
+				errCh <- ctx.Err()
+				return
+			case ev := <-failedCh:
+				errCh <- fmt.Errorf("VM %q boot failed: %s", name, strings.TrimSpace(ev.PanicLine))
+				return
+			case t := <-ticker.C:
+				if !isAlive(state.PID) {
+					errCh <- fmt.Errorf("VM %q process (PID %d) exited — check: vee logs %s", name, state.PID, name)
+					return
+				}
+				if t.After(deadline) {
+					errCh <- fmt.Errorf("VM %q did not become ready within %s", name, timeout)
+					return
+				}
+				if s, lerr := m.loadState(name); lerr == nil {
+					state = s
+				}
+				if probe() {
+					errCh <- m.markReady(name)
+					return
+				}
 			}
 		}
+	}()
+
+	return phaseCh, errCh
+}
+
+// persistPhase writes a phase transition into VMState. Errors are logged at
+// debug level only; phase persistence is best-effort and must not block the
+// boot-progress UI when the DB is briefly contended.
+func (m *Manager) persistPhase(name string, ev boot.Event) {
+	state, err := m.loadState(name)
+	if err != nil {
+		return
+	}
+	state.BootPhase = string(ev.Phase)
+	at := ev.At
+	state.PhaseStartedAt = &at
+	if ev.Phase == boot.PhaseFailed {
+		state.LastPanicLine = strings.TrimSpace(ev.PanicLine)
+	}
+	if err := m.saveState(name, state); err != nil {
+		m.provider.Logger().Debug("persist boot phase",
+			zap.String("vm", name), zap.String("phase", string(ev.Phase)), zap.Error(err))
 	}
 }
 

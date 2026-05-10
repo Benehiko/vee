@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Benehiko/vee/internal/boot"
 	"github.com/Benehiko/vee/internal/journal"
 	"github.com/Benehiko/vee/internal/qemubin"
 	"github.com/Benehiko/vee/internal/vm"
@@ -57,20 +58,24 @@ var startCmd = &cobra.Command{
 	},
 }
 
-// runStartSpinner shows a bubbletea spinner while WaitReady polls for SSH/QGA.
-// Falls back to plain text output when stdout is not a TTY.
+// runStartSpinner shows a bubbletea spinner while WaitReadyWithPhases polls
+// for SSH/QGA readiness and a serial-log watcher reports boot phase
+// transitions. Falls back to plain text output when stdout is not a TTY.
 func runStartSpinner(cmd *cobra.Command, mgr *vm.Manager, name string) error {
 	ctx := cmd.Context()
 
-	doneCh := make(chan error, 1)
-	go func() {
-		doneCh <- mgr.WaitReady(ctx, name, 10*time.Minute)
-	}()
+	phaseCh, errCh := mgr.WaitReadyWithPhases(ctx, name, 10*time.Minute)
 
 	if !term.IsTerminal(int(os.Stdout.Fd())) {
-		err := <-doneCh
+		// Drain phase events to keep the watcher goroutine moving but render
+		// nothing — we only print final status in non-TTY mode.
+		go func() {
+			for range phaseCh {
+			}
+		}()
+		err := <-errCh
 		if err != nil {
-			return fmt.Errorf("wait ready: %w", err)
+			return err
 		}
 		fmt.Printf("VM %q is ready\n", name)
 		printTemplateHints(mgr, name)
@@ -82,26 +87,30 @@ func runStartSpinner(cmd *cobra.Command, mgr *vm.Manager, name string) error {
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 
 	m := &startSpinnerModel{
-		spinner: s,
-		name:    name,
-		status:  "starting…",
+		spinner:    s,
+		name:       name,
+		status:     "starting…",
+		phaseStart: time.Now(),
 	}
 
 	p := tea.NewProgram(m)
 
 	go func() {
-		elapsed := 0
 		tick := time.NewTicker(500 * time.Millisecond)
 		defer tick.Stop()
 		for {
 			select {
-			case err := <-doneCh:
+			case err := <-errCh:
 				p.Send(startDoneMsg{err: err})
 				return
+			case ev, ok := <-phaseCh:
+				if !ok {
+					phaseCh = nil
+					continue
+				}
+				p.Send(startPhaseMsg{phase: ev.Phase, detail: ev.Detail, at: ev.At})
 			case <-tick.C:
-				elapsed++
-				secs := elapsed / 2
-				p.Send(startStatusMsg(fmt.Sprintf("waiting for VM to become ready… %ds", secs)))
+				p.Send(startTickMsg{})
 			}
 		}
 	}()
@@ -112,7 +121,7 @@ func runStartSpinner(cmd *cobra.Command, mgr *vm.Manager, name string) error {
 	}
 	final := result.(*startSpinnerModel)
 	if final.err != nil {
-		return fmt.Errorf("wait ready: %w", final.err)
+		return final.err
 	}
 	fmt.Printf("VM %q is ready\n", name)
 	printTemplateHints(mgr, name)
@@ -163,16 +172,24 @@ func maybeStartJournalListener(cmd *cobra.Command, name string) {
 }
 
 type (
-	startStatusMsg string
-	startDoneMsg   struct{ err error }
+	startTickMsg  struct{}
+	startPhaseMsg struct {
+		phase  boot.Phase
+		detail string
+		at     time.Time
+	}
+	startDoneMsg struct{ err error }
 )
 
 type startSpinnerModel struct {
-	spinner spinner.Model
-	name    string
-	status  string
-	done    bool
-	err     error
+	spinner    spinner.Model
+	name       string
+	status     string
+	phase      boot.Phase
+	phaseStart time.Time // when the VM first started, used pre-phase
+	detail     string
+	done       bool
+	err        error
 }
 
 func (m *startSpinnerModel) Init() tea.Cmd { return m.spinner.Tick }
@@ -183,8 +200,15 @@ func (m *startSpinnerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.done = true
 		m.err = msg.err
 		return m, tea.Quit
-	case startStatusMsg:
-		m.status = string(msg)
+	case startPhaseMsg:
+		m.phase = msg.phase
+		m.detail = msg.detail
+		if !msg.at.IsZero() {
+			m.phaseStart = msg.at
+		}
+		m.status = m.composeStatus()
+	case startTickMsg:
+		m.status = m.composeStatus()
 	case tea.KeyMsg:
 		if msg.Type == tea.KeyCtrlC {
 			m.err = fmt.Errorf("interrupted")
@@ -194,6 +218,18 @@ func (m *startSpinnerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.spinner, cmd = m.spinner.Update(msg)
 	return m, cmd
+}
+
+func (m *startSpinnerModel) composeStatus() string {
+	elapsed := time.Since(m.phaseStart).Truncate(time.Second)
+	label := string(m.phase)
+	if label == "" {
+		label = "starting"
+	}
+	if m.detail != "" {
+		return fmt.Sprintf("%s (%s)… %s", label, m.detail, elapsed)
+	}
+	return fmt.Sprintf("%s… %s", label, elapsed)
 }
 
 func (m *startSpinnerModel) View() string {
