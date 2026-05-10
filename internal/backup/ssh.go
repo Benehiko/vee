@@ -47,9 +47,12 @@ func EnumerateHome(conn SSHConn, maxDepth int) ([]*DirEntry, error) {
 		"find ~ -maxdepth %d -mindepth 1 -type d ! -path '*/proc/*' ! -path '*/sys/*' ! -path '*/.git/*' 2>/dev/null | sort",
 		maxDepth,
 	)
-	out, err := exec.Command("ssh", conn.args(cmd)...).Output()
+	c := exec.Command("ssh", conn.args(cmd)...)
+	var stderr strings.Builder
+	c.Stderr = &stderr
+	out, err := c.Output()
 	if err != nil {
-		return nil, fmt.Errorf("enumerate guest dirs: %w", err)
+		return nil, fmt.Errorf("enumerate guest dirs: %w\nstderr: %s", err, stderr.String())
 	}
 
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
