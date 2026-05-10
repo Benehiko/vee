@@ -289,10 +289,13 @@ func (m *BackupPickerModel) setChildrenVisible(parent *dirNode, show bool) {
 		if n.entry.Depth <= depth {
 			break
 		}
-		if n.entry.Depth == depth+1 {
-			n.visible = show
-		} else if !show {
+		if !show {
+			// Hide all descendants and reset their expanded state so re-expanding
+			// from the parent starts clean.
 			n.visible = false
+			n.expanded = false
+		} else if n.entry.Depth == depth+1 {
+			n.visible = true
 		}
 	}
 }
@@ -392,32 +395,15 @@ func (m *BackupPickerModel) visibleFiltered() []*dirNode {
 		}
 	}
 
-	// Collect matching nodes in two passes: prefix matches then mid matches.
-	// Ancestors of matches are included so tree context is visible.
-	// Expanded nodes always show their visible children, even under a filter,
-	// so that manually-expanded subtrees remain navigable.
-	seen := make(map[string]bool)
-	// expandedPaths tracks paths of included nodes that are expanded.
-	expandedPaths := make(map[string]bool)
-	var prefix, mid []*dirNode
-
-	addNode := func(n *dirNode, pri int) {
-		if seen[n.entry.Path] {
-			return
-		}
-		seen[n.entry.Path] = true
-		if n.expanded {
-			expandedPaths[n.entry.Path] = true
-		}
-		if pri == 0 {
-			prefix = append(prefix, n)
-		} else {
-			mid = append(mid, n)
-		}
+	// Build a path→node index for ancestor lookup.
+	nodeByPath := make(map[string]*dirNode, len(m.nodes))
+	for _, n := range m.nodes {
+		nodeByPath[n.entry.Path] = n
 	}
 
-	// isUnderExpanded returns true if any ancestor of n is in expandedPaths.
-	isUnderExpanded := func(n *dirNode) bool {
+	// isCollapsedAbove returns true if any ancestor in the tree is not expanded,
+	// meaning this node would be hidden in normal (no-filter) navigation.
+	isCollapsedAbove := func(n *dirNode) bool {
 		p := n.entry.Path
 		for {
 			slash := strings.LastIndex(p, "/")
@@ -425,15 +411,32 @@ func (m *BackupPickerModel) visibleFiltered() []*dirNode {
 				break
 			}
 			p = p[:slash]
-			if expandedPaths[p] {
+			if anc, ok := nodeByPath[p]; ok && !anc.expanded {
 				return true
 			}
 		}
 		return false
 	}
 
-	// Iterate all nodes (ignoring visible flag) so the filter can surface
-	// directories that are collapsed/hidden by default.
+	seen := make(map[string]bool)
+	var prefix, mid []*dirNode
+
+	addNode := func(n *dirNode, pri int) {
+		if seen[n.entry.Path] {
+			return
+		}
+		seen[n.entry.Path] = true
+		if pri == 0 {
+			prefix = append(prefix, n)
+		} else {
+			mid = append(mid, n)
+		}
+	}
+
+	// Single pass over all nodes in order.
+	// Direct matches always surface (even if collapsed), bringing their ancestor
+	// chain with them. Ancestors only show if not hidden by a collapsed ancestor
+	// above them — i.e. they would be visible in the normal tree.
 	for _, n := range m.nodes {
 		if !m.showHidden && isDotfile(n.entry.Name) {
 			continue
@@ -443,12 +446,15 @@ func (m *BackupPickerModel) visibleFiltered() []*dirNode {
 		switch {
 		case direct:
 			addNode(n, pri)
-		case isAnc:
+		case isAnc && !isCollapsedAbove(n):
 			addNode(n, 1)
-		case n.visible && isUnderExpanded(n):
-			// Child of an expanded included node — show it in the same group as
-			// its parent (mid), preserving tree order.
-			addNode(n, 1)
+		case n.visible && !direct && !isAnc:
+			// Visible non-match child of an expanded ancestor-of-match.
+			// Only include if its parent is already in seen (was added as ancestor).
+			slash := strings.LastIndex(n.entry.Path, "/")
+			if slash > 0 && seen[n.entry.Path[:slash]] {
+				addNode(n, 1)
+			}
 		}
 	}
 
