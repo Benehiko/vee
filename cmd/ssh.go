@@ -85,7 +85,7 @@ Examples:
 			}
 			ip, resolveErr := vm.ResolveIPFromMAC(mac)
 			if resolveErr != nil {
-				return fmt.Errorf("could not resolve IP for VM %q (MAC %s): %w\nTry: ssh %s<ip>", name, mac, resolveErr, userPrefix(user))
+				return fmt.Errorf("could not resolve IP for VM %q (MAC %s): %w\nGet the IP with: vee ip %s", name, mac, resolveErr, name)
 			}
 			host = ip
 			port = 22
@@ -126,13 +126,6 @@ func buildSSHArgs(user, host string, port int, identity string, positional, extr
 	// positional holds remote command args — after host.
 	args = append(args, positional...)
 	return args
-}
-
-func userPrefix(user string) string {
-	if user == "" {
-		return ""
-	}
-	return user + "@"
 }
 
 func init() {

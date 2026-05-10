@@ -14,6 +14,7 @@ import (
 	"github.com/Benehiko/vee/internal/qemubin"
 	"github.com/Benehiko/vee/internal/vm"
 	"github.com/spf13/cobra"
+	"go.uber.org/zap"
 )
 
 var daemonCmd = &cobra.Command{
@@ -40,12 +41,12 @@ var daemonInstallCmd = &cobra.Command{
 	Short: "Install and enable the vee systemd user service",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := enableLinger(); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not enable systemd linger: %v\n", err)
-			fmt.Fprintln(os.Stderr, "  Run manually: loginctl enable-linger $USER")
+			fmt.Fprintf(os.Stderr, "warning: could not enable user linger: %v\n", err)
+			fmt.Fprintln(os.Stderr, "  Re-run as root: sudo vee daemon install")
 		}
 		if err := installVFIOModprobeConf(); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not write vfio modprobe config: %v\n", err)
-			fmt.Fprintln(os.Stderr, "  Run manually: echo 'options vfio-pci enable_runtime_pm=0' | sudo tee /etc/modprobe.d/vee-vfio.conf")
+			fmt.Fprintln(os.Stderr, "  Re-run as root: sudo vee daemon install")
 		}
 		return installSystemdUnit()
 	},
@@ -252,11 +253,14 @@ func installSystemdUnit() error {
 	} {
 		out, cmdErr := exec.Command("systemctl", sargs...).CombinedOutput()
 		if cmdErr != nil {
-			return fmt.Errorf("systemctl %v: %w\n%s", sargs, cmdErr, out)
+			prov.Logger().Debug("systemctl invocation failed",
+				zap.Strings("args", sargs), zap.ByteString("output", out))
+			return fmt.Errorf("vee daemon install failed during %v: %w", sargs, cmdErr)
 		}
 	}
 
 	fmt.Printf("vee.service installed at %s\n", path)
+	// TODO: replace with `vee daemon status` once the subcommand exists.
 	fmt.Println("Service enabled and started. Check status with: systemctl --user status vee")
 	return nil
 }
@@ -267,7 +271,9 @@ func uninstallSystemdUnit() error {
 	} {
 		out, err := exec.Command("systemctl", sargs...).CombinedOutput()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "systemctl %v: %v\n%s\n", sargs, err, out)
+			prov.Logger().Debug("systemctl invocation failed during uninstall",
+				zap.Strings("args", sargs), zap.ByteString("output", out), zap.Error(err))
+			fmt.Fprintf(os.Stderr, "warning: vee daemon uninstall step %v did not complete cleanly\n", sargs)
 		}
 	}
 
@@ -281,7 +287,9 @@ func uninstallSystemdUnit() error {
 
 	out, err := exec.Command("systemctl", "--user", "daemon-reload").CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("systemctl daemon-reload: %w\n%s", err, out)
+		prov.Logger().Debug("systemctl daemon-reload failed",
+			zap.ByteString("output", out), zap.Error(err))
+		return fmt.Errorf("vee daemon uninstall failed during reload: %w", err)
 	}
 
 	fmt.Println("vee.service removed.")

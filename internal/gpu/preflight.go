@@ -102,7 +102,7 @@ func PreflightCheck(addr, memoryStr string) *PreflightResult {
 		}
 	}
 	if r.IOMMUGroup < 0 {
-		r.Errors["iommu_group"] = fmt.Errorf("device %s has no IOMMU group — enable iommu in kernel params (intel_iommu=on or amd_iommu=on)", pciAddr)
+		r.Errors["iommu_group"] = fmt.Errorf("device %s has no IOMMU group — enable IOMMU in kernel params (intel_iommu=on or amd_iommu=on); see: vee gpu doctor", pciAddr)
 	} else {
 		devicesPath := filepath.Join(iommuGroupsPath, strconv.Itoa(r.IOMMUGroup), "devices")
 		if entries, err := os.ReadDir(devicesPath); err == nil {
@@ -125,12 +125,12 @@ func PreflightCheck(addr, memoryStr string) *PreflightResult {
 	if r.IOMMUGroup >= 0 {
 		r.VFIODevPath = fmt.Sprintf("/dev/vfio/%d", r.IOMMUGroup)
 		if _, err := os.Stat(r.VFIODevPath); err != nil {
-			r.Errors["vfio_dev"] = fmt.Errorf("%s does not exist — is vfio-pci loaded? (modprobe vfio-pci)", r.VFIODevPath)
+			r.Errors["vfio_dev"] = fmt.Errorf("%s does not exist — vfio-pci is not loaded; run: vee gpu bind %s", r.VFIODevPath, addr)
 		} else {
 			f, err := os.OpenFile(r.VFIODevPath, os.O_RDWR, 0)
 			if err != nil {
 				r.VFIOAccessible = false
-				r.Errors["vfio_access"] = fmt.Errorf("cannot open %s: %v — add user to vfio group: sudo usermod -aG vfio $USER", r.VFIODevPath, err)
+				r.Errors["vfio_access"] = fmt.Errorf("cannot open %s: %v — current user is not in the vfio group; see: vee gpu doctor", r.VFIODevPath, err)
 			} else {
 				_ = f.Close()
 				r.VFIOAccessible = true
@@ -149,7 +149,7 @@ func PreflightCheck(addr, memoryStr string) *PreflightResult {
 			r.MemlockRequiredBytes = bytes
 			if !r.MemlockOK() {
 				r.Errors["memlock"] = fmt.Errorf(
-					"memlock soft limit %s < required %s — add to /etc/security/limits.d/vee-vfio.conf: '* - memlock unlimited'",
+					"memlock soft limit %s < required %s — run: vee daemon install (writes /etc/security/limits.d/vee-vfio.conf)",
 					FormatBytes(r.MemlockSoftBytes), FormatBytes(r.MemlockRequiredBytes))
 			}
 		}

@@ -14,7 +14,7 @@ import (
 // Requires root — returns an error immediately if not running as root.
 func BindVFIO(addr string) error {
 	if os.Getuid() != 0 {
-		return errors.New("binding a device to vfio-pci requires root (run with sudo)")
+		return errors.New("binding a device to vfio-pci requires root — re-run with sudo, or: vee daemon install (one-time setup)")
 	}
 
 	// Normalize address to include domain prefix.
@@ -68,7 +68,7 @@ func BindVFIO(addr string) error {
 // Pass the original driver name (e.g. "amdgpu") — use "" to leave unbound.
 func UnbindVFIO(addr, originalDriver string) error {
 	if os.Getuid() != 0 {
-		return errors.New("unbinding a device from vfio-pci requires root (run with sudo)")
+		return errors.New("unbinding a device from vfio-pci requires root — re-run with sudo, or: vee daemon install (one-time setup)")
 	}
 
 	pciAddr := normalizePCIAddr(addr)
