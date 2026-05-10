@@ -59,8 +59,10 @@ func buildNodes(entries []*backup.DirEntry) []*dirNode {
 		homeDepth = nodes[0].entry.Depth
 	}
 	for _, n := range nodes {
-		if n.entry.Depth > homeDepth+1 {
+		if n.entry.Depth > homeDepth+2 {
 			n.visible = false
+		} else if n.entry.Depth <= homeDepth+1 && hasChildren(nodes, n) {
+			n.expanded = true
 		}
 	}
 	return nodes
