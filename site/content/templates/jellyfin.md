@@ -21,7 +21,7 @@ Bridge networking is required — the template refuses `--nic-mode=user` because
 
 | Setting | Value |
 |---------|-------|
-| Memory | 4G |
+| Memory | 1G |
 | CPUs | 2 |
 | Network | Bridge (`br0`) |
 | Display | Headless |

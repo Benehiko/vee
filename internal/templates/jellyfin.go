@@ -129,7 +129,7 @@ Signed-By: /etc/apt/keyrings/jellyfin.asc" > /etc/apt/sources.list.d/jellyfin.so
 	cfg := &vm.VMConfig{
 		Name:     name,
 		Template: "jellyfin",
-		Memory:   "4G",
+		Memory:   "1G",
 		CPUs:     2,
 		Sockets:  1,
 		Cores:    2,
