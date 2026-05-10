@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Benehiko/vee/internal/journal"
+	"github.com/Benehiko/vee/internal/qemubin"
 	"github.com/Benehiko/vee/internal/vm"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
@@ -38,6 +39,13 @@ var startCmd = &cobra.Command{
 			line, err := stdinReader.ReadString('\n')
 			return strings.TrimRight(line, "\r\n"), err
 		}
+		// Ensure the vee-managed QEMU binary is present and up-to-date.
+		if qemuPath, err := qemubin.Ensure(); err != nil {
+			return fmt.Errorf("qemu binary: %w", err)
+		} else {
+			prov.Config().QemuBinaryPath = qemuPath
+		}
+
 		if err := mgr.Start(cmd.Context(), name, startForeground); err != nil {
 			return err
 		}

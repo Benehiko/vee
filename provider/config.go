@@ -40,11 +40,18 @@ func newDefaultConfig() (*Config, error) {
 		virtiofsdPath = "/usr/bin/virtiofsd"
 	}
 
+	// Use the vee-managed QEMU binary when present; fall back to system one.
+	qemuBinPath := "qemu-system-x86_64"
+	veeManagedQemu := filepath.Join(home, ".vee", "bin", "qemu-system-x86_64")
+	if _, err := os.Stat(veeManagedQemu); err == nil {
+		qemuBinPath = veeManagedQemu
+	}
+
 	return &Config{
 		StoragePath:         filepath.Join(home, ".vee/vms"),
 		ISOCachePath:        filepath.Join(home, ".vee/iso"),
 		VirtiofsdPath:       virtiofsdPath,
-		QemuBinaryPath:      "qemu-system-x86_64",
+		QemuBinaryPath:      qemuBinPath,
 		OVMFCodePath:        "/usr/share/OVMF/x64/OVMF_CODE.4m.fd",
 		OVMFVarsPath:        "/usr/share/OVMF/x64/OVMF_VARS.4m.fd",
 		OVMFSecbootCodePath: "/usr/share/OVMF/x64/OVMF_CODE.secboot.4m.fd",
