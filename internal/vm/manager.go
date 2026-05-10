@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -11,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -827,6 +829,102 @@ func (m *Manager) Stop(ctx context.Context, name string) error {
 		InstalledAt:  state.InstalledAt,
 	}
 	return m.saveState(name, preserved)
+}
+
+// ForceStop bypasses QMP and immediately SIGKILLs the qemu process plus its
+// virtiofsd helpers. Cleans up state and hostname registration the same way
+// Stop does. Use only when a graceful Stop has wedged.
+func (m *Manager) ForceStop(_ context.Context, name string) error {
+	state, err := m.loadState(name)
+	if err != nil {
+		return err
+	}
+	if !state.Running || state.PID == 0 {
+		return fmt.Errorf("VM %q is not running", name)
+	}
+
+	if isAlive(state.PID) {
+		if proc, err := os.FindProcess(state.PID); err == nil {
+			_ = proc.Signal(syscall.SIGKILL)
+		}
+	}
+	for _, pid := range state.VirtiofsdPIDs {
+		if pid > 0 && isAlive(pid) {
+			if proc, err := os.FindProcess(pid); err == nil {
+				_ = proc.Signal(syscall.SIGKILL)
+			}
+		}
+	}
+
+	if cfg, cfgErr := m.loadConfig(name); cfgErr == nil && cfg.Hostname != "" {
+		if unregErr := UnregisterHostname(cfg.Hostname); unregErr != nil {
+			m.provider.Logger().Warn("hostname unregistration failed",
+				zap.String("hostname", cfg.Hostname), zap.Error(unregErr))
+		}
+	}
+
+	installState := state.InstallState
+	if installState == InstallStatePending {
+		installState = InstallStateReady
+	}
+	preserved := &VMState{
+		InstallState: installState,
+		InstalledAt:  state.InstalledAt,
+	}
+	return m.saveState(name, preserved)
+}
+
+// StopAllRunning gracefully stops every VM that is currently Running per its
+// state file. Stops run concurrently; total wall time is bounded by
+// perVMTimeout regardless of VM count. Errors are logged but do not abort
+// the batch — best-effort.
+func (m *Manager) StopAllRunning(ctx context.Context, perVMTimeout time.Duration) error {
+	entries, err := m.List()
+	if err != nil {
+		return fmt.Errorf("list VMs: %w", err)
+	}
+
+	log := m.provider.Logger()
+	var running []string
+	for _, e := range entries {
+		if e.State != nil && e.State.Running && isAlive(e.State.PID) {
+			running = append(running, e.Config.Name)
+		}
+	}
+	if len(running) == 0 {
+		return nil
+	}
+
+	log.Info("stopping all running VMs",
+		zap.Int("count", len(running)),
+		zap.Duration("perVMTimeout", perVMTimeout))
+
+	errCh := make(chan error, len(running))
+	var wg sync.WaitGroup
+	for _, name := range running {
+		wg.Add(1)
+		go func(name string) {
+			defer wg.Done()
+			stopCtx, cancel := context.WithTimeout(ctx, perVMTimeout)
+			defer cancel()
+			if err := m.Stop(stopCtx, name); err != nil {
+				log.Warn("graceful stop failed during shutdown",
+					zap.String("vm", name), zap.Error(err))
+				errCh <- fmt.Errorf("%s: %w", name, err)
+			}
+		}(name)
+	}
+	wg.Wait()
+	close(errCh)
+
+	var errs []error
+	for e := range errCh {
+		errs = append(errs, e)
+	}
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	return nil
 }
 
 // cleanupStaleVM clears persisted running state for a VM whose process died on
