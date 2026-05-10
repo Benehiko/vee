@@ -1,32 +1,46 @@
-# vee
+# ▸ vee
 
-A command-line VM manager built on QEMU/KVM. Create, start, stop, SSH into, and tunnel ports for virtual machines from a single tool.
+```
+╔══════════════════════════════════════════════════════════════╗
+║  VEE :: QEMU/KVM VM MANAGER                    v0.x.0       ║
+║  jack in. spin up. jack out.                                 ║
+╚══════════════════════════════════════════════════════════════╝
+```
 
-## Quick start
+Bare-metal VM control from the terminal. QEMU/KVM backend, GPU passthrough, virtiofs sharing, SPICE display, SSH tunnelling — wired together into a single command.
+
+---
+
+## ▸ JACK IN — QUICK START
 
 ```sh
-make install          # builds and installs to ~/.vee/bin/vee
-vee create myvm       # create an Ubuntu 24.04 server VM
-vee start myvm        # boot it (detached)
-vee ssh myvm          # SSH in
+make install          # flash binary to ~/.vee/bin/vee
+vee create myvm       # spin up an Ubuntu 24.04 server VM
+vee start myvm        # boot — detached by default
+vee ssh myvm          # open a shell
 vee stop myvm         # graceful shutdown
 ```
 
-## Prerequisites
+> **Prerequisites:** See [docs/prerequisites.md](docs/prerequisites.md) — KVM access, bridge networking, disk group membership, OVMF firmware.
 
-See [docs/prerequisites.md](docs/prerequisites.md) for required packages and system configuration (KVM access, bridge networking, disk group membership, OVMF).
+---
 
-## Templates
+## ▸ TEMPLATES
 
-| Template       | Description |
-|----------------|-------------|
-| `ubuntu-server`| Ubuntu 24.04 LTS, UEFI, user-mode NIC (default) |
-| `devbox`       | Docker + zsh via cloud-init; supports `--distro` |
-| `server`       | openssh + ufw + fail2ban; supports `--distro` |
-| `truenas`      | TrueNAS SCALE, AHCI OS disk, bridge NIC, SPICE display |
-| `gaming`       | GPU passthrough, 16G RAM, 6 CPUs, anti-detect |
-| `torrent`      | Lightweight, qbittorrent-nox via cloud-init |
-| `windows`      | Windows, UEFI secboot, TPM 2.0 |
+```
+╔═══════════════════╦══════════════════════════════════════════════════════╗
+║ TEMPLATE          ║ DESCRIPTION                                          ║
+╠═══════════════════╬══════════════════════════════════════════════════════╣
+║ ubuntu-server     ║ Ubuntu 24.04 LTS · UEFI · user-mode NIC (default)   ║
+║ devbox            ║ Docker + zsh via cloud-init · --distro flag          ║
+║ server            ║ openssh + ufw + fail2ban · --distro flag             ║
+║ truenas           ║ TrueNAS SCALE · AHCI OS disk · bridge NIC · SPICE   ║
+║ gaming            ║ GPU passthrough · 16G RAM · 6 CPUs · anti-detect     ║
+║ torrent           ║ Lightweight · qbittorrent-nox via cloud-init         ║
+║ windows           ║ Windows · UEFI secboot · TPM 2.0                     ║
+║ docker            ║ Alpine Linux · Docker-over-TCP                       ║
+╚═══════════════════╩══════════════════════════════════════════════════════╝
+```
 
 ```sh
 vee create mynas --template truenas \
@@ -34,103 +48,130 @@ vee create mynas --template truenas \
   --data-disk /dev/disk/by-id/ata-ST22000NM000C_ZXA0WD9J:EXOS22TB-B
 ```
 
-## GPU passthrough
+---
 
-The `gaming` and `passthrough` templates use VFIO to pass a PCIe GPU directly into the VM.
+## ▸ GPU PASSTHROUGH
 
-### Host requirements
+`gaming` and `passthrough` templates use VFIO to wire a PCIe GPU directly into the VM — zero emulation, full metal.
 
-1. **IOMMU enabled** — add to kernel parameters:
-   - Intel: `intel_iommu=on iommu=pt`
-   - AMD: `amd_iommu=on iommu=pt`
+### HOST REQUIREMENTS
 
-2. **vfio-pci loaded** — usually happens automatically when binding; or add to `/etc/modules-load.d/vfio.conf`:
-   ```
-   vfio
-   vfio_iommu_type1
-   vfio_pci
-   ```
+**1 · IOMMU — enable in kernel parameters**
 
-3. **User in `vfio` group**:
-   ```sh
-   sudo usermod -aG vfio $USER
-   ```
+```
+# Intel
+intel_iommu=on iommu=pt
 
-4. **Unlimited locked memory** — VFIO DMA-maps all guest RAM:
-   ```sh
-   sudo tee /etc/security/limits.d/vee-vfio.conf <<'EOF'
-   * - memlock unlimited
-   EOF
-   ```
-   Log out and back in. Verify with `ulimit -l` (should print `unlimited`).
+# AMD
+amd_iommu=on iommu=pt
+```
 
-### Binding the GPU to vfio-pci
+**2 · vfio-pci kernel modules**
 
 ```sh
-# Find your GPU's PCI address and IOMMU group
+# /etc/modules-load.d/vfio.conf
+vfio
+vfio_iommu_type1
+vfio_pci
+```
+
+**3 · vfio group membership**
+
+```sh
+sudo usermod -aG vfio $USER
+```
+
+**4 · Unlimited locked memory** — VFIO DMA-maps all guest RAM
+
+```sh
+sudo tee /etc/security/limits.d/vee-vfio.conf <<'EOF'
+* - memlock unlimited
+EOF
+```
+
+Re-login. Verify: `ulimit -l` → `unlimited`
+
+### BIND THE GPU
+
+```sh
+# Scan the grid — list PCI addresses and IOMMU groups
 vee gpu list
 
-# Bind to vfio-pci (requires root)
+# Jack it in (requires root)
 sudo vee gpu bind 08:00.0
 
-# Verify all checks pass before starting the VM
+# Pre-flight — verify all checks pass before boot
 vee gpu status 08:00.0 --memory 16G
 ```
 
-All devices in the same IOMMU group must also be bound to vfio-pci. `vee gpu status` reports peer devices and their drivers.
+All devices in the same IOMMU group must be bound together. `vee gpu status` reports peer devices and their current drivers.
 
-### Creating a gaming VM
+### CREATE A GAMING VM
 
 ```sh
-# GPU passthrough VM booting from an existing NVMe (Windows or Linux)
+# Passthrough VM booting from an existing NVMe (Windows or Linux)
 vee create linux-gaming --template passthrough \
   --nvme-dev /dev/disk/by-id/nvme-... \
   --ovmf-vars /path/to/OVMF_VARS.fd \
   --gpu-pci 08:00.0
 
-# Or a fresh Windows gaming VM with cloud-init disk
+# Fresh Windows gaming VM
 vee create win-gaming --template gaming --gpu-pci 08:00.0
 ```
 
-### Debugging passthrough issues
+### DEBUG PASSTHROUGH
 
 ```sh
-# Pre-flight check (driver, IOMMU group, /dev/vfio/N, memlock)
+# Pre-flight check
 vee gpu status 08:00.0 --memory 16G
 
-# QEMU log — check for vfio errors after start
+# QEMU log — scan for vfio errors post-boot
 vee logs linux-gaming
 
-# Structured debug log (all VFIO decisions logged at start time)
+# Structured debug log (VFIO decisions logged at start time)
 tail -f ~/.float/state/logs/vee.log
 ```
 
-Common failure modes:
+```
+╔═══════════════════════════════════════════╦══════════════════════════════════════════╦═════════════════════════════════════════╗
+║ ERROR                                     ║ CAUSE                                    ║ FIX                                     ║
+╠═══════════════════════════════════════════╬══════════════════════════════════════════╬═════════════════════════════════════════╣
+║ Permission denied /dev/vfio/N             ║ User not in vfio group                   ║ sudo usermod -aG vfio $USER + re-login  ║
+║ vfio_container_dma_map = -12 (ENOMEM)    ║ memlock limit too low                    ║ Set memlock unlimited in limits.d/      ║
+║ QEMU process exited immediately           ║ Driver not bound / IOMMU isolation       ║ vee gpu status to diagnose              ║
+║ GPU not used in guest                     ║ PCIAddr wrong in vm.yaml                 ║ Check gpu.pci_addr in vm.yaml           ║
+╚═══════════════════════════════════════════╩══════════════════════════════════════════╩═════════════════════════════════════════╝
+```
 
-| Error | Cause | Fix |
-|-------|-------|-----|
-| `Permission denied /dev/vfio/N` | User not in `vfio` group | `sudo usermod -aG vfio $USER` + re-login |
-| `vfio_container_dma_map = -12 (ENOMEM)` | `memlock` limit too low | Set `memlock unlimited` in `/etc/security/limits.d/` |
-| `QEMU process exited immediately` | Driver not bound or IOMMU group isolation violated | Run `vee gpu status` to diagnose |
-| GPU not used in guest | PCIAddr empty or wrong in `vm.yaml` | Check `~/.config/vee/vms/<name>/vm.yaml` `gpu.pci_addr` |
+---
 
-## Commands
+## ▸ COMMANDS
 
-| Command | Description |
-|---------|-------------|
-| `vee create <name>` | Create a new VM |
-| `vee start <name>` | Start a VM |
-| `vee stop <name>` | Stop a running VM |
-| `vee list` | List all VMs and their status |
-| `vee ssh <name>` | Open an SSH session |
-| `vee tunnel <name> <port>` | Forward a VM port to a random local port via SSH |
-| `vee ports <name>` | List bound TCP ports inside a running VM (requires guest agent) |
-| `vee logs <name>` | Stream QEMU output |
-| `vee monitor <name>` | Real-time CPU/memory/disk/network stats |
-| `vee view <name>` | Open the VM display (SPICE or GPU) |
-| `vee delete <name>` | Delete a VM and its disks |
+```
+╔═══════════════════════════════════╦══════════════════════════════════════════════════════╗
+║ COMMAND                           ║ DESCRIPTION                                          ║
+╠═══════════════════════════════════╬══════════════════════════════════════════════════════╣
+║ vee create <name>                 ║ Provision a new VM                                   ║
+║ vee start <name>                  ║ Boot a VM (detached by default)                      ║
+║ vee stop <name>                   ║ Graceful shutdown                                    ║
+║ vee list                          ║ List all VMs and status                              ║
+║ vee ssh <name>                    ║ Open a shell                                         ║
+║ vee tunnel <name> <port>          ║ Forward a VM port to a random local port via SSH     ║
+║ vee ports <name>                  ║ List bound TCP ports in a running VM (guest agent)   ║
+║ vee logs <name>                   ║ Stream QEMU output                                   ║
+║ vee monitor <name>                ║ Real-time CPU / memory / disk / network stats        ║
+║ vee view <name>                   ║ Open VM display (SPICE or GPU)                       ║
+║ vee delete <name>                 ║ Wipe VM and all its disks                            ║
+║ vee gpu list                      ║ List PCI GPUs and IOMMU groups                       ║
+║ vee gpu bind <pci>                ║ Bind device to vfio-pci                              ║
+║ vee gpu unbind <pci>              ║ Release device back to host driver                   ║
+║ vee gpu status <pci>              ║ Pre-flight check for passthrough                     ║
+╚═══════════════════════════════════╩══════════════════════════════════════════════════════╝
+```
 
-## Shell completion
+---
+
+## ▸ SHELL COMPLETION
 
 ```sh
 # bash
@@ -141,4 +182,17 @@ source <(vee completion zsh)
 
 # fish
 vee completion fish | source
+```
+
+---
+
+## ▸ DOCS
+
+- [docs/prerequisites.md](docs/prerequisites.md) — system setup, groups, bridge networking, OVMF
+- [docs/gpu-passthrough-gaming.md](docs/gpu-passthrough-gaming.md) — Sunshine + Moonlight streaming over GPU passthrough
+
+---
+
+```
+[ vee ] :: ALL SYSTEMS NOMINAL :: READY FOR BOOT
 ```
