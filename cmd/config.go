@@ -6,8 +6,9 @@ import (
 )
 
 var configCmd = &cobra.Command{
-	Use:   "config [name]",
-	Short: "Edit an existing VM's configuration in an interactive TUI",
+	Use:               "config [name]",
+	Short:             "Edit an existing VM's configuration in an interactive TUI",
+	ValidArgsFunction: completeVMNames,
 	Long: `Open a TUI form to edit a VM's configuration and save it to vm.yaml.
 
 If a VM name is supplied the editor opens immediately.
