@@ -167,9 +167,10 @@ func (m *Manager) Create(ctx context.Context, cfg *VMConfig) error {
 			return fmt.Errorf("cloud-init: %w", err)
 		}
 		// Append cidata ISO as an extra disk entry stored in the config.
+		// Must use ide so OVMF can read cloud-init on the first install boot.
 		cfg.Disks = append(cfg.Disks, DiskConfig{
 			Path:       isoPath,
-			Interface:  "virtio",
+			Interface:  "ide",
 			Media:      "cdrom",
 			Cache:      "none",
 			Readonly:   true,
@@ -253,6 +254,26 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 		cfg.Disks = filtered
 		if err := m.saveConfig(cfg); err != nil {
 			return fmt.Errorf("save config after stripping install ISOs: %w", err)
+		}
+	}
+
+	// Re-allocate the SPICE port if the configured port is already in use
+	// (e.g. a previous run crashed without releasing the port).
+	if cfg.SPICE != nil && cfg.SPICE.Port > 0 {
+		if isPortInUse(cfg.SPICE.Port) {
+			port, portErr := freeTCPPort()
+			if portErr != nil {
+				return fmt.Errorf("alloc SPICE port: %w", portErr)
+			}
+			cfg.SPICE.Port = port
+			for i := range cfg.Services {
+				if cfg.Services[i].Protocol == ServiceSPICE {
+					cfg.Services[i].Port = port
+				}
+			}
+			if err := m.saveConfig(cfg); err != nil {
+				return fmt.Errorf("save config after SPICE port realloc: %w", err)
+			}
 		}
 	}
 
