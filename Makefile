@@ -4,7 +4,18 @@ INSTALL_DIR := $(HOME)/.vee/bin
 
 GO        := go
 GOFLAGS   := -mod=vendor
-LDFLAGS   := -s -w
+
+# Version metadata injected into the binary at build time. Override on the
+# command line for release builds (e.g. `make build VERSION=v0.4.0`).
+VERSION   ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+COMMIT    ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+DATE      ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+
+VERSION_PKG := $(MODULE)/cmd
+LDFLAGS     := -s -w \
+  -X $(VERSION_PKG).version=$(VERSION) \
+  -X $(VERSION_PKG).commit=$(COMMIT) \
+  -X $(VERSION_PKG).date=$(DATE)
 
 CONTAINER_RUNTIME := $(shell command -v nerdctl 2>/dev/null || command -v docker 2>/dev/null)
 HUGO_IMAGE        := hugomods/hugo:go-git-0.147.0

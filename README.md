@@ -166,6 +166,7 @@ tail -f ~/.float/state/logs/vee.log
 ║ vee gpu bind <pci>                ║ Bind device to vfio-pci                              ║
 ║ vee gpu unbind <pci>              ║ Release device back to host driver                   ║
 ║ vee gpu status <pci>              ║ Pre-flight check for passthrough                     ║
+║ vee version                       ║ Print version, commit, and build date                ║
 ╚═══════════════════════════════════╩══════════════════════════════════════════════════════╝
 ```
 

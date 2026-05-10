@@ -21,3 +21,4 @@ Complete reference for all `vee` commands.
 | [`vee delete`]({{< relref "delete" >}}) | Delete a VM and its disks |
 | [`vee gpu`]({{< relref "gpu" >}}) | Manage GPU passthrough |
 | [`vee ip`]({{< relref "ip" >}}) | Print the VM's IP address |
+| [`vee version`]({{< relref "version" >}}) | Print version, commit, and build date |
