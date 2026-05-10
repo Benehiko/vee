@@ -1026,17 +1026,33 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 				primary.ROMFile = cfg.GPU.ROMFile
 			}
 			opts = append(opts, qemu.WithVFIO(primary))
-			// Peer devices (e.g. GPU HDMI/DP audio) must be in the same VFIO
-			// container; each gets its own PCIe root port (pcie.2, pcie.3, …).
-			for i, addr := range cfg.GPU.ExtraVFIOAddrs {
-				busID := fmt.Sprintf("pcie.%d", i+2)
-				slot := i + 2
-				peer := qemu.NewVFIOPeerDevice(addr, busID, slot)
+			// Peer devices fall into two buckets. If the peer is a sibling
+			// PCI function of the primary (same domain:bus:slot — e.g. a
+			// GPU's HDMI/DP audio at xx:yy.1 next to the VGA at xx:yy.0),
+			// it MUST share the primary's pcie-root-port and sit at the
+			// matching function number, otherwise QEMU's pci_irq_handler
+			// asserts at boot. Unrelated peers each get their own port.
+			nextSlot := 2
+			for _, addr := range cfg.GPU.ExtraVFIOAddrs {
+				if qemu.SameSlot(cfg.GPU.PCIAddr, addr) {
+					fn := qemu.FunctionNumber(addr)
+					sibling := qemu.NewVFIOSiblingFunction(addr, primary.BusID, fn)
+					opts = append(opts, qemu.WithVFIO(sibling))
+					m.provider.Logger().Info("attaching VFIO sibling function",
+						zap.String("pci_addr", addr),
+						zap.String("bus_id", primary.BusID),
+						zap.Int("guest_function", fn),
+					)
+					continue
+				}
+				busID := fmt.Sprintf("pcie.%d", nextSlot)
+				peer := qemu.NewVFIOPeerDevice(addr, busID, nextSlot)
 				opts = append(opts, qemu.WithVFIO(peer))
 				m.provider.Logger().Info("attaching VFIO peer device",
 					zap.String("pci_addr", addr),
 					zap.String("bus_id", busID),
 				)
+				nextSlot++
 			}
 		} else {
 			m.provider.Logger().Warn("GPU mode is passthrough but no pci_addr configured — no VFIO device will be attached")
