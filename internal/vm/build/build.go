@@ -19,6 +19,7 @@ import (
 
 	"github.com/Benehiko/vee/internal/gpu"
 	"github.com/Benehiko/vee/internal/images"
+	"github.com/Benehiko/vee/internal/media"
 	"github.com/Benehiko/vee/internal/mirror"
 	"github.com/Benehiko/vee/internal/sshkeys"
 	"github.com/Benehiko/vee/internal/templates"
@@ -85,7 +86,8 @@ type Opts struct {
 
 	// Interactive-only fields. Populated by the CLI/TUI surface before
 	// calling Build; Build itself does no prompting.
-	TorrentExtras *TorrentExtras
+	TorrentExtras  *TorrentExtras
+	JellyfinExtras *JellyfinExtras
 }
 
 // TorrentExtras carries the data that the torrent template needs to be built,
@@ -95,6 +97,13 @@ type TorrentExtras struct {
 	NordConf    *vpn.NordVPNConfig
 	WireGuard   *vpn.WireGuardConfig
 	VPNProvider string
+}
+
+// JellyfinExtras carries the media sources and any secrets (SMB passwords)
+// collected from the CLI/TUI before invoking the jellyfin template.
+type JellyfinExtras struct {
+	Libraries []media.Source
+	Secrets   map[string]string
 }
 
 // Build returns a fully-populated *vm.VMConfig for the given Opts. It does not
@@ -247,6 +256,14 @@ func configFromTemplate(ctx context.Context, prov provider.Provider, opts Opts, 
 		return templates.NewWindowsConfig(ctx, prov, winVersion, opts.Name)
 	case "docker":
 		return templates.NewDockerConfig(ctx, prov, opts.Name, sshKeys, opts.DistroVersion)
+	case "jellyfin":
+		var libs []media.Source
+		var secrets map[string]string
+		if opts.JellyfinExtras != nil {
+			libs = opts.JellyfinExtras.Libraries
+			secrets = opts.JellyfinExtras.Secrets
+		}
+		return templates.NewJellyfinConfig(ctx, prov, opts.Name, sshKeys, libs, opts.NICBridge, secrets)
 	case "ubuntu-server":
 		version := images.UbuntuVersion(opts.DistroVersion)
 		if opts.DistroVersion == "" || opts.DistroVersion == "latest" {

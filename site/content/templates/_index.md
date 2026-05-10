@@ -14,6 +14,7 @@ vee ships with built-in templates that configure QEMU arguments, cloud-init, net
 | [`gaming`]({{< relref "gaming" >}}) | GPU passthrough, 16G RAM, anti-detect |
 | [`passthrough`]({{< relref "passthrough" >}}) | GPU passthrough booting from existing disk |
 | [`torrent`]({{< relref "torrent" >}}) | Lightweight, qbittorrent-nox |
+| [`jellyfin`]({{< relref "jellyfin" >}}) | Jellyfin media server with NFS/SMB/host-dir/block/USB libraries and mDNS |
 | [`windows`]({{< relref "windows" >}}) | Windows, UEFI secboot, TPM 2.0 |
 
 ## vm.yaml

@@ -37,6 +37,7 @@ vee stop myvm         # graceful shutdown
 ║ truenas           ║ TrueNAS SCALE · AHCI OS disk · bridge NIC · SPICE   ║
 ║ gaming            ║ GPU passthrough · 16G RAM · 6 CPUs · anti-detect     ║
 ║ torrent           ║ Lightweight · qbittorrent-nox via cloud-init         ║
+║ jellyfin          ║ Jellyfin · NFS/SMB/host-dir/block/USB media · mDNS   ║
 ║ windows           ║ Windows · UEFI secboot · TPM 2.0                     ║
 ║ docker            ║ Alpine Linux · Docker-over-TCP                       ║
 ╚═══════════════════╩══════════════════════════════════════════════════════╝

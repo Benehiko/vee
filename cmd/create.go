@@ -43,6 +43,7 @@ var (
 	createOVMFVars      string
 	createNICMAC        string
 	createGPUVendor     string
+	createMedia         []string
 )
 
 var createCmd = &cobra.Command{
@@ -64,6 +65,9 @@ Templates apply sane defaults automatically:
   docker          2G / 2 CPUs, Alpine Linux, Docker daemon on tcp://localhost:2375
   windows         24G / 4 CPUs, UEFI secboot, TPM 2.0
   truenas         4G / 1 CPU, UEFI, AHCI OS disk, bridge NIC, SPICE display
+  jellyfin        4G / 2 CPUs, Ubuntu cloud image, Jellyfin via official APT repo,
+                  Avahi mDNS so http://<name> resolves on the LAN. Attach libraries
+                  with repeatable --media flags (NFS/SMB/host-dir/block/USB).
 
 Supported distros for devbox/server: ubuntu, arch, fedora
 Use --distro-version latest (default) or a specific version string.
@@ -111,6 +115,22 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
 				WireGuard:   wgConf,
 				VPNProvider: vpnProvider,
 			}
+		}
+		if opts.Template == "jellyfin" {
+			libs, parseErr := parseMediaSpecs(createMedia)
+			if parseErr != nil {
+				return parseErr
+			}
+			// Bridge mode is required: mDNS + Jellyfin discovery don't work
+			// behind QEMU user-mode NAT.
+			if opts.NICMode == "user" {
+				return fmt.Errorf("jellyfin template requires --nic-mode=bridge (mDNS + LAN discovery cannot traverse user-mode NAT)")
+			}
+			secrets, secErr := collectMediaSecrets(libs)
+			if secErr != nil {
+				return fmt.Errorf("collect media secrets: %w", secErr)
+			}
+			opts.JellyfinExtras = &build.JellyfinExtras{Libraries: libs, Secrets: secrets}
 		}
 
 		cfg, err := build.Build(cmd.Context(), prov, opts)
@@ -271,6 +291,7 @@ func init() {
 	createCmd.Flags().StringVar(&createOVMFVars, "ovmf-vars", "", "Path to existing OVMF_VARS.fd to reuse for UEFI state (passthrough template)")
 	createCmd.Flags().StringVar(&createNICMAC, "nic-mac", "", "Fixed MAC address for the bridge NIC (passthrough template; empty = deterministic)")
 	createCmd.Flags().StringVar(&createGPUVendor, "gpu-vendor", "amd", "Guest GPU vendor for driver selection: amd, nvidia, virtio (gaming-arch/gaming-bazzite templates)")
+	createCmd.Flags().StringArrayVar(&createMedia, "media", nil, "Media source for jellyfin template (repeatable). Forms: hostdir:/host@/guest[:ro], nfs://server/export@/guest[:ro], smb://[user@]server/share@/guest[:ro], block:/dev/disk/by-id/...@/guest[:fstype], usb:VENDOR:PRODUCT@/guest[:fstype]")
 
 	_ = createCmd.RegisterFlagCompletionFunc("template", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 		return []string{
@@ -285,6 +306,7 @@ func init() {
 			"windows\tWindows VM with UEFI + TPM",
 			"truenas\tTrueNAS SCALE VM",
 			"docker\tAlpine Linux VM with Docker daemon on tcp://localhost:2375",
+			"jellyfin\tJellyfin media server with NFS/SMB/USB/host-dir libraries + mDNS",
 		}, cobra.ShellCompDirectiveNoFileComp
 	})
 	_ = createCmd.RegisterFlagCompletionFunc("gpu-vendor", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
