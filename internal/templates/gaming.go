@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
-	"github.com/Benehiko/vee/internal/cloudinit"
 	"github.com/Benehiko/vee/internal/images"
 	"github.com/Benehiko/vee/internal/vm"
 	"github.com/Benehiko/vee/provider"
@@ -60,16 +60,8 @@ func NewGamingArchConfig(ctx context.Context, p provider.Provider, name string, 
 	conf := p.Config()
 	vmDir := filepath.Join(conf.StoragePath, name)
 
-	cats := []cloudinit.PackageCategory{cloudinit.CategoryGaming}
-	if !opts.Passthrough {
-		cats = append(cats, cloudinit.CategoryGamingVirtigl)
-	} else {
-		cats = append(cats, cloudinit.CategoryGamingKasmVNC)
-	}
-	pkgs := cloudinit.PackagesFor(cloudinit.Arch, cats...)
-
 	user := "gamer"
-	writeFiles, runCmds := archGamingSetup(user, opts)
+	writeFiles, runCmds := archGamingSetup(user, sshKeys, name, opts)
 
 	gpuMode := vm.GPUVirtio
 	gpuCfg := vm.GPUConfig{Mode: gpuMode}
@@ -118,13 +110,11 @@ func NewGamingArchConfig(ctx context.Context, p provider.Provider, name string, 
 			},
 		},
 		CloudInit: &vm.CloudInitConfig{
-			Hostname:    name,
-			User:        user,
-			DefaultUser: images.DefaultUser(images.DistroArch),
-			SSHKeys:     sshKeys,
-			Packages:    pkgs,
-			RunCmds:     runCmds,
-			WriteFiles:  writeFiles,
+			Hostname:   name,
+			User:       user,
+			SSHKeys:    sshKeys,
+			RunCmds:    runCmds,
+			WriteFiles: writeFiles,
 		},
 		SSHUser:   user,
 		RTC:       "base=localtime,clock=host",
@@ -244,104 +234,26 @@ func NewGamingBazziteConfig(ctx context.Context, p provider.Provider, name strin
 }
 
 // archGamingSetup returns cloud-init write_files and runcmd for Arch gaming VMs.
-func archGamingSetup(user string, opts GamingOptions) ([]vm.CloudInitWriteFile, []string) {
-	var writeFiles []vm.CloudInitWriteFile
-	var runCmds []string
+//
+// The live Arch ISO has only a 256M tmpfs root — package installation must
+// target the real disk via pacstrap + arch-chroot, not the live environment.
+// All configuration is written into the chroot; the VM powers off at the end
+// so vee can eject the ISO and boot from the installed disk.
+func archGamingSetup(user string, sshKeys []string, hostname string, opts GamingOptions) ([]vm.CloudInitWriteFile, []string) {
+	gpuPkgs := "mesa lib32-mesa vulkan-radeon lib32-vulkan-radeon vulkan-icd-loader lib32-vulkan-icd-loader vulkan-tools"
+	if !opts.Passthrough {
+		gpuPkgs += " vulkan-virtio lib32-vulkan-mesa-layers"
+	}
+	switch opts.GPUVendor {
+	case GPUVendorNvidia:
+		gpuPkgs = "nvidia nvidia-utils lib32-nvidia-utils vulkan-icd-loader lib32-vulkan-icd-loader vulkan-tools"
+	}
 
-	// ulimits + performance tuning
-	limitsConf := `* soft nofile 524288
-* hard nofile 524288
-* soft memlock unlimited
-* hard memlock unlimited
-* soft rtprio 99
-* hard rtprio 99`
-
-	writeFiles = append(writeFiles, vm.CloudInitWriteFile{
-		Path:        "/etc/security/limits.d/99-gaming.conf",
-		Content:     limitsConf,
-		Permissions: "0644",
-	})
-
-	// Kernel parameters: split_lock_detect off, hugepages, scheduler tuning
-	sysctl := `vm.swappiness=10
-kernel.split_lock_mitigate=0
-vm.nr_hugepages=512
-net.core.rmem_max=26214400
-net.core.wmem_max=26214400`
-
-	writeFiles = append(writeFiles, vm.CloudInitWriteFile{
-		Path:        "/etc/sysctl.d/99-gaming.conf",
-		Content:     sysctl,
-		Permissions: "0644",
-	})
-
-	// GRUB kernel cmdline: split_lock_detect=off
-	writeFiles = append(writeFiles, vm.CloudInitWriteFile{
-		Path:        "/etc/default/grub.d/99-gaming.cfg",
-		Content:     `GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT split_lock_detect=off"`,
-		Permissions: "0644",
-	})
-
-	// systemd-journal-upload: push guest journals to the vee host listener.
-	// The host IP is resolved dynamically at boot via the default gateway.
-	journalUploadConf := `[Upload]
-URL=http://vee-host:19532`
-	writeFiles = append(writeFiles, vm.CloudInitWriteFile{
-		Path:        "/etc/systemd/journal-upload.conf",
-		Content:     journalUploadConf,
-		Permissions: "0644",
-	})
-
-	// sddm autologin for the gamer user
-	sddmConf := fmt.Sprintf(`[Autologin]
-User=%s
-Session=plasma-wayland`, user)
-	writeFiles = append(writeFiles, vm.CloudInitWriteFile{
-		Path:        "/etc/sddm.conf.d/autologin.conf",
-		Content:     sddmConf,
-		Permissions: "0644",
-	})
-
-	// Base setup commands
-	runCmds = append(runCmds,
-		// Enable multilib for 32-bit gaming libraries
-		`sed -i '/^#\[multilib\]/,/^#Include/ s/^#//' /etc/pacman.conf`,
-		`pacman -Sy --noconfirm`,
-		// Enable SSH
-		`systemctl enable --now sshd`,
-		// Enable SDDM display manager
-		`systemctl enable sddm`,
-		// Enable pipewire audio
-		`systemctl --global enable pipewire pipewire-pulse wireplumber`,
-		// Apply sysctl
-		`sysctl --system`,
-		// Rebuild grub config
-		`mkdir -p /etc/default/grub.d`,
-		`grub-mkconfig -o /boot/grub/grub.cfg`,
-		// Resolve the default gateway and register it as "vee-host" in /etc/hosts,
-		// then enable journal-upload so guest journals stream to the vee host listener.
-		`bash -c 'GW=$(ip route show default | awk "/default/{print \$3; exit}"); if [ -n "$GW" ]; then sed -i "/vee-host/d" /etc/hosts; echo "$GW vee-host" >> /etc/hosts; fi'`,
-		`systemctl enable --now systemd-journal-upload`,
-		// Set gamer user password placeholder (user should change on first login)
-		`echo '`+user+`:vee' | chpasswd`,
-		// gamemode permissions
-		`usermod -aG gamemode `+user,
-	)
-
+	kasmvncService := ""
+	kasmvncSetup := ""
 	if opts.Passthrough {
-		// Install KasmVNC from AUR for browser-accessible display
-		runCmds = append(runCmds,
-			// yay for AUR
-			`pacman -S --noconfirm git base-devel`,
-			`sudo -u `+user+` bash -c 'cd /tmp && git clone https://aur.archlinux.org/yay.git && cd yay && makepkg -si --noconfirm'`,
-			`sudo -u `+user+` yay -S --noconfirm kasmvnc`,
-			// KasmVNC systemd user service
-			`sudo -u `+user+` bash -c 'mkdir -p ~/.vnc && kasmvncpasswd -w vee -u `+user+`'`,
-		)
-
-		writeFiles = append(writeFiles, vm.CloudInitWriteFile{
-			Path: "/etc/systemd/system/kasmvnc.service",
-			Content: fmt.Sprintf(`[Unit]
+		kasmvncService = fmt.Sprintf(`cat > /mnt/etc/systemd/system/kasmvnc.service <<'SVCEOF'
+[Unit]
 Description=KasmVNC remote desktop server
 After=sddm.service
 
@@ -352,20 +264,178 @@ ExecStart=/usr/bin/Xvnc :1 -interface 0.0.0.0 -websocketPort 8443 -cert /etc/ssl
 Restart=on-failure
 
 [Install]
-WantedBy=multi-user.target`, user),
-			Permissions: "0644",
-		})
-		runCmds = append(runCmds, `systemctl enable kasmvnc`)
+WantedBy=multi-user.target
+SVCEOF`, user)
+
+		kasmvncSetup = fmt.Sprintf(`
+arch-chroot /mnt pacman -S --noconfirm git base-devel
+arch-chroot /mnt sudo -u %[1]s bash -c 'cd /tmp && git clone https://aur.archlinux.org/yay.git && cd yay && makepkg -si --noconfirm'
+arch-chroot /mnt sudo -u %[1]s yay -S --noconfirm kasmvnc
+arch-chroot /mnt sudo -u %[1]s bash -c 'mkdir -p ~/.vnc && kasmvncpasswd -w vee -u %[1]s'
+arch-chroot /mnt systemctl enable kasmvnc`, user)
 	}
 
-	// AMD vs Nvidia driver selection
-	switch opts.GPUVendor {
-	case GPUVendorNvidia:
-		runCmds = append(runCmds,
-			`pacman -S --noconfirm nvidia nvidia-utils lib32-nvidia-utils`,
-			`systemctl enable nvidia-persistenced`,
-		)
+	nvidiaSetup := ""
+	if opts.GPUVendor == GPUVendorNvidia {
+		nvidiaSetup = `arch-chroot /mnt systemctl enable nvidia-persistenced`
 	}
+
+	installScript := fmt.Sprintf(`#!/bin/bash
+set -euo pipefail
+DISK=/dev/vda
+USER=%s
+
+# Partition: 512M EFI + rest as root
+parted -s "$DISK" mklabel gpt
+parted -s "$DISK" mkpart ESP fat32 1MiB 513MiB
+parted -s "$DISK" set 1 esp on
+parted -s "$DISK" mkpart primary ext4 513MiB 100%%
+
+mkfs.fat -F32 "${DISK}1"
+mkfs.ext4 -F "${DISK}2"
+
+mount "${DISK}2" /mnt
+mkdir -p /mnt/boot/efi
+mount "${DISK}1" /mnt/boot/efi
+
+# Enable multilib in the live env pacman so pacstrap can pull 32-bit libs
+sed -i '/^\[multilib\]/{n;s/^#//}' /etc/pacman.conf
+sed -i 's/^#\[multilib\]/[multilib]/' /etc/pacman.conf
+pacman -Sy --noconfirm
+
+# Base system + gaming stack
+pacstrap /mnt base linux linux-firmware grub efibootmgr \
+  networkmanager openssh qemu-guest-agent \
+  systemd-journal-remote \
+  plasma plasma-wayland-session sddm xdg-desktop-portal-kde \
+  steam wine winetricks gamemode lib32-gamemode \
+  pipewire pipewire-pulse pipewire-alsa wireplumber \
+  %s
+
+# fstab
+genfstab -U /mnt >> /mnt/etc/fstab
+
+# Locale + timezone
+arch-chroot /mnt ln -sf /usr/share/zoneinfo/UTC /etc/localtime
+echo "en_US.UTF-8 UTF-8" >> /mnt/etc/locale.gen
+arch-chroot /mnt locale-gen
+echo "LANG=en_US.UTF-8" > /mnt/etc/locale.conf
+
+# Hostname
+echo "%s" > /mnt/etc/hostname
+cat >> /mnt/etc/hosts <<'HOSTSEOF'
+127.0.0.1 localhost
+::1       localhost
+127.0.1.1 %s
+HOSTSEOF
+
+# Enable multilib in installed system
+sed -i '/^\[multilib\]/{n;s/^#//}' /mnt/etc/pacman.conf
+sed -i 's/^#\[multilib\]/[multilib]/' /mnt/etc/pacman.conf
+
+# Create users
+arch-chroot /mnt useradd -m -G wheel,gamemode -s /bin/bash "$USER"
+echo "$USER:vee" | arch-chroot /mnt chpasswd
+sed -i 's/^# %%wheel ALL=(ALL:ALL) NOPASSWD: ALL/%%wheel ALL=(ALL:ALL) NOPASSWD: ALL/' /mnt/etc/sudoers
+
+# SSH keys
+mkdir -p /mnt/home/"$USER"/.ssh
+chmod 700 /mnt/home/"$USER"/.ssh
+echo "%s" > /mnt/home/"$USER"/.ssh/authorized_keys
+chmod 600 /mnt/home/"$USER"/.ssh/authorized_keys
+arch-chroot /mnt chown -R "$USER":"$USER" /home/"$USER"/.ssh
+
+# Performance tuning
+cat > /mnt/etc/security/limits.d/99-gaming.conf <<'EOF'
+* soft nofile 524288
+* hard nofile 524288
+* soft memlock unlimited
+* hard memlock unlimited
+* soft rtprio 99
+* hard rtprio 99
+EOF
+
+cat > /mnt/etc/sysctl.d/99-gaming.conf <<'EOF'
+vm.swappiness=10
+kernel.split_lock_mitigate=0
+vm.nr_hugepages=512
+net.core.rmem_max=26214400
+net.core.wmem_max=26214400
+EOF
+
+# GRUB kernel params
+mkdir -p /mnt/etc/default/grub.d
+cat > /mnt/etc/default/grub.d/99-gaming.cfg <<'EOF'
+GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT split_lock_detect=off"
+EOF
+
+# SDDM autologin
+mkdir -p /mnt/etc/sddm.conf.d
+cat > /mnt/etc/sddm.conf.d/autologin.conf <<EOF
+[Autologin]
+User=$USER
+Session=plasma-wayland
+EOF
+
+# journal-upload to vee host (gateway resolved at runtime)
+cat > /mnt/etc/systemd/journal-upload.conf <<'EOF'
+[Upload]
+URL=http://vee-host:19532
+EOF
+
+# First-boot service to resolve vee-host and finish setup
+cat > /mnt/etc/systemd/system/vee-firstboot.service <<'EOF'
+[Unit]
+Description=vee first-boot finalisation
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=!/etc/vee-firstboot-done
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash /etc/vee-firstboot.sh
+ExecStartPost=/bin/touch /etc/vee-firstboot-done
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+cat > /mnt/etc/vee-firstboot.sh <<'FBEOF'
+#!/bin/bash
+GW=$(ip route show default | awk '/default/{print $3; exit}')
+if [ -n "$GW" ]; then
+  sed -i '/vee-host/d' /etc/hosts
+  echo "$GW vee-host" >> /etc/hosts
+fi
+systemctl enable --now systemd-journal-upload
+sysctl --system
+FBEOF
+chmod +x /mnt/etc/vee-firstboot.sh
+
+%s
+
+arch-chroot /mnt systemctl enable NetworkManager sshd sddm qemu-guest-agent vee-firstboot
+arch-chroot /mnt systemctl --global enable pipewire pipewire-pulse wireplumber
+%s
+
+# GRUB install
+arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=GRUB
+arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
+
+%s
+
+umount -R /mnt
+poweroff`, user, gpuPkgs, hostname, hostname, strings.Join(sshKeys, "\n"), kasmvncService, nvidiaSetup, kasmvncSetup)
+
+	writeFiles := []vm.CloudInitWriteFile{
+		{
+			Path:        "/install.sh",
+			Content:     installScript,
+			Permissions: "0755",
+		},
+	}
+	runCmds := []string{`bash /install.sh`}
 
 	return writeFiles, runCmds
 }
