@@ -380,8 +380,20 @@ func (q *Disk) Args() []string {
 	}
 	if q.Media == DiskMediaDisk {
 		driveArgs = append(driveArgs, "format="+string(q.Format))
-	}
-	if q.Cache != "" {
+		if q.Interface == InterfaceVirtio {
+			cache := q.Cache
+			if cache == "" {
+				cache = CacheNone
+			}
+			driveArgs = append(driveArgs,
+				"cache="+string(cache),
+				"aio=io_uring",
+				"discard=unmap",
+			)
+		} else if q.Cache != "" {
+			driveArgs = append(driveArgs, "cache="+string(q.Cache))
+		}
+	} else if q.Cache != "" {
 		driveArgs = append(driveArgs, "cache="+string(q.Cache))
 	}
 	return []string{"-drive", strings.Join(driveArgs, ",")}

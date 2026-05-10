@@ -19,6 +19,8 @@ type NIC struct {
 	Model    string
 	MAC      string
 	HostFwds []string
+	// Queues enables multiqueue virtio-net when > 1. Only applied in bridge mode.
+	Queues int
 }
 
 var _ Builder = &NIC{}
@@ -44,6 +46,9 @@ func (n *NIC) Args() []string {
 	switch n.Mode {
 	case NICBridge:
 		val := fmt.Sprintf("bridge,br=%s,model=%s,mac=%s", n.Bridge, n.Model, n.MAC)
+		if n.Queues > 1 {
+			val += fmt.Sprintf(",queues=%d", n.Queues)
+		}
 		return []string{"-nic", val}
 	default:
 		parts := []string{fmt.Sprintf("user,model=%s,mac=%s", n.Model, n.MAC)}

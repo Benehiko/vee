@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -53,6 +55,8 @@ type BaseMachine struct {
 	vfioDevices  []*VFIODevice
 	tpm          *TPM
 	vsock        *VSockDevice
+	cpuPinning   []int  // host CPU indices; empty = no pinning
+	rtc          string // e.g. "base=localtime,clock=host"
 }
 
 var (
@@ -178,6 +182,22 @@ func WithVSock(dev *VSockDevice) QemuOptions {
 	}
 }
 
+// WithCPUPinning sets the host CPU indices that vCPU threads will be pinned to
+// after QEMU starts. Empty slice disables pinning.
+func WithCPUPinning(cpus []int) QemuOptions {
+	return func(q *BaseMachine) {
+		q.cpuPinning = cpus
+	}
+}
+
+// WithRTC sets the -rtc argument (e.g. "base=localtime,clock=host").
+// Use for Windows/gaming VMs that need the RTC to match local wall-clock time.
+func WithRTC(rtc string) QemuOptions {
+	return func(q *BaseMachine) {
+		q.rtc = rtc
+	}
+}
+
 func NewEmptyMachine(provider provider.Provider) (*BaseMachine, error) {
 	return &BaseMachine{
 		provider:     provider,
@@ -272,6 +292,10 @@ func (q *BaseMachine) Args() []string {
 		args = append(args, "-display", q.display)
 	}
 
+	if q.rtc != "" {
+		args = append(args, "-rtc", q.rtc)
+	}
+
 	if q.qmpSocket != "" {
 		args = append(args, "-qmp", fmt.Sprintf("unix:%s,server,nowait", q.qmpSocket))
 	}
@@ -349,6 +373,7 @@ func (q *BaseMachine) start(ctx context.Context, detach bool) (*StartResult, err
 			_ = logFile.Close()
 			return nil, err
 		}
+		go q.applyCPUPinning(cmd.Process.Pid)
 		// logFile fd is inherited by the detached child; close the parent's copy.
 		// The child keeps it open until it exits.
 		go func() {
@@ -421,6 +446,7 @@ func (q *BaseMachine) start(ctx context.Context, detach bool) (*StartResult, err
 		_ = cmd.Process.Kill()
 		return nil, err
 	}
+	go q.applyCPUPinning(cmd.Process.Pid)
 	if err := cmd.Wait(); err != nil {
 		return nil, err
 	}
@@ -471,6 +497,68 @@ func (q *BaseMachine) applyVFIOLimits(pid int) error {
 		)
 	}
 	return nil
+}
+
+// applyCPUPinning pins the QEMU process and all its threads to the configured
+// host CPU indices using taskset. It reads /proc/<pid>/task/ to discover vCPU
+// threads that QEMU spawns after start.
+//
+// This is a best-effort operation: failures are logged but not fatal. The host
+// kernel can still schedule other work onto the pinned cores; for full isolation
+// add isolcpus=<range> to the host kernel cmdline.
+func (q *BaseMachine) applyCPUPinning(pid int) {
+	if len(q.cpuPinning) == 0 {
+		return
+	}
+
+	taskset, err := exec.LookPath("taskset")
+	if err != nil {
+		q.provider.Logger().Warn("taskset not found — CPU pinning skipped",
+			zap.String("machine", q.name))
+		return
+	}
+
+	// Build comma-separated CPU list: "4,5,6,7"
+	cpuList := make([]string, len(q.cpuPinning))
+	for i, c := range q.cpuPinning {
+		cpuList[i] = strconv.Itoa(c)
+	}
+	mask := strings.Join(cpuList, ",")
+
+	// Brief pause so QEMU has time to spawn its vCPU threads.
+	time.Sleep(200 * time.Millisecond)
+
+	// Collect all thread IDs from /proc/<pid>/task/.
+	taskDir := fmt.Sprintf("/proc/%d/task", pid)
+	entries, err := os.ReadDir(taskDir)
+	if err != nil {
+		q.provider.Logger().Warn("CPU pinning: cannot read task dir",
+			zap.String("machine", q.name),
+			zap.Int("pid", pid),
+			zap.Error(err))
+		return
+	}
+
+	pinned := 0
+	for _, e := range entries {
+		tid := e.Name()
+		out, err := exec.Command(taskset, "-cp", mask, tid).CombinedOutput()
+		if err != nil {
+			q.provider.Logger().Warn("CPU pinning: taskset failed for thread",
+				zap.String("machine", q.name),
+				zap.String("tid", tid),
+				zap.String("output", strings.TrimSpace(string(out))),
+				zap.Error(err))
+			continue
+		}
+		pinned++
+	}
+
+	q.provider.Logger().Info("CPU pinning applied",
+		zap.String("machine", q.name),
+		zap.Int("pid", pid),
+		zap.String("cpus", mask),
+		zap.Int("threads_pinned", pinned))
 }
 
 // checkAlive returns true if the process with the given PID is still running.
