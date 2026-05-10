@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Benehiko/vee/internal/utils"
 	"github.com/Benehiko/vee/provider"
 	"github.com/codingsince1985/checksum"
 	"go.uber.org/zap"
@@ -67,7 +68,7 @@ func (fi *FedoraImage) Download(ctx context.Context) error {
 
 	checksumURL := fmt.Sprintf(FedoraDownloadChecksumURL, fi.version, fi.version)
 
-	httpClient := &http.Client{}
+	httpClient := utils.DirectHTTPClient()
 	req, err := http.NewRequestWithContext(ctx, "GET", checksumURL, nil)
 	if err != nil {
 		return err

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Benehiko/vee/internal/utils"
 	"github.com/Benehiko/vee/provider"
 	"github.com/codingsince1985/checksum"
 	"go.uber.org/zap"
@@ -74,7 +75,7 @@ func (a *AlpineImage) Download(ctx context.Context) error {
 
 	// Fetch the directory listing to find the latest patch release for this minor.
 	indexURL := fmt.Sprintf("https://dl-cdn.alpinelinux.org/alpine/v%s/releases/cloud/", a.version)
-	httpClient := &http.Client{}
+	httpClient := utils.DirectHTTPClient()
 
 	req, err := http.NewRequestWithContext(ctx, "GET", indexURL, nil)
 	if err != nil {

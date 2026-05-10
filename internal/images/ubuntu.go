@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Benehiko/vee/internal/utils"
 	"github.com/Benehiko/vee/provider"
 	"github.com/codingsince1985/checksum"
 	"go.uber.org/zap"
@@ -98,7 +99,7 @@ func (u *UbuntuImage) Download(ctx context.Context) error {
 
 	checksumURL := fmt.Sprintf(UbuntuDownloadChecksumURL, u.version)
 
-	httpClient := &http.Client{}
+	httpClient := utils.DirectHTTPClient()
 	req, err := http.NewRequestWithContext(ctx, "GET", checksumURL, nil)
 	if err != nil {
 		return err
@@ -225,7 +226,7 @@ func (u *UbuntuCloudImage) Download(ctx context.Context) error {
 	}
 
 	checksumURL := fmt.Sprintf(UbuntuCloudImageChecksumURL, u.version)
-	httpClient := &http.Client{}
+	httpClient := utils.DirectHTTPClient()
 
 	req, err := http.NewRequestWithContext(ctx, "GET", checksumURL, nil)
 	if err != nil {

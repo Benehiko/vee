@@ -14,6 +14,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/Benehiko/vee/internal/utils"
 	"github.com/Benehiko/vee/provider"
 )
 
@@ -152,7 +153,7 @@ func (w *WindowsImage) fetchBuildUUID(ctx context.Context) (string, error) {
 		return "", err
 	}
 
-	hc := &http.Client{Timeout: 30 * time.Second}
+	hc := utils.DirectHTTPClientWithTimeout(30 * time.Second)
 	resp, err := hc.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("UUP dump list request: %w", err)
@@ -185,7 +186,7 @@ func (w *WindowsImage) fetchESDURLs(ctx context.Context, uuid string) (map[strin
 		return nil, err
 	}
 
-	hc := &http.Client{Timeout: 30 * time.Second}
+	hc := utils.DirectHTTPClientWithTimeout(30 * time.Second)
 	resp, err := hc.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("UUP dump get request: %w", err)

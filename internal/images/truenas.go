@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Benehiko/vee/internal/utils"
 	"github.com/Benehiko/vee/provider"
 	"github.com/codingsince1985/checksum"
 	"go.uber.org/zap"
@@ -75,7 +76,7 @@ func (t *TrueNASImage) Download(ctx context.Context) error {
 	// If the checksum endpoint is unavailable (404, network error), trust the
 	// existing file and skip the download.
 	if _, err := os.Stat(t.AbsolutePath()); err == nil {
-		httpClient := &http.Client{}
+		httpClient := utils.DirectHTTPClient()
 		targetChecksum, err := t.fetchRemoteChecksum(ctx, httpClient)
 		if err != nil {
 			t.provider.Logger().Warn("skipping checksum verification — remote unavailable",
@@ -102,7 +103,7 @@ func (t *TrueNASImage) Download(ctx context.Context) error {
 		}
 	}
 
-	httpClient := &http.Client{}
+	httpClient := utils.DirectHTTPClient()
 
 	// Fetch remote checksum before downloading.
 	targetChecksum, err := t.fetchRemoteChecksum(ctx, httpClient)
