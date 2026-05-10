@@ -42,6 +42,8 @@ github.com/clipperhouse/uax29/v2/graphemes
 # github.com/codingsince1985/checksum v1.3.0
 ## explicit; go 1.20
 github.com/codingsince1985/checksum
+# github.com/dustin/go-humanize v1.0.1
+## explicit; go 1.16
 # github.com/dustinkirkland/golang-petname v0.0.0-20240428194347-eebcea082ee0
 ## explicit; go 1.20
 github.com/dustinkirkland/golang-petname
@@ -58,6 +60,8 @@ github.com/fsnotify/fsnotify
 ## explicit; go 1.18
 github.com/go-viper/mapstructure/v2
 github.com/go-viper/mapstructure/v2/internal/errors
+# github.com/google/uuid v1.6.0
+## explicit
 # github.com/inconshreveable/mousetrap v1.1.0
 ## explicit; go 1.18
 github.com/inconshreveable/mousetrap
@@ -107,6 +111,10 @@ github.com/muesli/cancelreader
 # github.com/muesli/termenv v0.16.0
 ## explicit; go 1.17
 github.com/muesli/termenv
+# github.com/ncruces/go-strftime v1.0.0
+## explicit; go 1.17
+# github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec
+## explicit; go 1.12
 # github.com/rivo/uniseg v0.4.7
 ## explicit; go 1.18
 github.com/rivo/uniseg
@@ -165,3 +173,11 @@ golang.org/x/text/transform
 # gopkg.in/yaml.v3 v3.0.1
 ## explicit
 gopkg.in/yaml.v3
+# modernc.org/libc v1.72.0
+## explicit; go 1.25.0
+# modernc.org/mathutil v1.7.1
+## explicit; go 1.21
+# modernc.org/memory v1.11.0
+## explicit; go 1.23.0
+# modernc.org/sqlite v1.50.0
+## explicit; go 1.25.0
