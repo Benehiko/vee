@@ -2,8 +2,11 @@
 
 @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;600;700&display=swap');
 
-html { font-size: 17px; }
-body { font-size: 1rem; line-height: 1.65; }
+html { font-size: 18px; }
+body, .gdoc-page, .gdoc-page__content, p, li, td, th, .gdoc-columns, .gdoc-footer { font-size: 1rem; line-height: 1.7; }
+code, pre, .gdoc-page code { font-size: 0.95rem; }
+.gdoc-nav, .gdoc-nav__entry { font-size: 1rem; }
+.gdoc-footer { font-size: 0.9rem; }
 
 :root {
   --accent-color: #00ffe1;
@@ -166,6 +169,66 @@ blockquote {
   font-family: 'Share Tech Mono', monospace;
   font-size: 0.8em;
   letter-spacing: 0.05em;
+}
+
+/* Hide side glitch columns on mobile; sticky header with scroll-reveal */
+@media (max-width: 768px) {
+  .glitch-col { display: none !important; }
+
+  .gdoc-header {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+    z-index: 200;
+    transform: translateY(0);
+    transition: transform 0.25s ease;
+    background: #07070f !important;
+    box-shadow: 0 2px 12px #00ffe111;
+    margin: 0 !important;
+    border-radius: 0 !important;
+  }
+
+  .gdoc-header.header--hidden {
+    transform: translateY(-100%);
+  }
+
+  /* Push page content down so it isn't hidden under the fixed header */
+  .wrapper > main,
+  .wrapper > .container {
+    padding-top: 4rem;
+  }
+
+  /* Hide the edit-page bar on mobile — it's just noise there */
+  .gdoc-page__header {
+    display: none !important;
+  }
+}
+
+/* ── Header title glitch ─────────────────────────────────────────────────── */
+
+@keyframes hdr-glitch {
+  0%,  92% { clip-path: none; transform: none; opacity: 1; }
+  93%       { clip-path: inset(30% 0 50% 0); transform: translateX(-3px); opacity: 0.9; }
+  94%       { clip-path: inset(60% 0 10% 0); transform: translateX( 3px); opacity: 0.8; }
+  95%       { clip-path: none;               transform: translateX(-2px); opacity: 1;   }
+  96%       { clip-path: inset(10% 0 70% 0); transform: translateX( 2px); opacity: 0.9; }
+  97%       { clip-path: none;               transform: none;             opacity: 1;   }
+}
+
+@keyframes hdr-glitch-color {
+  0%,  92% { text-shadow: none; }
+  93%       { text-shadow: -3px 0 #ff0070, 3px 0 #00ffe1; }
+  94%       { text-shadow:  3px 0 #ff0070,-3px 0 #00ffe1; }
+  95%       { text-shadow: none; }
+  96%       { text-shadow: -2px 0 #ff0070, 2px 0 #00ffe1; }
+  97%       { text-shadow: none; }
+}
+
+.gdoc-header__link {
+  animation: hdr-glitch 6s steps(1) infinite, hdr-glitch-color 6s steps(1) infinite;
+  display: inline-block;
 }
 
 /* Scrollbar */

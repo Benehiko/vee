@@ -5,8 +5,6 @@ geekdocAlign: center
 geekdocAnchor: false
 ---
 
-# vee
-
 A command-line VM manager built on QEMU/KVM. Create, start, stop, SSH into, and monitor virtual machines from a single lightweight tool.
 
 ```sh
