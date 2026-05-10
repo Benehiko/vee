@@ -281,9 +281,43 @@ arch-chroot /mnt systemctl enable kasmvnc`, user)
 	}
 
 	installScript := fmt.Sprintf(`#!/bin/bash
-set -euo pipefail
+# Trace every command so cloud-init-output.log captures progress; redirect
+# everything to a dedicated install log too, in case cloud-init buffers.
+exec > >(tee -a /var/log/vee-install.log) 2>&1
+set -euxo pipefail
 DISK=/dev/vda
 USER=%s
+
+# On failure, surface the line + unwind any mounts so a subsequent re-run
+# (manual or vee restart) is not blocked by stale partitions on $DISK.
+on_err() {
+  rc=$?
+  echo "==> install.sh failed at line $1 (exit $rc)"
+  umount -R /mnt 2>/dev/null || true
+  exit $rc
+}
+trap 'on_err $LINENO' ERR
+
+# Wait for time sync — the live ISO boots with the clock at 1970-01-01,
+# which makes every HTTPS cert look "not yet valid" and breaks pacman /
+# reflector. Force NTP up before any network fetch.
+timedatectl set-ntp true || true
+for i in $(seq 1 30); do
+  if timedatectl show -p NTPSynchronized --value | grep -q '^yes$'; then
+    break
+  fi
+  sleep 2
+done
+echo "==> clock: $(date -u '+%%Y-%%m-%%dT%%H:%%M:%%SZ')"
+
+# Wait for a default route + working DNS — runcmd fires before
+# network-online.target on some images.
+for i in $(seq 1 30); do
+  if ip route show default | grep -q '^default ' && getent hosts archlinux.org >/dev/null 2>&1; then
+    break
+  fi
+  sleep 2
+done
 
 # Partition: 512M EFI + rest as root
 parted -s "$DISK" mklabel gpt
@@ -298,9 +332,12 @@ mount "${DISK}2" /mnt
 mkdir -p /mnt/boot/efi
 mount "${DISK}1" /mnt/boot/efi
 
-# Pick fastest mirrors before pacstrap
+# Pick fastest mirrors before pacstrap. Reflector reaches out over HTTPS;
+# if that fails (transient mirrorstatus outage, regional block) keep the
+# ISO's bundled mirrorlist rather than aborting the whole install.
 pacman -Sy --noconfirm reflector
-reflector --latest 10 --sort rate --save /etc/pacman.d/mirrorlist
+reflector --latest 10 --sort rate --save /etc/pacman.d/mirrorlist || \
+  echo "==> reflector failed, keeping ISO mirrorlist"
 
 # Enable multilib in the live env pacman so pacstrap can pull 32-bit libs
 sed -i '/^\[multilib\]/{n;s/^#//}' /etc/pacman.conf
