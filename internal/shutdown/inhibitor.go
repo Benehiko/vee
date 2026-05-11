@@ -1,12 +1,15 @@
 // Package shutdown wraps the systemd-logind D-Bus API for blocking host
 // shutdown until vee can gracefully power off running VMs.
 //
-// It provides:
-//   - Acquire: takes an Inhibit lock in "block" mode for shutdown:sleep,
-//     so logind will not let the host power off until the lock is released.
-//   - PrepareForShutdown: subscribes to logind's PrepareForShutdown(b)
-//     signal so the daemon learns when the host actually starts shutting
-//     down and can begin its graceful-stop sequence.
+// Two-layer design:
+//
+//   - Conn: a long-lived system-bus connection owned by the daemon for its
+//     entire lifetime. It exposes PrepareForShutdown subscription (which
+//     must outlive any individual lock) and Acquire/Release for the
+//     transient inhibitor fd.
+//   - Lock: the inhibitor file descriptor itself. Releasing the lock is
+//     what unblocks logind. The daemon takes a Lock only while ≥1 VM is
+//     running so the host is not blocked when there is nothing to wait for.
 package shutdown
 
 import (
@@ -29,53 +32,81 @@ const (
 	defaultMode   = "block"
 )
 
-// Inhibitor holds an active logind inhibitor lock and an optional system
-// bus connection used for PrepareForShutdown signal subscription.
-type Inhibitor struct {
+// Conn is a persistent system-bus connection used to subscribe to
+// PrepareForShutdown and to acquire/release inhibitor locks on demand.
+type Conn struct {
 	mu     sync.Mutex
-	fd     *os.File
 	conn   *dbus.Conn
 	signal chan *dbus.Signal
+	subbed bool
 }
 
-// Acquire takes a "block" inhibitor for shutdown:sleep on the system bus.
-// `who` and `why` are surfaced by `systemd-inhibit --list`. The returned
-// Inhibitor must be released with Release when the daemon exits.
-func Acquire(who, why string) (*Inhibitor, error) {
-	conn, err := dbus.ConnectSystemBus()
+// Connect opens a system-bus connection. Close it with Conn.Close when the
+// daemon exits.
+func Connect() (*Conn, error) {
+	c, err := dbus.ConnectSystemBus()
 	if err != nil {
 		return nil, fmt.Errorf("connect system bus: %w", err)
+	}
+	return &Conn{conn: c}, nil
+}
+
+// Lock is an active "block" inhibitor on shutdown:sleep. Releasing it
+// closes the file descriptor logind handed us, which is what actually
+// unblocks shutdown.
+type Lock struct {
+	mu sync.Mutex
+	fd *os.File
+}
+
+// Acquire takes a "block" inhibitor for shutdown:sleep. `who` and `why`
+// are surfaced by `systemd-inhibit --list`. The returned Lock must be
+// released when no longer needed.
+func (c *Conn) Acquire(who, why string) (*Lock, error) {
+	c.mu.Lock()
+	conn := c.conn
+	c.mu.Unlock()
+	if conn == nil {
+		return nil, errors.New("connection closed")
 	}
 
 	obj := conn.Object(logindDest, logindPath)
 	var fd dbus.UnixFD
 	call := obj.Call(inhibitMethod, 0, defaultWhat, who, why, defaultMode)
 	if call.Err != nil {
-		_ = conn.Close()
 		return nil, fmt.Errorf("inhibit call: %w", call.Err)
 	}
 	if err := call.Store(&fd); err != nil {
-		_ = conn.Close()
 		return nil, fmt.Errorf("inhibit fd: %w", err)
 	}
+	return &Lock{fd: os.NewFile(uintptr(fd), "logind-inhibit")}, nil
+}
 
-	return &Inhibitor{
-		fd:   os.NewFile(uintptr(fd), "logind-inhibit"),
-		conn: conn,
-	}, nil
+// Release closes the held file descriptor, releasing the inhibitor. Safe
+// to call multiple times.
+func (l *Lock) Release() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.fd == nil {
+		return nil
+	}
+	err := l.fd.Close()
+	l.fd = nil
+	return err
 }
 
 // PrepareForShutdown subscribes to logind's PrepareForShutdown(b) signal
 // and returns a channel that receives exactly once when shutdown begins
-// (signal payload true). Unsubscribes when ctx is cancelled.
-func (i *Inhibitor) PrepareForShutdown(ctx context.Context) (<-chan struct{}, error) {
-	i.mu.Lock()
-	defer i.mu.Unlock()
+// (signal payload true). Unsubscribes when ctx is cancelled. May only be
+// called once per Conn.
+func (c *Conn) PrepareForShutdown(ctx context.Context) (<-chan struct{}, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-	if i.conn == nil {
-		return nil, errors.New("inhibitor not active")
+	if c.conn == nil {
+		return nil, errors.New("connection closed")
 	}
-	if i.signal != nil {
+	if c.subbed {
 		return nil, errors.New("PrepareForShutdown already subscribed")
 	}
 
@@ -83,15 +114,16 @@ func (i *Inhibitor) PrepareForShutdown(ctx context.Context) (<-chan struct{}, er
 		"type='signal',interface='%s',member='%s',path='%s'",
 		logindManager, prepareSignal, logindPath,
 	)
-	if call := i.conn.BusObject().Call(
+	if call := c.conn.BusObject().Call(
 		"org.freedesktop.DBus.AddMatch", 0, rule,
 	); call.Err != nil {
 		return nil, fmt.Errorf("AddMatch PrepareForShutdown: %w", call.Err)
 	}
 
 	sigCh := make(chan *dbus.Signal, 4)
-	i.conn.Signal(sigCh)
-	i.signal = sigCh
+	c.conn.Signal(sigCh)
+	c.signal = sigCh
+	c.subbed = true
 
 	out := make(chan struct{}, 1)
 	go func() {
@@ -123,16 +155,17 @@ func (i *Inhibitor) PrepareForShutdown(ctx context.Context) (<-chan struct{}, er
 }
 
 // PreparingForShutdown returns the current value of logind's
-// PreparingForShutdown property. True while a shutdown is in progress (after
-// PrepareForShutdown(true) has fired and before PrepareForShutdown(false)).
-// Use this on ctx.Done() to disambiguate "user stopped the daemon" from
-// "daemon received SIGTERM during host shutdown".
-func (i *Inhibitor) PreparingForShutdown() (bool, error) {
-	i.mu.Lock()
-	conn := i.conn
-	i.mu.Unlock()
+// PreparingForShutdown property. True while a shutdown is in progress
+// (after PrepareForShutdown(true) has fired and before
+// PrepareForShutdown(false)). Use this on ctx.Done() to disambiguate
+// "user stopped the daemon" from "daemon received SIGTERM during host
+// shutdown".
+func (c *Conn) PreparingForShutdown() (bool, error) {
+	c.mu.Lock()
+	conn := c.conn
+	c.mu.Unlock()
 	if conn == nil {
-		return false, errors.New("inhibitor not active")
+		return false, errors.New("connection closed")
 	}
 	obj := conn.Object(logindDest, logindPath)
 	v, err := obj.GetProperty(logindManager + ".PreparingForShutdown")
@@ -146,24 +179,15 @@ func (i *Inhibitor) PreparingForShutdown() (bool, error) {
 	return b, nil
 }
 
-// Release closes the held file descriptor (releasing the inhibitor) and
-// the system bus connection. Safe to call multiple times.
-func (i *Inhibitor) Release() error {
-	i.mu.Lock()
-	defer i.mu.Unlock()
-
-	var firstErr error
-	if i.fd != nil {
-		if err := i.fd.Close(); err != nil {
-			firstErr = err
-		}
-		i.fd = nil
+// Close tears down the system-bus connection. Any held Lock should be
+// released first.
+func (c *Conn) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.conn == nil {
+		return nil
 	}
-	if i.conn != nil {
-		if err := i.conn.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-		i.conn = nil
-	}
-	return firstErr
+	err := c.conn.Close()
+	c.conn = nil
+	return err
 }

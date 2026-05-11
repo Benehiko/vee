@@ -11,19 +11,25 @@ import (
 )
 
 const (
-	daemonPollInterval     = 30 * time.Second
+	// daemonPollInterval drives both autostart-recovery and inhibitor
+	// reconciliation. Kept short so releasing the shutdown inhibitor after
+	// the last VM stops does not leave the host blocked for long if the
+	// user immediately tries to power off.
+	daemonPollInterval     = 5 * time.Second
 	daemonStopPerVMTimeout = 60 * time.Second
 )
 
 // RunDaemon starts all AutoStart VMs and watches them, restarting any that
-// have exited. It also acquires a logind shutdown inhibitor so the host
-// will block on power-off/reboot until vee has gracefully stopped every
-// running VM.
+// have exited. It also acquires a logind shutdown inhibitor *while at least
+// one VM is running* so the host blocks on power-off/reboot only when there
+// is something to wait for. With no VMs running the inhibitor is released,
+// letting KDE / systemctl poweroff proceed without the 30s "shutdown
+// blocked" abort dialog.
 //
 // Exit paths:
 //   - ctx.Done()         → user/systemd stopped the daemon (e.g. systemctl
-//     --user stop vee). Inhibitor is released; running
-//     VMs are intentionally left alone.
+//     stop vee). Inhibitor is released; running VMs are
+//     intentionally left alone.
 //   - host shutdown      → logind PrepareForShutdown(true) fires. Notify
 //     the user, gracefully stop all VMs, release the
 //     inhibitor, then return so the unit exits.
@@ -31,24 +37,22 @@ func (m *Manager) RunDaemon(ctx context.Context) error {
 	log := m.provider.Logger()
 	log.Info("vee daemon starting")
 
-	inhibitor, err := shutdown.Acquire("vee", "Gracefully shutting down running VMs")
+	conn, err := shutdown.Connect()
 	if err != nil {
-		log.Warn("could not acquire shutdown inhibitor; host shutdown will not wait for VMs",
+		log.Warn("could not open logind connection; host shutdown will not wait for VMs",
 			zap.Error(err))
-	} else {
-		log.Info("shutdown inhibitor acquired")
-		defer func() {
-			if err := inhibitor.Release(); err != nil {
-				log.Warn("inhibitor release failed", zap.Error(err))
-			} else {
-				log.Info("shutdown inhibitor released")
-			}
-		}()
 	}
+	defer func() {
+		if conn != nil {
+			if err := conn.Close(); err != nil {
+				log.Debug("logind connection close failed", zap.Error(err))
+			}
+		}
+	}()
 
 	var shutdownCh <-chan struct{}
-	if inhibitor != nil {
-		ch, subErr := inhibitor.PrepareForShutdown(ctx)
+	if conn != nil {
+		ch, subErr := conn.PrepareForShutdown(ctx)
 		if subErr != nil {
 			log.Warn("PrepareForShutdown subscription failed", zap.Error(subErr))
 		} else {
@@ -56,9 +60,45 @@ func (m *Manager) RunDaemon(ctx context.Context) error {
 		}
 	}
 
+	var lock *shutdown.Lock
+	releaseLock := func(reason string) {
+		if lock == nil {
+			return
+		}
+		if err := lock.Release(); err != nil {
+			log.Warn("inhibitor release failed", zap.Error(err))
+		} else {
+			log.Info("shutdown inhibitor released", zap.String("reason", reason))
+		}
+		lock = nil
+	}
+	defer releaseLock("daemon exit")
+
+	// reconcile inhibitor state to match running VM count
+	reconcileInhibitor := func() {
+		if conn == nil {
+			return
+		}
+		running := m.runningVMCount()
+		switch {
+		case running > 0 && lock == nil:
+			l, err := conn.Acquire("vee", "Gracefully shutting down running VMs")
+			if err != nil {
+				log.Warn("could not acquire shutdown inhibitor; host shutdown will not wait for VMs",
+					zap.Error(err))
+				return
+			}
+			lock = l
+			log.Info("shutdown inhibitor acquired", zap.Int("running_vms", running))
+		case running == 0 && lock != nil:
+			releaseLock("no VMs running")
+		}
+	}
+
 	if err := m.startAutoStartVMs(ctx); err != nil {
 		log.Warn("initial autostart pass had errors", zap.Error(err))
 	}
+	reconcileInhibitor()
 
 	ticker := time.NewTicker(daemonPollInterval)
 	defer ticker.Stop()
@@ -71,10 +111,11 @@ func (m *Manager) RunDaemon(ctx context.Context) error {
 			// Without this check the select branches race on shutdown:
 			// if ctx.Done wins before shutdownCh, VMs survive the daemon
 			// only to be SIGKILLed seconds later by the host poweroff.
-			if inhibitor != nil {
-				if preparing, perr := inhibitor.PreparingForShutdown(); perr == nil && preparing {
+			if conn != nil {
+				if preparing, perr := conn.PreparingForShutdown(); perr == nil && preparing {
 					log.Info("ctx cancelled during host shutdown; stopping VMs")
 					m.handleHostShutdown(ctx)
+					releaseLock("host shutdown complete")
 					return nil
 				}
 			}
@@ -82,31 +123,42 @@ func (m *Manager) RunDaemon(ctx context.Context) error {
 			return nil
 		case <-shutdownCh:
 			m.handleHostShutdown(ctx)
+			releaseLock("host shutdown complete")
 			return nil
 		case <-ticker.C:
 			if err := m.startAutoStartVMs(ctx); err != nil {
 				log.Warn("autostart watch pass had errors", zap.Error(err))
 			}
+			reconcileInhibitor()
 		}
 	}
 }
 
+// runningVMCount reports how many VMs are currently alive per state +
+// kernel pid check.
+func (m *Manager) runningVMCount() int {
+	entries, err := m.List()
+	if err != nil {
+		return 0
+	}
+	var n int
+	for _, e := range entries {
+		if e.State != nil && e.State.Running && isAlive(e.State.PID) {
+			n++
+		}
+	}
+	return n
+}
+
 // handleHostShutdown is invoked when logind signals that the host is
 // powering off or rebooting. It notifies the user, stops every running VM
-// in parallel, and notifies again once done. The deferred inhibitor.Release
-// in RunDaemon is what actually unblocks logind.
+// in parallel, and notifies again once done. The inhibitor release in
+// RunDaemon is what actually unblocks logind.
 func (m *Manager) handleHostShutdown(ctx context.Context) {
 	log := m.provider.Logger()
 	log.Info("host shutdown signal received; stopping running VMs")
 
-	entries, _ := m.List()
-	var runningCount int
-	for _, e := range entries {
-		if e.State != nil && e.State.Running && isAlive(e.State.PID) {
-			runningCount++
-		}
-	}
-
+	runningCount := m.runningVMCount()
 	if runningCount == 0 {
 		log.Info("no running VMs at shutdown; releasing inhibitor")
 		return
