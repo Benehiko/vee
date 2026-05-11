@@ -8,6 +8,12 @@ import (
 	"time"
 )
 
+// executeTimeout bounds how long an individual QMP command waits for QEMU
+// to respond. QEMU is normally instantaneous on these synchronous commands,
+// so a short timeout is fine and prevents a wedged or paused VM from
+// hanging `vee stop` (and the daemon's shutdown path) indefinitely.
+const executeTimeout = 5 * time.Second
+
 type QMPClient struct {
 	conn    net.Conn
 	scanner *bufio.Scanner
@@ -61,11 +67,14 @@ func NewQMPClient(socketPath string, timeout time.Duration) (*QMPClient, error) 
 		return nil, fmt.Errorf("QMP dial %s: %w", socketPath, err)
 	}
 	c := &QMPClient{conn: conn, scanner: bufio.NewScanner(conn)}
-	// Consume the greeting banner.
+	// Consume the greeting banner under the same deadline as a regular
+	// command so a wedged QEMU cannot hang the dialer.
+	_ = conn.SetReadDeadline(time.Now().Add(executeTimeout))
 	if !c.scanner.Scan() {
 		_ = conn.Close()
-		return nil, fmt.Errorf("QMP: no greeting received")
+		return nil, fmt.Errorf("QMP: no greeting received: %w", c.scanner.Err())
 	}
+	_ = conn.SetReadDeadline(time.Time{})
 	if err := c.Capabilities(); err != nil {
 		_ = conn.Close()
 		return nil, err
@@ -80,10 +89,20 @@ func (c *QMPClient) execute(cmd string, args map[string]any) (json.RawMessage, e
 		return nil, err
 	}
 	data = append(data, '\n')
+	// Bound both the write and the read so a stalled QEMU cannot block
+	// the caller indefinitely. Clear the deadline before returning so
+	// subsequent calls on the same client get a fresh window.
+	if err := c.conn.SetDeadline(time.Now().Add(executeTimeout)); err != nil {
+		return nil, fmt.Errorf("QMP set deadline: %w", err)
+	}
+	defer func() { _ = c.conn.SetDeadline(time.Time{}) }()
 	if _, err := c.conn.Write(data); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("QMP write %s: %w", cmd, err)
 	}
 	if !c.scanner.Scan() {
+		if scanErr := c.scanner.Err(); scanErr != nil {
+			return nil, fmt.Errorf("QMP %s: %w", cmd, scanErr)
+		}
 		return nil, fmt.Errorf("QMP: connection closed")
 	}
 	var resp qmpResponse
