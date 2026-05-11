@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -16,6 +17,13 @@ import (
 	"github.com/Benehiko/vee/internal/vm"
 	"github.com/spf13/cobra"
 )
+
+var tunnelSerialRaw bool
+
+// ansiEscape matches ANSI/VT100 escape sequences and lone CR used for cursor
+// control by bootloaders and terminal UIs (e.g. GRUB, UEFI shell). Covers:
+// CSI sequences (\x1b[...X), two-char sequences (\x1bX), and bare \r.
+var ansiEscape = regexp.MustCompile(`\x1b(?:\[[0-9;?=]*[ -/]*[@-~]|[=><~]|[@-Z\\-_])|\r`)
 
 var tunnelCmd = &cobra.Command{
 	Use:   "tunnel <name> [service]",
@@ -100,6 +108,7 @@ func printServiceMenu(cfg *vm.VMConfig, services []resolvedService) error {
 
 // tunnelSerial streams the VM's serial console log (serial.log) to stdout,
 // following new output until Ctrl+C. Works whether the VM is running or not.
+// ANSI escape codes are stripped by default; pass --raw to disable.
 func tunnelSerial(cmd *cobra.Command, name string) error {
 	logPath := filepath.Join(prov.Config().StoragePath, name, "serial.log")
 	f, err := os.Open(logPath)
@@ -111,7 +120,8 @@ func tunnelSerial(cmd *cobra.Command, name string) error {
 	}
 	defer func() { _ = f.Close() }()
 
-	if _, err := io.Copy(os.Stdout, f); err != nil {
+	dst := serialWriter()
+	if _, err := io.Copy(dst, f); err != nil {
 		return err
 	}
 
@@ -121,11 +131,36 @@ func tunnelSerial(cmd *cobra.Command, name string) error {
 		case <-cmd.Context().Done():
 			return nil
 		case <-time.After(250 * time.Millisecond):
-			if _, err := io.Copy(os.Stdout, f); err != nil {
+			if _, err := io.Copy(dst, f); err != nil {
 				return err
 			}
 		}
 	}
+}
+
+func init() {
+	tunnelCmd.Flags().BoolVar(&tunnelSerialRaw, "raw", false, "Stream serial output without stripping ANSI escape codes")
+}
+
+// serialWriter returns a writer that strips ANSI escape codes unless --raw.
+func serialWriter() io.Writer {
+	if tunnelSerialRaw {
+		return os.Stdout
+	}
+	return &ansiStripper{w: os.Stdout}
+}
+
+// ansiStripper wraps a writer and removes ANSI/VT100 escape sequences.
+type ansiStripper struct {
+	w io.Writer
+}
+
+func (s *ansiStripper) Write(p []byte) (int, error) {
+	clean := ansiEscape.ReplaceAll(p, nil)
+	if _, err := s.w.Write(clean); err != nil {
+		return 0, err
+	}
+	return len(p), nil
 }
 
 func serviceURL(cfg *vm.VMConfig, s resolvedService) string {
