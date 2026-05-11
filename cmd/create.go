@@ -162,11 +162,18 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
 				line, err := stdinReader.ReadString('\n')
 				return strings.TrimRight(line, "\r\n"), err
 			}
+			wasInstalling := isInstalling(mgr, name)
 			if err := mgr.Start(cmd.Context(), name, false); err != nil {
 				if strings.Contains(err.Error(), "already running") {
 					return err
 				}
 				return fmt.Errorf("auto-start: %w", err)
+			}
+			// If the VM powered off immediately (install pass complete), skip
+			// the readiness spinner — there is nothing to wait for.
+			if installPassDone(mgr, name, wasInstalling) {
+				fmt.Printf("Install complete. Run 'vee start %s' to boot.\n", name)
+				return nil
 			}
 			return runStartSpinner(cmd, mgr, name)
 		}

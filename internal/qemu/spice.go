@@ -47,7 +47,7 @@ func NewSpice(opts ...SpiceOption) *Spice {
 //	-device virtserialport,chardev=vdagent,name=com.redhat.spice.0
 func (qs *Spice) Args() []string {
 	var args []string
-	args = append(args, "-spice", fmt.Sprintf("port=%d,disable-ticketing=%t", qs.Port, qs.DisableTicketing))
+	args = append(args, "-spice", fmt.Sprintf("port=%d,disable-ticketing=%t,gl=off", qs.Port, qs.DisableTicketing))
 	// -soundhw was removed in QEMU 6.0; use device-based HDA instead.
 	args = append(args, "-device", "intel-hda", "-device", "hda-duplex")
 	args = append(args, "-device", "virtio-serial", "-chardev", "spicevmc,id=vdagent,debug=0,name=vdagent")

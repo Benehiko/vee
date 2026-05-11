@@ -43,6 +43,29 @@ func findVM(name string) (*vm.ListEntry, error) {
 	return nil, fmt.Errorf("VM %q not found", name)
 }
 
+// installPassDone reports whether a VM that was in "pending" install state
+// has now completed its install pass (powered off, install_state promoted to
+// "ready"). wasInstalling must be set by the caller before Start() is called.
+func installPassDone(mgr *vm.Manager, name string, wasInstalling bool) bool {
+	if !wasInstalling {
+		return false
+	}
+	state, err := mgr.LoadState(name)
+	if err != nil {
+		return false
+	}
+	return !state.Running && state.InstallState == vm.InstallStateReady
+}
+
+// isInstalling reports whether the VM's install pass is still pending.
+func isInstalling(mgr *vm.Manager, name string) bool {
+	state, err := mgr.LoadState(name)
+	if err != nil {
+		return false
+	}
+	return state.InstallState == vm.InstallStatePending
+}
+
 // openQGAClient connects to the guest agent socket and returns the client plus
 // a cleanup function. The caller must invoke close() when done.
 func openQGAClient(socket string, timeout time.Duration) (*qemu.QGAClient, func(), error) {

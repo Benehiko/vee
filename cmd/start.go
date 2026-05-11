@@ -47,10 +47,17 @@ var startCmd = &cobra.Command{
 			prov.Config().QemuBinaryPath = qemuPath
 		}
 
+		wasInstalling := isInstalling(mgr, name)
 		if err := mgr.Start(cmd.Context(), name, startForeground); err != nil {
 			return err
 		}
 		if startForeground {
+			return nil
+		}
+		// If the VM powered off immediately (install pass complete), skip the
+		// readiness spinner — there is nothing to wait for.
+		if installPassDone(mgr, name, wasInstalling) {
+			fmt.Printf("Install complete. Run 'vee start %s' to boot.\n", name)
 			return nil
 		}
 		maybeStartJournalListener(cmd, name)

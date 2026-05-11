@@ -440,12 +440,6 @@ func (m *Manager) WaitReadyWithPhases(ctx context.Context, name string, timeout 
 		}
 		if !state.Running || state.PID == 0 {
 			close(phaseCh)
-			// If the install pass completed and powered off before we started
-			// polling, treat it as success — the caller will start the boot pass.
-			if state.InstallState == InstallStateReady {
-				errCh <- nil
-				return
-			}
 			errCh <- fmt.Errorf("VM %q is not running", name)
 			return
 		}
