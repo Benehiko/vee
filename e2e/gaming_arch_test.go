@@ -75,69 +75,33 @@ func TestGamingArchInstall(t *testing.T) {
 	sshAddr := fmt.Sprintf("127.0.0.1:%d", sshPort)
 	t.Logf("VM SSH address: %s", sshAddr)
 
-	// Phase 4: wait for SSH auth and run assertions.
+	// Phase 4: wait for SSH auth and run health checks.
 	waitSSHAuth(t, sshAddr, "gamer", privKeyPath, 5*time.Minute)
 
-	t.Log("running post-install assertions...")
+	t.Log("running post-install health checks via vee-check...")
 
-	assertSSH := func(desc, cmd, want string) {
-		t.Helper()
-		out := sshRun(t, sshAddr, "gamer", privKeyPath, cmd)
-		if !strings.Contains(out, want) {
-			t.Errorf("%s: got %q, want it to contain %q", desc, out, want)
+	// Safety net: verify the script is present before relying on it.
+	scriptPresent := sshRunLenient(t, sshAddr, "gamer", privKeyPath,
+		"test -x /usr/local/bin/vee-check && echo ok")
+	if !strings.Contains(scriptPresent, "ok") {
+		t.Fatalf("vee-check script missing or not executable on installed VM")
+	}
+
+	checks := sshRunHealthCheck(t, sshAddr, "gamer", privKeyPath)
+	if len(checks) == 0 {
+		t.Fatal("vee-check returned no checks — script may have failed to produce output")
+	}
+
+	allPassed := true
+	for _, c := range checks {
+		if !c.OK {
+			t.Errorf("health check FAILED: %s — %s", c.Name, c.Detail)
+			allPassed = false
 		}
 	}
-
-	assertSSHLenient := func(desc, cmd, want string) {
-		t.Helper()
-		out := sshRunLenient(t, sshAddr, "gamer", privKeyPath, cmd)
-		if !strings.Contains(out, want) {
-			t.Errorf("%s: got %q, want it to contain %q", desc, out, want)
-		}
+	if allPassed {
+		t.Logf("all %d health checks passed", len(checks))
 	}
-
-	// User exists and is in the wheel group.
-	assertSSH("user in wheel group", "groups gamer", "wheel")
-
-	// Core services are enabled.
-	// qemu-guest-agent uses static enablement (socket-activated), not "enabled".
-	for _, svc := range []string{"NetworkManager", "sshd", "sddm"} {
-		assertSSH("service "+svc+" enabled",
-			"systemctl is-enabled "+svc, "enabled")
-	}
-	assertSSH("qemu-guest-agent present",
-		"systemctl is-enabled qemu-guest-agent 2>&1 || true", "") // static or enabled both ok
-
-	// multilib repo is configured in pacman.conf (at least one occurrence).
-	assertSSH("multilib in pacman.conf",
-		"grep -q '\\[multilib\\]' /etc/pacman.conf && echo yes", "yes")
-
-	// fstab has at least two entries (EFI + root).
-	out := sshRun(t, sshAddr, "gamer", privKeyPath,
-		"grep -vc '^#\\|^$' /etc/fstab")
-	if out == "0" || out == "1" {
-		t.Errorf("fstab: expected ≥2 entries, got %q", out)
-	}
-
-	// KDE Plasma is installed.
-	assertSSHLenient("plasma-desktop installed",
-		"pacman -Q plasma-desktop 2>&1", "plasma-desktop")
-
-	// Steam is installed.
-	assertSSHLenient("steam installed",
-		"pacman -Q steam 2>&1", "steam")
-
-	// SDDM autologin config is present.
-	assertSSH("sddm autologin session",
-		"grep -i 'plasmawayland' /etc/sddm.conf.d/autologin.conf", "plasmawayland")
-
-	// vee-firstboot service is enabled.
-	assertSSH("vee-firstboot enabled",
-		"systemctl is-enabled vee-firstboot", "enabled")
-
-	// sudo works without password for wheel members.
-	assertSSH("sudo nopasswd",
-		"sudo -n true && echo ok", "ok")
 
 	// Phase 5: stop (cleanup handles delete). VM may have already exited on its own.
 	t.Log("stopping VM...")

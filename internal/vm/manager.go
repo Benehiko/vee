@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -1429,4 +1430,82 @@ func copyFile(src, dst string) error {
 	defer func() { _ = out.Close() }()
 	_, err = io.Copy(out, in)
 	return err
+}
+
+// RunHealthCheck runs /usr/local/bin/vee-check inside the VM, parses its JSON
+// output, and persists the results into VMState. The VM must be running.
+func (m *Manager) RunHealthCheck(ctx context.Context, name string) ([]HealthCheck, error) {
+	cfg, err := m.loadConfig(name)
+	if err != nil {
+		return nil, err
+	}
+	state, err := m.loadState(name)
+	if err != nil {
+		return nil, err
+	}
+	if !state.Running {
+		return nil, fmt.Errorf("VM %q is not running", name)
+	}
+
+	out, err := m.runCheckScript(ctx, cfg, state)
+	if err != nil {
+		return nil, fmt.Errorf("run vee-check: %w", err)
+	}
+
+	var result struct {
+		Checks []HealthCheck `json:"checks"`
+	}
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		return nil, fmt.Errorf("parse vee-check output: %w\noutput: %s", err, out)
+	}
+
+	now := time.Now()
+	state.PostInstallChecks = result.Checks
+	state.PostInstallCheckedAt = &now
+	if saveErr := m.saveState(name, state); saveErr != nil {
+		return nil, fmt.Errorf("persist health checks: %w", saveErr)
+	}
+	return result.Checks, nil
+}
+
+// runCheckScript executes /usr/local/bin/vee-check in the VM and returns stdout.
+// Prefers QGA (works without network routing); falls back to SSH port.
+func (m *Manager) runCheckScript(_ context.Context, cfg *VMConfig, state *VMState) (string, error) {
+	if state.QGASocket != "" {
+		client, err := qemu.NewQGAClient(state.QGASocket, 5*time.Second)
+		if err == nil {
+			defer func() { _ = client.Close() }()
+			out, _, _, runErr := client.RunCommand("/usr/local/bin/vee-check", nil)
+			if runErr == nil {
+				return strings.TrimSpace(out), nil
+			}
+		}
+	}
+	if state.SSHPort > 0 {
+		home, _ := os.UserHomeDir()
+		identity := home + "/.vee/ssh/id_ed25519"
+		user := cfg.SSHUser
+		if user == "" && cfg.CloudInit != nil {
+			user = cfg.CloudInit.DefaultUser
+		}
+		if user == "" {
+			user = "root"
+		}
+		args := []string{
+			"-i", identity,
+			"-o", "StrictHostKeyChecking=no",
+			"-o", "UserKnownHostsFile=/dev/null",
+			"-o", "ConnectTimeout=5",
+			"-o", "LogLevel=ERROR",
+			"-p", fmt.Sprintf("%d", state.SSHPort),
+			fmt.Sprintf("%s@127.0.0.1", user),
+			"/usr/local/bin/vee-check",
+		}
+		out, execErr := exec.Command("ssh", args...).Output()
+		if execErr != nil {
+			return "", fmt.Errorf("ssh exec: %w", execErr)
+		}
+		return strings.TrimSpace(string(out)), nil
+	}
+	return "", fmt.Errorf("no QGA socket or SSH port available for health check")
 }

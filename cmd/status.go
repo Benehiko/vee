@@ -14,7 +14,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var statusWatch bool
+var (
+	statusWatch    bool
+	statusRunCheck bool
+)
 
 var statusCmd = &cobra.Command{
 	Use:               "status <name>",
@@ -83,63 +86,87 @@ var statusCmd = &cobra.Command{
 		}
 
 		// QGA section — only if VM is running and has a QGA socket.
-		if !entry.State.Running || entry.State.QGASocket == "" {
-			return nil
-		}
+		if entry.State.Running && entry.State.QGASocket != "" {
+			fmt.Println()
+			client, closeClient, qgaErr := openQGAClient(entry.State.QGASocket, 3*time.Second)
+			if qgaErr != nil {
+				fmt.Printf("guest-agent: unavailable (%v)\n", qgaErr)
+			} else {
+				defer closeClient()
 
-		fmt.Println()
-		client, closeClient, err := openQGAClient(entry.State.QGASocket, 3*time.Second)
-		if err != nil {
-			fmt.Printf("guest-agent: unavailable (%v)\n", err)
-			return nil
-		}
-		defer closeClient()
+				if pingErr := client.GuestPing(); pingErr != nil {
+					fmt.Printf("guest-agent: not responding (%v)\n", pingErr)
+				} else {
+					fmt.Println("guest-agent: connected")
+					fmt.Println()
 
-		if err := client.GuestPing(); err != nil {
-			fmt.Printf("guest-agent: not responding (%v)\n", err)
-			return nil
-		}
+					w2 := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+					_, _ = fmt.Fprintln(w2, "INTERFACE\tIP\tMAC")
 
-		fmt.Println("guest-agent: connected")
-		fmt.Println()
+					ifaces, ifErr := client.GuestNetworkGetInterfaces()
+					if ifErr == nil {
+						for _, iface := range ifaces {
+							if iface.Name == "lo" {
+								continue
+							}
+							var ips []string
+							for _, addr := range iface.IPAddresses {
+								if addr.IPAddressType == "ipv4" {
+									ips = append(ips, fmt.Sprintf("%s/%d", addr.IPAddress, addr.Prefix))
+								}
+							}
+							ipStr := strings.Join(ips, ", ")
+							if ipStr == "" {
+								ipStr = "-"
+							}
+							_, _ = fmt.Fprintf(w2, "%s\t%s\t%s\n", iface.Name, ipStr, iface.HardwareAddress)
+						}
+					}
+					_ = w2.Flush()
 
-		w2 := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		_, _ = fmt.Fprintln(w2, "INTERFACE\tIP\tMAC")
+					hostname, _, _, herr := client.RunCommand("/bin/hostname", nil)
+					if herr == nil {
+						fmt.Printf("\nhostname: %s", hostname)
+					}
 
-		ifaces, err := client.GuestNetworkGetInterfaces()
-		if err == nil {
-			for _, iface := range ifaces {
-				if iface.Name == "lo" {
-					continue
-				}
-				var ips []string
-				for _, addr := range iface.IPAddresses {
-					if addr.IPAddressType == "ipv4" {
-						ips = append(ips, fmt.Sprintf("%s/%d", addr.IPAddress, addr.Prefix))
+					osRelease, _, _, oerr := client.RunCommand("/bin/sh", []string{"-c", "grep PRETTY_NAME /etc/os-release | cut -d= -f2 | tr -d '\"'"})
+					if oerr == nil {
+						fmt.Printf("os:       %s", osRelease)
+					}
+
+					uptime, _, _, uerr := client.RunCommand("/usr/bin/uptime", []string{"-p"})
+					if uerr == nil {
+						fmt.Printf("uptime:   %s", uptime)
 					}
 				}
-				ipStr := strings.Join(ips, ", ")
-				if ipStr == "" {
-					ipStr = "-"
-				}
-				_, _ = fmt.Fprintf(w2, "%s\t%s\t%s\n", iface.Name, ipStr, iface.HardwareAddress)
 			}
 		}
-		_ = w2.Flush()
 
-		hostname, _, _, herr := client.RunCommand("/bin/hostname", nil)
-		if herr == nil {
-			fmt.Printf("\nhostname: %s", hostname)
+		// Health check section — run fresh if --check, otherwise show persisted results.
+		if statusRunCheck && entry.State.Running {
+			mgr := vm.NewManager(prov)
+			if _, runErr := mgr.RunHealthCheck(cmd.Context(), name); runErr != nil {
+				fmt.Printf("\nhealth check error: %v\n", runErr)
+			} else {
+				// Reload state so we display the freshly persisted results.
+				if refreshed, refreshErr := findVM(name); refreshErr == nil {
+					entry = refreshed
+				}
+			}
 		}
 
-		osRelease, _, _, oerr := client.RunCommand("/bin/sh", []string{"-c", "grep PRETTY_NAME /etc/os-release | cut -d= -f2 | tr -d '\"'"})
-		if oerr == nil {
-			fmt.Printf("os:       %s", osRelease)
-		}
-
-		uptime, _, _, uerr := client.RunCommand("/usr/bin/uptime", []string{"-p"})
-		if uerr == nil {
-			fmt.Printf("uptime:   %s", uptime)
+		fmt.Println()
+		if len(entry.State.PostInstallChecks) > 0 {
+			if entry.State.PostInstallCheckedAt != nil {
+				fmt.Printf("health checks (as of %s):\n\n",
+					entry.State.PostInstallCheckedAt.Local().Format("2006-01-02 15:04:05"))
+			} else {
+				fmt.Println("health checks:")
+				fmt.Println()
+			}
+			printHealthChecks(entry.State.PostInstallChecks)
+		} else if entry.State.InstallState == vm.InstallStateReady {
+			fmt.Println("health checks: not yet run — use 'vee check <name>'")
 		}
 
 		return nil
@@ -305,5 +332,6 @@ func watchCloudInitProgress(cfg *vm.VMConfig, state *vm.VMState) error {
 
 func init() {
 	statusCmd.Flags().BoolVarP(&statusWatch, "watch", "w", false, "Watch cloud-init progress live (during install)")
+	statusCmd.Flags().BoolVar(&statusRunCheck, "check", false, "Run health checks now and show fresh results")
 	rootCmd.AddCommand(statusCmd)
 }

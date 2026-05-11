@@ -554,6 +554,103 @@ arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
 
 %s
 
+cat > /mnt/usr/local/bin/vee-check <<'CHECKEOF'
+#!/bin/bash
+# Outputs {"checks":[{"name":"...","ok":true,"detail":"..."},...]}
+# Exit 0 always; callers inspect JSON for failures.
+set -euo pipefail
+
+checks=()
+
+svc_check() {
+  local name=$1
+  local enabled active
+  enabled=$(systemctl is-enabled "$name" 2>&1 || true)
+  active=$(systemctl is-active "$name" 2>&1 || true)
+  if [[ "$enabled" == "enabled" || "$enabled" == "static" ]] && [[ "$active" == "active" ]]; then
+    checks+=("{\"name\":\"svc:$name\",\"ok\":true,\"detail\":\"enabled+active\"}")
+  else
+    checks+=("{\"name\":\"svc:$name\",\"ok\":false,\"detail\":\"enabled=$enabled active=$active\"}")
+  fi
+}
+
+pkg_check() {
+  local name=$1
+  local out
+  out=$(pacman -Q "$name" 2>&1 || true)
+  if echo "$out" | grep -q "^$name "; then
+    checks+=("{\"name\":\"pkg:$name\",\"ok\":true,\"detail\":\"$(echo "$out" | head -1)\"}")
+  else
+    checks+=("{\"name\":\"pkg:$name\",\"ok\":false,\"detail\":\"not installed\"}")
+  fi
+}
+
+file_check() {
+  local name=$1 path=$2
+  if [[ -e "$path" ]]; then
+    checks+=("{\"name\":\"file:$name\",\"ok\":true,\"detail\":\"$path exists\"}")
+  else
+    checks+=("{\"name\":\"file:$name\",\"ok\":false,\"detail\":\"$path missing\"}")
+  fi
+}
+
+group_check() {
+  local user=$1 group=$2
+  if id -nG "$user" 2>/dev/null | grep -qw "$group"; then
+    checks+=("{\"name\":\"group:$group\",\"ok\":true,\"detail\":\"$user in $group\"}")
+  else
+    checks+=("{\"name\":\"group:$group\",\"ok\":false,\"detail\":\"$user not in $group\"}")
+  fi
+}
+
+# Services (enabled + active)
+svc_check NetworkManager
+svc_check sshd
+svc_check sddm
+svc_check qemu-guest-agent
+svc_check vee-firstboot
+
+# User/group
+group_check gamer wheel
+group_check gamer gamemode
+
+# Packages
+pkg_check steam
+pkg_check plasma-desktop
+pkg_check pipewire
+pkg_check wireplumber
+pkg_check gamemode
+
+# Config files
+file_check sddm-autologin /etc/sddm.conf.d/autologin.conf
+
+# multilib in pacman.conf
+if grep -q '\[multilib\]' /etc/pacman.conf 2>/dev/null; then
+  checks+=("{\"name\":\"multilib\",\"ok\":true,\"detail\":\"pacman.conf has [multilib]\"}")
+else
+  checks+=("{\"name\":\"multilib\",\"ok\":false,\"detail\":\"[multilib] missing from pacman.conf\"}")
+fi
+
+# sudo nopasswd
+if sudo -n true 2>/dev/null; then
+  checks+=("{\"name\":\"sudo-nopasswd\",\"ok\":true,\"detail\":\"ok\"}")
+else
+  checks+=("{\"name\":\"sudo-nopasswd\",\"ok\":false,\"detail\":\"sudo -n true failed\"}")
+fi
+
+# fstab >= 2 real entries
+fstab_lines=$(grep -vc '^\s*#\|^\s*$' /etc/fstab 2>/dev/null || echo 0)
+if [[ "$fstab_lines" -ge 2 ]]; then
+  checks+=("{\"name\":\"fstab\",\"ok\":true,\"detail\":\"$fstab_lines entries\"}")
+else
+  checks+=("{\"name\":\"fstab\",\"ok\":false,\"detail\":\"only $fstab_lines entries\"}")
+fi
+
+joined=$(IFS=,; echo "${checks[*]}")
+printf '{"checks":[%%s]}\n' "$joined"
+CHECKEOF
+chmod 0755 /mnt/usr/local/bin/vee-check
+
 umount -R /mnt
 poweroff`, user, gpuPkgs, hostname, hostname, strings.Join(sshKeys, "\n"), kasmvncService, nvidiaSetup, kasmvncSetup)
 

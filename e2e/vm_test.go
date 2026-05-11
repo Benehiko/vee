@@ -223,6 +223,28 @@ func resolveSSHPort(t *testing.T, home, vmName string) int {
 	return state.SSHPort
 }
 
+// HealthCheckResult mirrors vm.HealthCheck for e2e test use.
+type HealthCheckResult struct {
+	Name   string `json:"name"`
+	OK     bool   `json:"ok"`
+	Detail string `json:"detail"`
+}
+
+// sshRunHealthCheck runs /usr/local/bin/vee-check via SSH and returns the
+// parsed checks. The script must already be present on the VM (installed during
+// the gaming-arch install pass).
+func sshRunHealthCheck(t *testing.T, addr, user, privKeyPath string) []HealthCheckResult {
+	t.Helper()
+	out := sshRun(t, addr, user, privKeyPath, "/usr/local/bin/vee-check")
+	var result struct {
+		Checks []HealthCheckResult `json:"checks"`
+	}
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("parse vee-check output: %v\nraw: %s", err, out)
+	}
+	return result.Checks
+}
+
 // runWithContext runs cmd, killing it if ctx is cancelled.
 func runWithContext(ctx context.Context, cmd *exec.Cmd) error {
 	done := make(chan error, 1)

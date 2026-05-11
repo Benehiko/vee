@@ -21,7 +21,7 @@ func TestGamingInstallScriptRender(t *testing.T) {
 		"set -euxo pipefail",
 		"timedatectl set-ntp true",
 		"trap 'on_err $LINENO' ERR",
-		"reflector --latest",
+		"reflector --protocol https --latest",
 		"pacstrap /mnt base linux",
 	} {
 		if !strings.Contains(body, want) {

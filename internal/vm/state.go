@@ -21,6 +21,13 @@ const (
 	ShutdownReasonCrash = "crash" // QEMU exited without a recorded reason
 )
 
+// HealthCheck holds the result of a single vee-check assertion run inside the VM.
+type HealthCheck struct {
+	Name   string `json:"name"`
+	OK     bool   `json:"ok"`
+	Detail string `json:"detail,omitempty"`
+}
+
 type VMState struct {
 	PID           int        `json:"pid,omitempty"`
 	QMPSocket     string     `json:"qmp_socket,omitempty"`
@@ -48,4 +55,9 @@ type VMState struct {
 	BootPhase      string     `json:"boot_phase,omitempty"`
 	PhaseStartedAt *time.Time `json:"phase_started_at,omitempty"`
 	LastPanicLine  string     `json:"last_panic_line,omitempty"`
+
+	// PostInstallChecks holds the last run of /usr/local/bin/vee-check results.
+	// Empty means the check has not been run yet.
+	PostInstallChecks    []HealthCheck `json:"post_install_checks,omitempty"`
+	PostInstallCheckedAt *time.Time    `json:"post_install_checked_at,omitempty"`
 }
