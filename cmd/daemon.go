@@ -6,10 +6,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
-	"strconv"
 	"text/template"
-
-	dbus "github.com/godbus/dbus/v5"
 
 	"github.com/Benehiko/vee/internal/qemubin"
 	"github.com/Benehiko/vee/internal/vm"
@@ -38,15 +35,20 @@ Intended to be invoked by the systemd user service installed with:
 
 var daemonInstallCmd = &cobra.Command{
 	Use:   "install",
-	Short: "Install and enable the vee systemd user service",
+	Short: "Install and enable the vee systemd system service",
+	Long: `Install /etc/systemd/system/vee.service as a system-level unit
+running as your user account. A system unit (rather than a --user unit) is
+required so the daemon survives session teardown during host shutdown and
+can react to logind's PrepareForShutdown signal in time to stop VMs
+gracefully.
+
+Requires root (sudo).`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if err := enableLinger(); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not enable user linger: %v\n", err)
-			fmt.Fprintln(os.Stderr, "  Re-run as root: sudo vee daemon install")
-		}
 		if err := installVFIOModprobeConf(); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not write vfio modprobe config: %v\n", err)
-			fmt.Fprintln(os.Stderr, "  Re-run as root: sudo vee daemon install")
+		}
+		if err := uninstallLegacyUserUnit(); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not remove legacy --user vee.service: %v\n", err)
 		}
 		return installSystemdUnit()
 	},
@@ -54,71 +56,52 @@ var daemonInstallCmd = &cobra.Command{
 
 var daemonUninstallCmd = &cobra.Command{
 	Use:   "uninstall",
-	Short: "Disable and remove the vee systemd user service",
+	Short: "Disable and remove the vee systemd system service",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return uninstallSystemdUnit()
 	},
 }
 
+// unitTemplate is the system-level vee.service. It runs as the invoking user
+// (User= / Group=) so file paths under $HOME, the user bus, and any qemu /
+// helper binaries continue to work. Ordering and TimeoutStopSec together
+// give the daemon enough time to react to PrepareForShutdown and gracefully
+// power off every VM before systemd hard-kills the cgroup.
 const unitTemplate = `[Unit]
 Description=vee VM daemon
 Documentation=https://github.com/Benehiko/vee
-After=network-online.target
+After=network-online.target multi-user.target
 Wants=network-online.target
+# Order this unit before shutdown/reboot/halt so we receive SIGTERM and
+# react to logind's PrepareForShutdown signal before the host actually
+# powers off.
+Before=shutdown.target reboot.target halt.target
+Conflicts=shutdown.target
 
 [Service]
 Type=simple
+User={{.User}}
+Group={{.Group}}
+Environment=HOME={{.Home}}
+Environment=XDG_RUNTIME_DIR=/run/user/{{.UID}}
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{{.UID}}/bus
 ExecStart={{.VeeBin}} daemon
 Restart=on-failure
 RestartSec=5s
+# Allow up to 5 minutes for graceful VM shutdown on host poweroff. Each VM
+# stop is bounded by the daemon's own per-VM timeout.
+TimeoutStopSec=300s
+KillSignal=SIGTERM
+# Send SIGTERM only to the main process; we don't want the cgroup-wide kill
+# to take down qemu children before the daemon has issued a graceful QMP
+# system_powerdown.
+KillMode=mixed
 StandardOutput=journal
 StandardError=journal
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target
 `
-
-// enableLinger enables systemd linger for the current user so the user service
-// survives logout and starts at boot. Tries loginctl first (always present on
-// systemd hosts); falls back to the D-Bus org.freedesktop.login1 API directly.
-func enableLinger() error {
-	u, err := user.Current()
-	if err != nil {
-		return fmt.Errorf("get current user: %w", err)
-	}
-
-	// Try loginctl first — it's part of systemd and always available alongside systemctl.
-	if path, err := exec.LookPath("loginctl"); err == nil {
-		out, cmdErr := exec.Command(path, "enable-linger", u.Username).CombinedOutput()
-		if cmdErr == nil {
-			return nil
-		}
-		// loginctl found but failed — fall through to D-Bus.
-		_ = out
-	}
-
-	// Fall back: call org.freedesktop.login1.Manager.SetUserLinger over D-Bus.
-	uid, err := strconv.ParseUint(u.Uid, 10, 32)
-	if err != nil {
-		return fmt.Errorf("parse uid: %w", err)
-	}
-	conn, err := dbus.ConnectSystemBus()
-	if err != nil {
-		return fmt.Errorf("connect to system D-Bus: %w", err)
-	}
-	defer func() { _ = conn.Close() }()
-
-	obj := conn.Object("org.freedesktop.login1", "/org/freedesktop/login1")
-	call := obj.Call("org.freedesktop.login1.Manager.SetUserLinger", 0,
-		uint32(uid), // uid
-		true,        // enable
-		true,        // interactive (polkit prompt if needed)
-	)
-	if call.Err != nil {
-		return fmt.Errorf("SetUserLinger D-Bus call: %w", call.Err)
-	}
-	return nil
-}
 
 const vfioModprobeConf = `# Written by vee daemon install
 # Prevents vfio-pci from runtime-suspending GPUs to D3cold.
@@ -196,20 +179,38 @@ func sudoWriteCmd(path, content string) (*exec.Cmd, error) {
 	return cmd, nil
 }
 
-func unitDir() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".config", "systemd", "user"), nil
-}
+const systemUnitPath = "/etc/systemd/system/vee.service"
 
-func unitPath() (string, error) {
-	dir, err := unitDir()
-	if err != nil {
-		return "", err
+const polkitRulePath = "/etc/polkit-1/rules.d/49-vee-inhibit.rules"
+
+// polkitRuleTemplate grants the vee daemon user permission to take a
+// "block" inhibitor for shutdown. logind requires polkit authorization for
+// this action, and a system service running as a regular user has no
+// graphical session for polkit to use as evidence of presence — so the
+// inhibit call fails with "interactive authentication required". This rule
+// pre-authorizes the specific user the unit runs as, without granting any
+// broader privilege.
+const polkitRuleTemplate = `// Generated by ` + "`vee daemon install`" + `.
+// Allows the user that runs the vee system service to acquire a logind
+// shutdown inhibitor so the host blocks on power-off until vee has
+// gracefully stopped every running VM.
+polkit.addRule(function(action, subject) {
+    if ((action.id == "org.freedesktop.login1.inhibit-block-shutdown" ||
+         action.id == "org.freedesktop.login1.inhibit-delay-shutdown") &&
+        subject.user == "{{.User}}") {
+        return polkit.Result.YES;
+    }
+});
+`
+
+// invokingUser resolves the real user vee should run as inside the system
+// service. When vee daemon install is run via sudo, the original user is in
+// SUDO_USER; otherwise fall back to the current user.
+func invokingUser() (*user.User, error) {
+	if name := os.Getenv("SUDO_USER"); name != "" {
+		return user.Lookup(name)
 	}
-	return filepath.Join(dir, "vee.service"), nil
+	return user.Current()
 }
 
 func installSystemdUnit() error {
@@ -218,17 +219,13 @@ func installSystemdUnit() error {
 		return fmt.Errorf("resolve vee binary: %w", err)
 	}
 
-	dir, err := unitDir()
+	u, err := invokingUser()
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve invoking user: %w", err)
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-
-	path, err := unitPath()
+	g, err := user.LookupGroupId(u.Gid)
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve primary group: %w", err)
 	}
 
 	tmpl, err := template.New("unit").Parse(unitTemplate)
@@ -236,22 +233,40 @@ func installSystemdUnit() error {
 		return err
 	}
 
-	f, err := os.Create(path)
+	var buf []byte
+	{
+		var sb stringWriter
+		if err := tmpl.Execute(&sb, struct {
+			VeeBin, User, Group, Home, UID string
+		}{
+			VeeBin: veeBin,
+			User:   u.Username,
+			Group:  g.Name,
+			Home:   u.HomeDir,
+			UID:    u.Uid,
+		}); err != nil {
+			return err
+		}
+		buf = []byte(sb.String())
+	}
+
+	writeCmd, err := sudoWriteCmd(systemUnitPath, string(buf))
 	if err != nil {
 		return err
 	}
-	defer func() { _ = f.Close() }()
-
-	if err := tmpl.Execute(f, struct{ VeeBin string }{veeBin}); err != nil {
-		return err
+	if out, err := writeCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("write %s: %w\n%s", systemUnitPath, err, out)
 	}
 
-	// daemon-reload + enable + start
+	if err := installPolkitRule(u.Username); err != nil {
+		return fmt.Errorf("install polkit rule: %w", err)
+	}
+
 	for _, sargs := range [][]string{
-		{"--user", "daemon-reload"},
-		{"--user", "enable", "--now", "vee.service"},
+		{"sudo", "systemctl", "daemon-reload"},
+		{"sudo", "systemctl", "enable", "--now", "vee.service"},
 	} {
-		out, cmdErr := exec.Command("systemctl", sargs...).CombinedOutput()
+		out, cmdErr := exec.Command(sargs[0], sargs[1:]...).CombinedOutput()
 		if cmdErr != nil {
 			prov.Logger().Debug("systemctl invocation failed",
 				zap.Strings("args", sargs), zap.ByteString("output", out))
@@ -259,17 +274,16 @@ func installSystemdUnit() error {
 		}
 	}
 
-	fmt.Printf("vee.service installed at %s\n", path)
-	// TODO: replace with `vee daemon status` once the subcommand exists.
-	fmt.Println("Service enabled and started. Check status with: systemctl --user status vee")
+	fmt.Printf("vee.service installed at %s\n", systemUnitPath)
+	fmt.Println("Service enabled and started. Check status with: systemctl status vee")
 	return nil
 }
 
 func uninstallSystemdUnit() error {
 	for _, sargs := range [][]string{
-		{"--user", "disable", "--now", "vee.service"},
+		{"sudo", "systemctl", "disable", "--now", "vee.service"},
 	} {
-		out, err := exec.Command("systemctl", sargs...).CombinedOutput()
+		out, err := exec.Command(sargs[0], sargs[1:]...).CombinedOutput()
 		if err != nil {
 			prov.Logger().Debug("systemctl invocation failed during uninstall",
 				zap.Strings("args", sargs), zap.ByteString("output", out), zap.Error(err))
@@ -277,15 +291,11 @@ func uninstallSystemdUnit() error {
 		}
 	}
 
-	path, err := unitPath()
-	if err != nil {
-		return err
-	}
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return err
+	if out, err := exec.Command("sudo", "rm", "-f", systemUnitPath, polkitRulePath).CombinedOutput(); err != nil {
+		return fmt.Errorf("remove %s / %s: %w\n%s", systemUnitPath, polkitRulePath, err, out)
 	}
 
-	out, err := exec.Command("systemctl", "--user", "daemon-reload").CombinedOutput()
+	out, err := exec.Command("sudo", "systemctl", "daemon-reload").CombinedOutput()
 	if err != nil {
 		prov.Logger().Debug("systemctl daemon-reload failed",
 			zap.ByteString("output", out), zap.Error(err))
@@ -295,6 +305,72 @@ func uninstallSystemdUnit() error {
 	fmt.Println("vee.service removed.")
 	return nil
 }
+
+// installPolkitRule writes the polkit rule that lets the vee system
+// service take a logind shutdown inhibitor. Without this rule logind
+// rejects Inhibit() with "interactive authentication required" because
+// the service has no graphical session.
+func installPolkitRule(username string) error {
+	tmpl, err := template.New("polkit").Parse(polkitRuleTemplate)
+	if err != nil {
+		return err
+	}
+	var sb stringWriter
+	if err := tmpl.Execute(&sb, struct{ User string }{User: username}); err != nil {
+		return err
+	}
+
+	writeCmd, err := sudoWriteCmd(polkitRulePath, sb.String())
+	if err != nil {
+		return err
+	}
+	if out, err := writeCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("write %s: %w\n%s", polkitRulePath, err, out)
+	}
+	fmt.Printf("polkit rule installed at %s (user=%s)\n", polkitRulePath, username)
+	return nil
+}
+
+// uninstallLegacyUserUnit removes a previously-installed --user vee.service.
+// The legacy user-scoped unit is incompatible with the system unit because
+// systemd would run two vee daemons simultaneously (one per scope), and the
+// user-scoped daemon does not survive session teardown during host shutdown.
+func uninstallLegacyUserUnit() error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(home, ".config", "systemd", "user", "vee.service")
+	if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
+		return nil
+	}
+	for _, sargs := range [][]string{
+		{"--user", "disable", "--now", "vee.service"},
+	} {
+		out, err := exec.Command("systemctl", sargs...).CombinedOutput()
+		if err != nil {
+			prov.Logger().Debug("systemctl --user disable failed",
+				zap.Strings("args", sargs), zap.ByteString("output", out), zap.Error(err))
+		}
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	_, _ = exec.Command("systemctl", "--user", "daemon-reload").CombinedOutput()
+	fmt.Printf("Removed legacy --user vee.service at %s\n", path)
+	return nil
+}
+
+// stringWriter is a tiny io.Writer that buffers into a string. Avoids
+// pulling in bytes.Buffer just to render a small template.
+type stringWriter struct{ b []byte }
+
+func (s *stringWriter) Write(p []byte) (int, error) {
+	s.b = append(s.b, p...)
+	return len(p), nil
+}
+
+func (s *stringWriter) String() string { return string(s.b) }
 
 func init() {
 	daemonCmd.AddCommand(daemonInstallCmd)

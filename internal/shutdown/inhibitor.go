@@ -122,6 +122,30 @@ func (i *Inhibitor) PrepareForShutdown(ctx context.Context) (<-chan struct{}, er
 	return out, nil
 }
 
+// PreparingForShutdown returns the current value of logind's
+// PreparingForShutdown property. True while a shutdown is in progress (after
+// PrepareForShutdown(true) has fired and before PrepareForShutdown(false)).
+// Use this on ctx.Done() to disambiguate "user stopped the daemon" from
+// "daemon received SIGTERM during host shutdown".
+func (i *Inhibitor) PreparingForShutdown() (bool, error) {
+	i.mu.Lock()
+	conn := i.conn
+	i.mu.Unlock()
+	if conn == nil {
+		return false, errors.New("inhibitor not active")
+	}
+	obj := conn.Object(logindDest, logindPath)
+	v, err := obj.GetProperty(logindManager + ".PreparingForShutdown")
+	if err != nil {
+		return false, fmt.Errorf("get PreparingForShutdown: %w", err)
+	}
+	b, ok := v.Value().(bool)
+	if !ok {
+		return false, fmt.Errorf("PreparingForShutdown not a bool: %T", v.Value())
+	}
+	return b, nil
+}
+
 // Release closes the held file descriptor (releasing the inhibitor) and
 // the system bus connection. Safe to call multiple times.
 func (i *Inhibitor) Release() error {

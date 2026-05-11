@@ -66,6 +66,18 @@ func (m *Manager) RunDaemon(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
+			// Disambiguate "user ran systemctl stop vee" (leave VMs alone)
+			// from "daemon SIGTERMed during host shutdown" (stop VMs).
+			// Without this check the select branches race on shutdown:
+			// if ctx.Done wins before shutdownCh, VMs survive the daemon
+			// only to be SIGKILLed seconds later by the host poweroff.
+			if inhibitor != nil {
+				if preparing, perr := inhibitor.PreparingForShutdown(); perr == nil && preparing {
+					log.Info("ctx cancelled during host shutdown; stopping VMs")
+					m.handleHostShutdown(ctx)
+					return nil
+				}
+			}
 			log.Info("vee daemon stopping (context cancelled)")
 			return nil
 		case <-shutdownCh:
