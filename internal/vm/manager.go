@@ -554,6 +554,13 @@ func (m *Manager) WaitReadyWithPhases(ctx context.Context, name string, timeout 
 				return
 			case t := <-ticker.C:
 				if !isAlive(state.PID) {
+					// A guest-initiated poweroff during the install pass is
+					// expected — install.sh ends with `poweroff`. Treat it as
+					// success so the caller can proceed to the boot pass.
+					if state.InstallState == InstallStatePending && state.LastShutdownReason == ShutdownReasonGuest {
+						errCh <- nil
+						return
+					}
 					errCh <- fmt.Errorf("VM %q process (PID %d) exited — check: vee logs %s", name, state.PID, name)
 					return
 				}
