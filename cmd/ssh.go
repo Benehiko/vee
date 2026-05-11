@@ -94,7 +94,15 @@ Examples:
 			return fmt.Errorf("VM %q has no SSH port and is not on a bridge network; check --ssh-port or --nic-mode", name)
 		}
 
-		sshArgs := buildSSHArgs(user, host, port, sshIdentity, extra, sshExtraFlags)
+		// Use a vee-managed known_hosts so that recreated VMs (same IP, new
+		// host key) don't break ~/.ssh/known_hosts. Accept new keys silently;
+		// changed keys still error so MITM is detected.
+		veeKnownHosts := ""
+		if home, herr := os.UserHomeDir(); herr == nil {
+			veeKnownHosts = home + "/.vee/ssh/known_hosts"
+		}
+
+		sshArgs := buildSSHArgs(user, host, port, sshIdentity, veeKnownHosts, extra, sshExtraFlags)
 
 		sshBin, err := exec.LookPath("ssh")
 		if err != nil {
@@ -106,13 +114,17 @@ Examples:
 	},
 }
 
-func buildSSHArgs(user, host string, port int, identity string, positional, extra []string) []string {
+func buildSSHArgs(user, host string, port int, identity, knownHosts string, positional, extra []string) []string {
 	var args []string
 	if port != 22 {
 		args = append(args, "-p", fmt.Sprintf("%d", port))
 	}
 	if identity != "" {
 		args = append(args, "-i", identity)
+	}
+	if knownHosts != "" {
+		args = append(args, "-o", "UserKnownHostsFile="+knownHosts)
+		args = append(args, "-o", "StrictHostKeyChecking=accept-new")
 	}
 	// extra holds --ssh-flag values (ssh flags, e.g. -L 8080:...) — before host.
 	args = append(args, extra...)
