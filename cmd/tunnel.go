@@ -7,9 +7,11 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/Benehiko/vee/internal/vm"
 	"github.com/spf13/cobra"
@@ -34,15 +36,18 @@ For user-mode VMs, opens an SSH -L tunnel.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
 
+		// serial is a built-in pseudo-service backed by a local log file.
+		// It works regardless of whether the VM is running.
+		if len(args) == 2 && args[1] == "serial" {
+			return tunnelSerial(cmd, name)
+		}
+
 		cfg, state, err := loadRunningVM(name)
 		if err != nil {
 			return err
 		}
 
 		services := resolvedServices(cfg, state)
-		if len(services) == 0 {
-			return fmt.Errorf("VM %q has no declared services", name)
-		}
 
 		if len(args) == 1 {
 			return printServiceMenu(cfg, services)
@@ -84,12 +89,43 @@ func resolvedServices(cfg *vm.VMConfig, state *vm.VMState) []resolvedService {
 func printServiceMenu(cfg *vm.VMConfig, services []resolvedService) error {
 	fmt.Printf("%-16s  %-10s  %s\n", "SERVICE", "PROTOCOL", "CONNECTION")
 	fmt.Println(strings.Repeat("─", 60))
+	fmt.Printf("%-16s  %-10s  %s\n", "serial", "file", "serial console log (follow)")
 	for _, s := range services {
 		fmt.Printf("%-16s  %-10s  %s\n", s.Name, s.Protocol, serviceURL(cfg, s))
 	}
 	fmt.Println()
 	fmt.Println("Run: vee tunnel <vm> <service>  to connect")
 	return nil
+}
+
+// tunnelSerial streams the VM's serial console log (serial.log) to stdout,
+// following new output until Ctrl+C. Works whether the VM is running or not.
+func tunnelSerial(cmd *cobra.Command, name string) error {
+	logPath := filepath.Join(prov.Config().StoragePath, name, "serial.log")
+	f, err := os.Open(logPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("no serial log for VM %q (has it been started?)", name)
+		}
+		return err
+	}
+	defer func() { _ = f.Close() }()
+
+	if _, err := io.Copy(os.Stdout, f); err != nil {
+		return err
+	}
+
+	fmt.Fprintln(os.Stderr, "--- following serial output (Ctrl+C to stop) ---")
+	for {
+		select {
+		case <-cmd.Context().Done():
+			return nil
+		case <-time.After(250 * time.Millisecond):
+			if _, err := io.Copy(os.Stdout, f); err != nil {
+				return err
+			}
+		}
+	}
 }
 
 func serviceURL(cfg *vm.VMConfig, s resolvedService) string {
@@ -406,11 +442,11 @@ func completeTunnelArgs(cmd *cobra.Command, args []string, toComplete string) ([
 }
 
 func completeServiceNames(vmName string) ([]string, cobra.ShellCompDirective) {
+	out := []string{"serial\tserial console log"}
 	entry, err := findVM(vmName)
 	if err != nil {
-		return nil, cobra.ShellCompDirectiveNoFileComp
+		return out, cobra.ShellCompDirectiveNoFileComp
 	}
-	var out []string
 	for _, s := range entry.Config.Services {
 		out = append(out, s.Name+"\t"+string(s.Protocol))
 	}
