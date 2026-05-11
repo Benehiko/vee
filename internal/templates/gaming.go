@@ -140,15 +140,20 @@ func NewGamingArchConfig(ctx context.Context, p provider.Provider, name string, 
 		CreatedAt: time.Now(),
 	}
 
+	// SPICE is always the display path for gaming-arch — either directly for
+	// virtio GPU, or as the KasmVNC capture surface for passthrough GPU.
+	cfg.SPICE = &vm.SPICEConfig{Port: 0, DisableTicketing: true}
+	cfg.Services = []vm.ServiceEntry{
+		{Name: "spice", Port: 0, Protocol: vm.ServiceSPICE}, // port filled by manager
+	}
+
 	if opts.Passthrough {
-		// Add a secondary virtio-gpu for SPICE/KasmVNC alongside the VFIO GPU.
+		// Add a secondary virtio-gpu alongside the VFIO GPU for SPICE/KasmVNC.
 		cfg.VGA = "none"
 		cfg.ExtraDevices = []string{"virtio-gpu-pci,edid=on,xres=1920,yres=1080"}
-		cfg.SPICE = &vm.SPICEConfig{Port: 0, DisableTicketing: true}
-		cfg.Services = []vm.ServiceEntry{
-			{Name: "spice", Port: 0, Protocol: vm.ServiceSPICE}, // port filled by manager
-			{Name: "kasmvnc", Port: 8443, Protocol: vm.ServiceHTTPS},
-		}
+		cfg.Services = append(cfg.Services, vm.ServiceEntry{
+			Name: "kasmvnc", Port: 8443, Protocol: vm.ServiceHTTPS,
+		})
 	}
 
 	if opts.VirtiofsMountDir != "" {
