@@ -33,10 +33,17 @@ type GamingOptions struct {
 	Passthrough bool
 	// PCIAddr is required when Passthrough is true (e.g. "08:00.0").
 	PCIAddr string
-	// Bridge NIC bridge interface (default "br0").
+	// NICMode selects networking: "bridge" (default) or "user".
+	// Use "user" with Headless+SSHPort for e2e testing without a bridge interface.
+	NICMode string
+	// Bridge NIC bridge interface (default "br0", only used when NICMode="bridge").
 	Bridge string
 	// MAC address for the bridge NIC (empty = let QEMU pick).
 	MAC string
+	// Headless suppresses the display window; SSH-only access.
+	Headless bool
+	// SSHPort is the host port forwarded to guest port 22 (user-mode NIC only).
+	SSHPort int
 }
 
 // NewGamingArchConfig builds a VMConfig for an Arch Linux gaming VM.
@@ -73,6 +80,16 @@ func NewGamingArchConfig(ctx context.Context, p provider.Provider, name string, 
 		}
 	}
 
+	nicMode := opts.NICMode
+	if nicMode == "" {
+		nicMode = "bridge"
+	}
+
+	sshPort := opts.SSHPort
+	if nicMode == "user" && sshPort == 0 {
+		sshPort = deterministicSSHPort(name)
+	}
+
 	diskPath := filepath.Join(vmDir, "storage", "disk-os.qcow2")
 	cfg := &vm.VMConfig{
 		Name:     name,
@@ -84,13 +101,15 @@ func NewGamingArchConfig(ctx context.Context, p provider.Provider, name string, 
 		Threads:  1,
 		CPUModel: conf.DefaultCPUModel,
 		NIC: vm.NICConfig{
-			Mode:   "bridge",
+			Mode:   nicMode,
 			Bridge: opts.Bridge,
 			Model:  "virtio-net-pci",
 			MAC:    opts.MAC,
 		},
-		GPU:  gpuCfg,
-		UEFI: vm.UEFIConfig{Enabled: true},
+		GPU:      gpuCfg,
+		Headless: opts.Headless,
+		SSHPort:  sshPort,
+		UEFI:     vm.UEFIConfig{Enabled: true},
 		Disks: []vm.DiskConfig{
 			{
 				Path:      diskPath,
@@ -270,7 +289,7 @@ SVCEOF`, user)
 		kasmvncSetup = fmt.Sprintf(`
 arch-chroot /mnt pacman -S --noconfirm git base-devel
 arch-chroot /mnt sudo -u %[1]s bash -c 'cd /tmp && git clone https://aur.archlinux.org/yay.git && cd yay && makepkg -si --noconfirm'
-arch-chroot /mnt sudo -u %[1]s yay -S --noconfirm kasmvnc
+arch-chroot /mnt sudo -u %[1]s yay -S --noconfirm kasmvnc-bin
 arch-chroot /mnt sudo -u %[1]s bash -c 'mkdir -p ~/.vnc && kasmvncpasswd -w vee -u %[1]s'
 arch-chroot /mnt systemctl enable kasmvnc`, user)
 	}
@@ -332,23 +351,62 @@ mount "${DISK}2" /mnt
 mkdir -p /mnt/boot/efi
 mount "${DISK}1" /mnt/boot/efi
 
-# Pick fastest mirrors before pacstrap. Reflector reaches out over HTTPS;
-# if that fails (transient mirrorstatus outage, regional block) keep the
-# ISO's bundled mirrorlist rather than aborting the whole install.
+# Pick fastest mirrors before pacstrap. Reflector reaches out over HTTPS
+# only — rsync rate-tests routinely time out from this network. We write
+# to a tempfile so a partial/failed reflector run never leaves an empty
+# /etc/pacman.d/mirrorlist (which makes pacman -Sy fail with
+# "no servers configured for repository").
 pacman -Sy --noconfirm reflector
-reflector --latest 10 --sort rate --save /etc/pacman.d/mirrorlist || \
-  echo "==> reflector failed, keeping ISO mirrorlist"
+cp /etc/pacman.d/mirrorlist /etc/pacman.d/mirrorlist.iso
+if reflector --protocol https --latest 20 --sort rate \
+     --save /etc/pacman.d/mirrorlist.new 2>&1 \
+   && [ -s /etc/pacman.d/mirrorlist.new ] \
+   && grep -q '^Server = ' /etc/pacman.d/mirrorlist.new; then
+  mv /etc/pacman.d/mirrorlist.new /etc/pacman.d/mirrorlist
+  echo "==> reflector picked $(grep -c '^Server = ' /etc/pacman.d/mirrorlist) mirrors"
+else
+  echo "==> reflector failed or produced empty mirrorlist; keeping ISO mirrorlist"
+  rm -f /etc/pacman.d/mirrorlist.new
+  cp /etc/pacman.d/mirrorlist.iso /etc/pacman.d/mirrorlist
+fi
 
-# Enable multilib in the live env pacman so pacstrap can pull 32-bit libs
-sed -i '/^\[multilib\]/{n;s/^#//}' /etc/pacman.conf
-sed -i 's/^#\[multilib\]/[multilib]/' /etc/pacman.conf
+# Enable multilib and strip empty/broken repo sections from live env pacman.conf.
+# The ISO ships a bare [custom] section with no servers; any repo without a
+# Server/Include line causes "no servers configured" for the whole sync.
+python3 - <<'PYEOF'
+import re, pathlib
+p = pathlib.Path('/etc/pacman.conf')
+txt = p.read_text()
+# Split into [options] block + repo blocks. Keep only repos that have at
+# least one Server= or Include= line, or are [core]/[extra] (which always do).
+# Then append a clean [multilib] block regardless.
+parts = re.split(r'(?=\n\[(?!options))', txt)
+kept = []
+for part in parts:
+    header = re.search(r'^\[([^\]]+)\]', part.lstrip('\n'))
+    if not header:
+        kept.append(part)
+        continue
+    name = header.group(1)
+    if name in ('options',):
+        kept.append(part)
+        continue
+    # Drop commented-out or empty repo sections (no active Server/Include)
+    if not re.search(r'^(?:Server|Include)\s*=', part, re.MULTILINE):
+        continue
+    # Drop any existing multilib block; we'll re-add a clean one below
+    if name.startswith('multilib'):
+        continue
+    kept.append(part)
+txt = ''.join(kept).rstrip('\n') + '\n\n[multilib]\nInclude = /etc/pacman.d/mirrorlist\n'
+p.write_text(txt)
+PYEOF
 pacman -Sy --noconfirm
 
 # Base system + gaming stack
-pacstrap /mnt base linux linux-firmware grub efibootmgr \
+pacstrap /mnt base linux linux-firmware grub efibootmgr sudo \
   networkmanager openssh qemu-guest-agent \
-  systemd-journal-remote \
-  plasma plasma-wayland-session sddm xdg-desktop-portal-kde \
+  plasma sddm xdg-desktop-portal-kde \
   steam wine winetricks gamemode lib32-gamemode \
   pipewire pipewire-pulse pipewire-alsa wireplumber \
   %s
@@ -370,9 +428,30 @@ cat >> /mnt/etc/hosts <<'HOSTSEOF'
 127.0.1.1 %s
 HOSTSEOF
 
-# Enable multilib in installed system
-sed -i '/^\[multilib\]/{n;s/^#//}' /mnt/etc/pacman.conf
-sed -i 's/^#\[multilib\]/[multilib]/' /mnt/etc/pacman.conf
+# Enable multilib in installed system (same robust approach as live env above)
+python3 - <<'PYEOF'
+import re, pathlib
+p = pathlib.Path('/mnt/etc/pacman.conf')
+txt = p.read_text()
+parts = re.split(r'(?=\n\[(?!options))', txt)
+kept = []
+for part in parts:
+    header = re.search(r'^\[([^\]]+)\]', part.lstrip('\n'))
+    if not header:
+        kept.append(part)
+        continue
+    name = header.group(1)
+    if name in ('options',):
+        kept.append(part)
+        continue
+    if not re.search(r'^(?:Server|Include)\s*=', part, re.MULTILINE):
+        continue
+    if name.startswith('multilib'):
+        continue
+    kept.append(part)
+txt = ''.join(kept).rstrip('\n') + '\n\n[multilib]\nInclude = /etc/pacman.d/mirrorlist\n'
+p.write_text(txt)
+PYEOF
 
 # Create users
 arch-chroot /mnt useradd -m -G wheel,gamemode -s /bin/bash "$USER"
@@ -415,7 +494,7 @@ mkdir -p /mnt/etc/sddm.conf.d
 cat > /mnt/etc/sddm.conf.d/autologin.conf <<EOF
 [Autologin]
 User=$USER
-Session=plasma-wayland
+Session=plasmawayland
 EOF
 
 # journal-upload to vee host (gateway resolved at runtime)

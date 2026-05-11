@@ -58,6 +58,12 @@ func ReadDeviceState(addr string) DeviceState {
 // D3cold is the only state that truly blocks VFIO — the device has no power
 // and cannot respond to any transactions. D3hot/suspended is handled by
 // vfio-pci itself during device open (it triggers a runtime resume).
+//
+// Empirically, attempting to launch QEMU against a D3cold device — even when
+// runtime_status reports "active" — aborts in vfio_pci_interrupt_setup
+// during MSI/MSI-X programming, because the device cannot acknowledge the
+// MSI capability access. So we treat any D3cold reading as unsafe, regardless
+// of runtime_status.
 func (s *DeviceState) NeedsReset() bool {
 	return s.PowerState == PowerStateD3cold
 }
@@ -93,7 +99,7 @@ func Reset(addr string) error {
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		s := ReadDeviceState(pciAddr)
-		if s.PowerState != PowerStateD3cold && s.RuntimeStatus != "suspended" {
+		if !s.NeedsReset() {
 			return nil
 		}
 		time.Sleep(200 * time.Millisecond)
@@ -119,7 +125,7 @@ func WakeDevice(addr string) error {
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		s := ReadDeviceState(pciAddr)
-		if s.PowerState != PowerStateD3cold && s.RuntimeStatus != "suspended" {
+		if !s.NeedsReset() {
 			return nil
 		}
 		time.Sleep(200 * time.Millisecond)

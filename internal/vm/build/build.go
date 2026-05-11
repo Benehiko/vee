@@ -199,13 +199,17 @@ func loadSSHKeys(path string) ([]string, error) {
 
 func configFromTemplate(ctx context.Context, prov provider.Provider, opts Opts, sshKeys []string) (*vm.VMConfig, error) {
 	gamingOpts := func() templates.GamingOptions {
+		headless := opts.Headless != nil && *opts.Headless
 		return templates.GamingOptions{
 			VirtiofsMountDir: opts.VirtiofsDir,
 			GPUVendor:        resolveGPUVendor(opts.GPUVendor),
 			Passthrough:      opts.GPUMode == "passthrough",
 			PCIAddr:          opts.GPUPCI,
+			NICMode:          opts.NICMode,
 			Bridge:           opts.NICBridge,
 			MAC:              opts.NICMAC,
+			Headless:         headless,
+			SSHPort:          opts.SSHPort,
 		}
 	}
 

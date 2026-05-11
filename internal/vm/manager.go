@@ -431,20 +431,19 @@ func (m *Manager) WaitReadyWithPhases(ctx context.Context, name string, timeout 
 	errCh := make(chan error, 1)
 
 	go func() {
-		defer close(phaseCh)
-
 		state, err := m.loadState(name)
 		if err != nil {
+			close(phaseCh)
 			errCh <- err
 			return
 		}
 		if !state.Running || state.PID == 0 {
+			close(phaseCh)
 			errCh <- fmt.Errorf("VM %q is not running", name)
 			return
 		}
 
 		watchCtx, cancelWatch := context.WithCancel(ctx)
-		defer cancelWatch()
 
 		// Phase watcher: tail serial.log and forward events both to the caller
 		// and into VMState. Failures abort the readiness probe.
@@ -462,13 +461,24 @@ func (m *Manager) WaitReadyWithPhases(ctx context.Context, name string, timeout 
 			_ = watcher.Run(watchCtx, watcherEvents)
 		}()
 
+		// fanout drains watcherEvents and forwards to phaseCh. It owns the
+		// close(phaseCh) so the outer goroutine can never close phaseCh while
+		// this one is mid-send — avoiding the "send on closed channel" race.
 		failedCh := make(chan boot.Event, 1)
+		var fanoutDone sync.WaitGroup
+		fanoutDone.Add(1)
 		go func() {
+			defer fanoutDone.Done()
+			defer close(phaseCh)
 			for ev := range watcherEvents {
 				m.persistPhase(name, ev)
 				select {
 				case phaseCh <- ev:
 				case <-watchCtx.Done():
+					// Drain remaining watcherEvents so the watcher goroutine
+					// can exit; discard them since the caller is gone.
+					for range watcherEvents {
+					}
 					return
 				}
 				if ev.Phase == boot.PhaseFailed {
@@ -478,6 +488,13 @@ func (m *Manager) WaitReadyWithPhases(ctx context.Context, name string, timeout 
 					}
 				}
 			}
+		}()
+
+		// cancelWatch stops the watcher and fanout goroutines; wait for fanout
+		// to finish (and close phaseCh) before this goroutine returns.
+		defer func() {
+			cancelWatch()
+			fanoutDone.Wait()
 		}()
 
 		// No probe configured — just confirm the process is alive and return.
@@ -1200,8 +1217,15 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 		opts = append(opts, qemu.WithMemfd(qemu.NewMemfdBackend(cfg.Memory)))
 	case GPUVirtio:
 		opts = append(opts, qemu.WithVGA("none"))
-		opts = append(opts, qemu.WithDevice("virtio-vga-gl"))
-		opts = append(opts, qemu.WithDisplay("gtk,gl=on"))
+		if cfg.Headless {
+			// virtio-vga-gl requires an OpenGL display context; headless VMs
+			// use -display none which provides no GL backend. Fall back to
+			// virtio-gpu-pci which works without a display server.
+			opts = append(opts, qemu.WithDevice("virtio-gpu-pci"))
+		} else {
+			opts = append(opts, qemu.WithDevice("virtio-vga-gl"))
+			opts = append(opts, qemu.WithDisplay("gtk,gl=on"))
+		}
 	}
 
 	// Explicit VGA override (e.g. "none" for passthrough VMs using virtio-gpu-pci via ExtraDevices).

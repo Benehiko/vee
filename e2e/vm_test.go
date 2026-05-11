@@ -3,6 +3,7 @@
 package e2e_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -169,13 +170,46 @@ func sshRunLenient(t *testing.T, addr, user, privKeyPath, command string) string
 	return strings.TrimSpace(string(out))
 }
 
-// resolveSSHPort reads the ssh_port field from the VM state file.
+// resolveSSHPort reads the ssh_port field from the VM state.
+// It tries the sqlite DB first (daemon mode), then falls back to state.json.
 func resolveSSHPort(t *testing.T, home, vmName string) int {
 	t.Helper()
+
+	// Try DB first — state is stored in sqlite in daemon mode.
+	dbPath := filepath.Join(home, ".vee", "vee.db")
+	if _, err := os.Stat(dbPath); err == nil {
+		// ssh_port column holds it directly; -noheader suppresses the column name line.
+		out, err := exec.Command("sqlite3", "-noheader", dbPath,
+			fmt.Sprintf("SELECT ssh_port FROM vm_states WHERE vm_name='%s';", vmName),
+		).Output()
+		if err == nil {
+			portStr := strings.TrimSpace(string(out))
+			if portStr != "" && portStr != "0" {
+				port := 0
+				if _, scanErr := fmt.Sscanf(portStr, "%d", &port); scanErr == nil && port > 0 {
+					return port
+				}
+			}
+		}
+		// ssh_port column is 0 — try state_json which may embed it.
+		out, err = exec.Command("sqlite3", "-noheader", dbPath,
+			fmt.Sprintf("SELECT state_json FROM vm_states WHERE vm_name='%s';", vmName),
+		).Output()
+		if err == nil && len(out) > 0 {
+			var state struct {
+				SSHPort int `json:"ssh_port"`
+			}
+			if jsonErr := json.Unmarshal(bytes.TrimSpace(out), &state); jsonErr == nil && state.SSHPort > 0 {
+				return state.SSHPort
+			}
+		}
+	}
+
+	// Fallback: flat state.json (file-backed mode, used in older layouts).
 	statePath := filepath.Join(home, ".vee", "vms", vmName, "state.json")
 	data, err := os.ReadFile(statePath)
 	if err != nil {
-		t.Fatalf("read state file %s: %v", statePath, err)
+		t.Fatalf("read state file %s (also tried DB at %s): %v", statePath, dbPath, err)
 	}
 	var state struct {
 		SSHPort int `json:"ssh_port"`

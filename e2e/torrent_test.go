@@ -223,7 +223,7 @@ func providerWithHome(t *testing.T, home string) (provider.Provider, error) {
 	}
 
 	t.Setenv("HOME", home)
-	return provider.NewProvider()
+	return provider.New(false)
 }
 
 func copyFileExec(src, dst string) error {
