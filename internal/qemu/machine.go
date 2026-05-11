@@ -57,6 +57,7 @@ type BaseMachine struct {
 	vsock        *VSockDevice
 	cpuPinning   []int  // host CPU indices; empty = no pinning
 	rtc          string // e.g. "base=localtime,clock=host"
+	bootOrder    string // e.g. "c" for disk-first; empty = firmware default
 }
 
 var (
@@ -160,6 +161,13 @@ func WithDevice(device string) QemuOptions {
 func WithDisplay(display string) QemuOptions {
 	return func(q *BaseMachine) {
 		q.display = display
+	}
+}
+
+// WithBootOrder sets the QEMU -boot order (e.g. "c" for disk-first).
+func WithBootOrder(order string) QemuOptions {
+	return func(q *BaseMachine) {
+		q.bootOrder = order
 	}
 }
 
@@ -296,6 +304,10 @@ func (q *BaseMachine) Args() []string {
 
 	if q.rtc != "" {
 		args = append(args, "-rtc", q.rtc)
+	}
+
+	if q.bootOrder != "" {
+		args = append(args, "-boot", fmt.Sprintf("order=%s,menu=off", q.bootOrder))
 	}
 
 	if q.qmpSocket != "" {

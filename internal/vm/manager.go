@@ -1225,10 +1225,10 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 		opts = append(opts, qemu.WithMemfd(qemu.NewMemfdBackend(cfg.Memory)))
 	case GPUVirtio:
 		opts = append(opts, qemu.WithVGA("none"))
-		if cfg.Headless {
+		if cfg.Headless || cfg.SPICE != nil {
 			// virtio-vga-gl requires an OpenGL display context; headless VMs
-			// use -display none which provides no GL backend. Fall back to
-			// virtio-gpu-pci which works without a display server.
+			// and SPICE VMs use -display none which provides no GL backend.
+			// Fall back to virtio-gpu-pci which works without a display server.
 			opts = append(opts, qemu.WithDevice("virtio-gpu-pci"))
 		} else {
 			opts = append(opts, qemu.WithDevice("virtio-vga-gl"))
@@ -1338,6 +1338,13 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 	// RTC
 	if cfg.RTC != "" {
 		opts = append(opts, qemu.WithRTC(cfg.RTC))
+	}
+
+	// Force disk-first boot order for installed VMs so UEFI doesn't waste
+	// time on PXE before finding the GRUB EFI entry on the disk.
+	state, stateErr := m.loadState(cfg.Name)
+	if stateErr == nil && state.InstallState == InstallStateReady {
+		opts = append(opts, qemu.WithBootOrder("c"))
 	}
 
 	built, err := machine.BuildMachine(opts...)

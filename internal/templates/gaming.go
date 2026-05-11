@@ -557,6 +557,20 @@ arch-chroot /mnt systemctl --global enable pipewire pipewire-pulse wireplumber
 arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=GRUB
 arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
 
+# Set GRUB as the only boot entry — delete PXE/misc entries so the VM
+# boots straight to GRUB on next start without waiting for PXE timeouts.
+arch-chroot /mnt bash -c '
+  grub_num=$(efibootmgr | grep -i "GRUB" | grep -o "Boot[0-9A-F]*" | head -1 | grep -o "[0-9A-F]*")
+  if [ -n "$grub_num" ]; then
+    efibootmgr --quiet --bootorder "$grub_num"
+    # Delete all non-GRUB entries
+    efibootmgr | grep "^Boot[0-9A-F]*" | grep -v "Boot'"$grub_num"'" | grep -o "Boot[0-9A-F]*" | while read entry; do
+      num="${entry#Boot}"
+      efibootmgr --quiet --delete-bootnum --bootnum "$num" || true
+    done
+  fi
+'
+
 %s
 
 cat > /mnt/usr/local/bin/vee-check <<'CHECKEOF'

@@ -103,7 +103,22 @@ func TestGamingArchInstall(t *testing.T) {
 		t.Logf("all %d health checks passed", len(checks))
 	}
 
-	// Phase 5: stop (cleanup handles delete). VM may have already exited on its own.
+	// Phase 5: stop and restart — verifies the VM boots from disk cleanly on a
+	// second cycle (catches boot-order / PXE regression).
+	t.Log("stopping VM for restart cycle...")
+	if err := veeCmd(t, home, "stop", vmName).Run(); err != nil {
+		t.Fatalf("vee stop: %v", err)
+	}
+
+	t.Log("restarting VM (second boot cycle)...")
+	if err := veeCmd(t, home, "start", vmName).Run(); err != nil {
+		t.Fatalf("vee start (second boot): %v", err)
+	}
+
+	waitSSHAuth(t, sshAddr, "gamer", privKeyPath, 5*time.Minute)
+	t.Log("second boot cycle: SSH is up — boot order is correct")
+
+	// Phase 6: stop (cleanup handles delete).
 	t.Log("stopping VM...")
 	_ = veeCmd(t, home, "stop", vmName).Run()
 }

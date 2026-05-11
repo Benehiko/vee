@@ -60,10 +60,15 @@ func (n *NIC) Args() []string {
 		val := fmt.Sprintf("bridge,br=%s,model=%s,mac=%s", n.Bridge, n.Model, n.MAC)
 		return []string{"-nic", val}
 	default:
-		parts := []string{fmt.Sprintf("user,model=%s,mac=%s", n.Model, n.MAC)}
+		// Use -netdev/-device split so we can set rombar=0 on the device.
+		// rombar=0 disables the PXE ROM so OVMF doesn't add PXE boot entries
+		// and waste time trying to network-boot before finding the disk.
+		// (-nic shorthand does not support rombar.)
+		netdevParts := []string{"user,id=net0"}
 		for _, fwd := range n.HostFwds {
-			parts = append(parts, "hostfwd="+fwd)
+			netdevParts = append(netdevParts, "hostfwd="+fwd)
 		}
-		return []string{"-nic", strings.Join(parts, ",")}
+		device := fmt.Sprintf("%s,netdev=net0,mac=%s,rombar=0", n.Model, n.MAC)
+		return []string{"-netdev", strings.Join(netdevParts, ","), "-device", device}
 	}
 }
