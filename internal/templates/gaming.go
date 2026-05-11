@@ -289,9 +289,18 @@ SVCEOF`, user)
 		kasmvncSetup = fmt.Sprintf(`
 arch-chroot /mnt pacman -S --noconfirm git base-devel
 arch-chroot /mnt sudo -u %[1]s bash -c 'cd /tmp && git clone https://aur.archlinux.org/yay.git && cd yay && makepkg -si --noconfirm'
-arch-chroot /mnt sudo -u %[1]s yay -S --noconfirm kasmvnc-bin
-arch-chroot /mnt sudo -u %[1]s bash -c 'mkdir -p ~/.vnc && kasmvncpasswd -w vee -u %[1]s'
-arch-chroot /mnt systemctl enable kasmvnc`, user)
+# kasmvnc AUR package name varies by release; try known names, skip if none found.
+for _pkg in kasmvnc kasmvncserver-bin kasmvnc-bin; do
+  if arch-chroot /mnt sudo -u %[1]s yay -Si --aur "$_pkg" &>/dev/null; then
+    arch-chroot /mnt sudo -u %[1]s yay -S --noconfirm "$_pkg" && break
+  fi
+done
+if arch-chroot /mnt which Xvnc &>/dev/null; then
+  arch-chroot /mnt sudo -u %[1]s bash -c 'mkdir -p ~/.vnc && kasmvncpasswd -w vee -u %[1]s'
+  arch-chroot /mnt systemctl enable kasmvnc
+else
+  echo "==> kasmvnc not installed (no matching AUR package); skipping VNC setup"
+fi`, user)
 	}
 
 	nvidiaSetup := ""
