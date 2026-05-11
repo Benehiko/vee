@@ -135,7 +135,12 @@ func (m *Manager) handleHostShutdown(ctx context.Context) {
 	}
 }
 
-// startAutoStartVMs starts any AutoStart VM that is not currently running.
+// startAutoStartVMs starts any AutoStart VM that is not currently running
+// AND that the user has not explicitly stopped (DesiredState=stopped) or
+// shut down from inside the guest (LastShutdownReason=guest).
+//
+// Empty DesiredState is treated as legacy/first-boot and honours the
+// auto_start flag so existing setups keep working after upgrade.
 func (m *Manager) startAutoStartVMs(ctx context.Context) error {
 	cfgs, err := m.ListAutoStart()
 	if err != nil {
@@ -151,6 +156,14 @@ func (m *Manager) startAutoStartVMs(ctx context.Context) error {
 			continue
 		}
 
+		if stateErr == nil && !shouldDaemonStart(state) {
+			log.Debug("daemon skipping VM (user-stopped or guest-shutdown)",
+				zap.String("vm", cfg.Name),
+				zap.String("desired_state", state.DesiredState),
+				zap.String("last_shutdown_reason", state.LastShutdownReason))
+			continue
+		}
+
 		log.Info("daemon starting VM", zap.String("vm", cfg.Name))
 		if startErr := m.Start(ctx, cfg.Name, false); startErr != nil {
 			log.Error("daemon failed to start VM",
@@ -161,4 +174,25 @@ func (m *Manager) startAutoStartVMs(ctx context.Context) error {
 	}
 
 	return lastErr
+}
+
+// shouldDaemonStart returns true if the daemon's autostart loop should
+// (re)start this VM. It respects explicit user intent recorded in state:
+//
+//   - DesiredState=stopped     → never restart (user ran `vee stop`)
+//   - LastShutdownReason=guest → never restart (guest OS shut itself down)
+//   - DesiredState=running     → restart (recover from crash / fresh boot)
+//   - DesiredState=""          → legacy state predating these fields; honour
+//     auto_start as before
+func shouldDaemonStart(state *VMState) bool {
+	if state == nil {
+		return true
+	}
+	if state.DesiredState == DesiredStateStopped {
+		return false
+	}
+	if state.LastShutdownReason == ShutdownReasonGuest {
+		return false
+	}
+	return true
 }

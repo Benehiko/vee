@@ -28,6 +28,23 @@ type qmpError struct {
 	Desc  string `json:"desc"`
 }
 
+// QMPEvent is the minimal shape of an asynchronous QMP event. The event
+// listener (see ReadEvent) decodes events with this struct so callers can
+// dispatch on Event without parsing the full per-event Data schema.
+type QMPEvent struct {
+	Event string          `json:"event"`
+	Data  json.RawMessage `json:"data,omitempty"`
+}
+
+// ShutdownEventData is the payload of QMP's SHUTDOWN event. The boolean
+// Guest is true when the guest OS initiated the shutdown (e.g. `poweroff`
+// inside the VM), false when QEMU was asked from the outside (QMP
+// system_powerdown, SIGTERM, host kill, …).
+type ShutdownEventData struct {
+	Guest  bool   `json:"guest"`
+	Reason string `json:"reason,omitempty"`
+}
+
 // NewQMPClient dials the QMP Unix socket, retrying for up to timeout.
 func NewQMPClient(socketPath string, timeout time.Duration) (*QMPClient, error) {
 	deadline := time.Now().Add(timeout)
@@ -107,6 +124,41 @@ func (c *QMPClient) QueryStatus() (*StatusResult, error) {
 
 func (c *QMPClient) Close() error {
 	return c.conn.Close()
+}
+
+// NewQMPEventListener dials a dedicated QMP socket connection used purely
+// for reading asynchronous events. It does not share a connection with
+// QMPClient so command responses and events never interleave on the same
+// scanner. Caller must call Close on the returned QMPClient when done; the
+// connection is also closed automatically when QEMU exits.
+func NewQMPEventListener(socketPath string, timeout time.Duration) (*QMPClient, error) {
+	return NewQMPClient(socketPath, timeout)
+}
+
+// ReadEvent blocks until the next QMP event arrives on the connection.
+// Command responses received on this connection are skipped silently.
+// Returns io.EOF (wrapped) when the connection closes, which happens when
+// QEMU exits.
+func (c *QMPClient) ReadEvent() (*QMPEvent, error) {
+	for {
+		if !c.scanner.Scan() {
+			if err := c.scanner.Err(); err != nil {
+				return nil, fmt.Errorf("QMP read: %w", err)
+			}
+			return nil, fmt.Errorf("QMP: connection closed")
+		}
+		line := c.scanner.Bytes()
+		var ev QMPEvent
+		if err := json.Unmarshal(line, &ev); err != nil {
+			// Not a valid JSON object — skip.
+			continue
+		}
+		if ev.Event == "" {
+			// Command response or greeting; ignore.
+			continue
+		}
+		return &ev, nil
+	}
 }
 
 // GuestPing sends a guest-ping command via the QEMU guest agent channel.

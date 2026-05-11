@@ -302,6 +302,7 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 			QGASocket:    result.QGASocket,
 			StartedAt:    ptr(time.Now()),
 			Running:      true,
+			DesiredState: DesiredStateRunning,
 			InstallState: state.InstallState,
 			InstalledAt:  state.InstalledAt,
 		}
@@ -350,6 +351,7 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 		VirtiofsdPIDs: virtiofsdPIDs,
 		StartedAt:     ptr(time.Now()),
 		Running:       true,
+		DesiredState:  DesiredStateRunning,
 		InstallState:  state.InstallState,
 		InstalledAt:   state.InstalledAt,
 	}
@@ -361,6 +363,12 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 	}
 	if err := m.saveState(name, newState); err != nil {
 		return err
+	}
+
+	// Watch for guest-initiated SHUTDOWN events so the daemon can tell
+	// "user shut down inside the VM" apart from a crash. Best-effort.
+	if newState.QMPSocket != "" {
+		go m.watchShutdownEvents(name, newState.QMPSocket)
 	}
 
 	// Register hostname → IP and inject SSH key. Best-effort: log but don't fail start.
@@ -825,8 +833,10 @@ func (m *Manager) Stop(ctx context.Context, name string) error {
 		installState = InstallStateReady
 	}
 	preserved := &VMState{
-		InstallState: installState,
-		InstalledAt:  state.InstalledAt,
+		InstallState:       installState,
+		InstalledAt:        state.InstalledAt,
+		DesiredState:       DesiredStateStopped,
+		LastShutdownReason: ShutdownReasonUser,
 	}
 	return m.saveState(name, preserved)
 }
@@ -868,8 +878,10 @@ func (m *Manager) ForceStop(_ context.Context, name string) error {
 		installState = InstallStateReady
 	}
 	preserved := &VMState{
-		InstallState: installState,
-		InstalledAt:  state.InstalledAt,
+		InstallState:       installState,
+		InstalledAt:        state.InstalledAt,
+		DesiredState:       DesiredStateStopped,
+		LastShutdownReason: ShutdownReasonUser,
 	}
 	return m.saveState(name, preserved)
 }
@@ -930,6 +942,11 @@ func (m *Manager) StopAllRunning(ctx context.Context, perVMTimeout time.Duration
 // cleanupStaleVM clears persisted running state for a VM whose process died on
 // its own (e.g. guest OS shutdown). It does NOT touch /etc/hosts — callers
 // that want hostname unregistration must call UnregisterHostname themselves.
+//
+// DesiredState is preserved so an explicit `vee stop` survives a daemon
+// restart. LastShutdownReason is preserved if already set (e.g. by the QMP
+// shutdown watcher noting a guest-initiated poweroff); otherwise the exit is
+// recorded as a crash so the daemon can decide whether to restart.
 func (m *Manager) cleanupStaleVM(name string, _ *VMConfig, state *VMState) {
 	preserved := &VMState{}
 	if state != nil {
@@ -940,6 +957,11 @@ func (m *Manager) cleanupStaleVM(name string, _ *VMConfig, state *VMState) {
 		}
 		preserved.InstallState = installState
 		preserved.InstalledAt = state.InstalledAt
+		preserved.DesiredState = state.DesiredState
+		preserved.LastShutdownReason = state.LastShutdownReason
+		if preserved.LastShutdownReason == "" {
+			preserved.LastShutdownReason = ShutdownReasonCrash
+		}
 	}
 	_ = m.saveState(name, preserved)
 }
