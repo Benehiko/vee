@@ -72,6 +72,8 @@ RestartSec=5
 WantedBy=multi-user.target
 `
 
+	vsockService := vsockSSHAgentService()
+
 	writeFiles := []vm.CloudInitWriteFile{
 		{
 			Path:        "/etc/actions-runner/runner.env",
@@ -82,6 +84,11 @@ WantedBy=multi-user.target
 		{
 			Path:        "/etc/systemd/system/actions-runner.service",
 			Content:     actionsRunnerService,
+			Permissions: "0644",
+		},
+		{
+			Path:        "/etc/systemd/system/vee-ssh-agent.service",
+			Content:     vsockService,
 			Permissions: "0644",
 		},
 	}
@@ -105,9 +112,12 @@ WantedBy=multi-user.target
 		`. /etc/actions-runner/runner.env && sudo -u runner /opt/actions-runner/config.sh --unattended --url "$RUNNER_URL" --token "$RUNNER_TOKEN" --labels "$RUNNER_LABELS" --name "$RUNNER_NAME"`,
 		// Enable and start the runner service.
 		"systemctl enable --now actions-runner",
-		// Firewall: SSH only (runner uses outbound HTTPS; no inbound needed).
+		// SSH: Ubuntu cloud images need explicit enable; required for vee ssh.
+		"systemctl enable --now ssh",
+		// Firewall: allow SSH (runner uses outbound HTTPS; no other inbound needed).
 		"ufw allow OpenSSH",
 		"ufw --force enable",
+		"systemctl enable --now vee-ssh-agent",
 		"systemctl enable --now qemu-guest-agent",
 	}
 
@@ -145,7 +155,7 @@ WantedBy=multi-user.target
 			User:        "admin",
 			DefaultUser: images.DefaultUser(images.DistroUbuntu),
 			SSHKeys:     sshKeys,
-			Packages:    []string{"curl", "ca-certificates", "ufw", "qemu-guest-agent", "jq", "libicu-dev"},
+			Packages:    []string{"curl", "ca-certificates", "ufw", "qemu-guest-agent", "jq", "libicu-dev", "socat"},
 			RunCmds:     runCmds,
 			WriteFiles:  writeFiles,
 		},
