@@ -30,8 +30,9 @@ func TestGamingArchInstall(t *testing.T) {
 	privKeyPath := veePrivKeyPath(t, home)
 	vmName := "e2e-gaming-arch"
 
-	// Allow up to 90 minutes — pacstrap + KDE is a large download.
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Minute)
+	// Allow up to 100 minutes — pacstrap + KDE is a large download and
+	// can take 85+ minutes on a slow mirror or busy host.
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Minute)
 	defer cancel()
 
 	t.Cleanup(func() {
@@ -57,8 +58,8 @@ func TestGamingArchInstall(t *testing.T) {
 
 	// Phase 2: install pass — cloud-init runs install.sh which ends with
 	// `poweroff`. --foreground blocks until the QEMU process exits.
-	t.Log("starting install (this may take 30–60 minutes)...")
-	installCtx, installCancel := context.WithTimeout(ctx, 75*time.Minute)
+	t.Log("starting install (this may take 30–90 minutes)...")
+	installCtx, installCancel := context.WithTimeout(ctx, 90*time.Minute)
 	defer installCancel()
 	if err := runWithContext(installCtx, veeCmd(t, home, "start", vmName, "--foreground")); err != nil {
 		t.Fatalf("vee start (install pass): %v", err)
