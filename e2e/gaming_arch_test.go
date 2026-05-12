@@ -78,33 +78,12 @@ func TestGamingArchInstall(t *testing.T) {
 	// Phase 4: wait for SSH auth and run health checks.
 	waitSSHAuth(t, sshAddr, "gamer", privKeyPath, 5*time.Minute)
 
-	t.Log("running post-install health checks via vee-check...")
-
-	// Safety net: verify the script is present before relying on it.
-	scriptPresent := sshRunLenient(t, sshAddr, "gamer", privKeyPath,
-		"test -x /usr/local/bin/vee-check && echo ok")
-	if !strings.Contains(scriptPresent, "ok") {
-		t.Fatalf("vee-check script missing or not executable on installed VM")
-	}
-
-	checks := sshRunHealthCheck(t, sshAddr, "gamer", privKeyPath)
-	if len(checks) == 0 {
-		t.Fatal("vee-check returned no checks — script may have failed to produce output")
-	}
-
-	allPassed := true
-	for _, c := range checks {
-		if !c.OK {
-			t.Errorf("health check FAILED: %s — %s", c.Name, c.Detail)
-			allPassed = false
-		}
-	}
-	if allPassed {
-		t.Logf("all %d health checks passed", len(checks))
-	}
+	t.Log("running post-install health checks via vee-check (first boot)...")
+	runVeeCheck(t, sshAddr, "gamer", privKeyPath, "first boot")
 
 	// Phase 5: stop and restart — verifies the VM boots from disk cleanly on a
-	// second cycle (catches boot-order / PXE regression).
+	// second cycle (catches boot-order / PXE regression) and that all installed
+	// state (packages, fstab, groups, services) persists across reboots.
 	t.Log("stopping VM for restart cycle...")
 	if err := veeCmd(t, home, "stop", vmName).Run(); err != nil {
 		t.Fatalf("vee stop: %v", err)
@@ -118,7 +97,38 @@ func TestGamingArchInstall(t *testing.T) {
 	waitSSHAuth(t, sshAddr, "gamer", privKeyPath, 5*time.Minute)
 	t.Log("second boot cycle: SSH is up — boot order is correct")
 
+	t.Log("running post-install health checks via vee-check (second boot)...")
+	runVeeCheck(t, sshAddr, "gamer", privKeyPath, "second boot")
+
 	// Phase 6: stop (cleanup handles delete).
 	t.Log("stopping VM...")
 	_ = veeCmd(t, home, "stop", vmName).Run()
+}
+
+// runVeeCheck verifies vee-check is present, runs it, and fails the test for
+// any check that did not pass. label is used in log messages only.
+func runVeeCheck(t *testing.T, sshAddr, user, privKeyPath, label string) {
+	t.Helper()
+
+	scriptPresent := sshRunLenient(t, sshAddr, user, privKeyPath,
+		"test -x /usr/local/bin/vee-check && echo ok")
+	if !strings.Contains(scriptPresent, "ok") {
+		t.Fatalf("[%s] vee-check script missing or not executable on VM", label)
+	}
+
+	checks := sshRunHealthCheck(t, sshAddr, user, privKeyPath)
+	if len(checks) == 0 {
+		t.Fatalf("[%s] vee-check returned no checks — script may have failed", label)
+	}
+
+	allPassed := true
+	for _, c := range checks {
+		if !c.OK {
+			t.Errorf("[%s] health check FAILED: %s — %s", label, c.Name, c.Detail)
+			allPassed = false
+		}
+	}
+	if allPassed {
+		t.Logf("[%s] all %d health checks passed", label, len(checks))
+	}
 }

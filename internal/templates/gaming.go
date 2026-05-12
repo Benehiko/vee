@@ -593,6 +593,21 @@ svc_check() {
   fi
 }
 
+# svc_enabled_check asserts the unit is enabled (persists across reboots) but
+# does not require it to be active right now. Used for display-manager services
+# that cannot start in headless/virtio mode but must still be present for real
+# hardware boots.
+svc_enabled_check() {
+  local name=$1
+  local enabled
+  enabled=$(systemctl is-enabled "$name" 2>&1 || true)
+  if [[ "$enabled" == "enabled" || "$enabled" == "static" ]]; then
+    checks+=("{\"name\":\"svc-enabled:$name\",\"ok\":true,\"detail\":\"enabled\"}")
+  else
+    checks+=("{\"name\":\"svc-enabled:$name\",\"ok\":false,\"detail\":\"enabled=$enabled\"}")
+  fi
+}
+
 pkg_check() {
   local name=$1
   local out
@@ -622,12 +637,43 @@ group_check() {
   fi
 }
 
-# Services (enabled + active)
+# --- Point 1: self-integrity check -------------------------------------------
+# Verify this script matches the SHA256 written at install time. A broken
+# arch-chroot (wrong arch, missing deps) might still produce a file but with
+# truncated or garbage content; this catches that without trusting the installer.
+SELF_SHA=$(sha256sum /usr/local/bin/vee-check | awk '{print $1}')
+EXPECTED_SHA=$(cat /etc/vee-check.sha256 2>/dev/null || true)
+if [[ -n "$EXPECTED_SHA" && "$SELF_SHA" == "$EXPECTED_SHA" ]]; then
+  checks+=("{\"name\":\"self-integrity\",\"ok\":true,\"detail\":\"sha256 matches\"}")
+elif [[ -z "$EXPECTED_SHA" ]]; then
+  checks+=("{\"name\":\"self-integrity\",\"ok\":false,\"detail\":\"no reference checksum at /etc/vee-check.sha256\"}")
+else
+  checks+=("{\"name\":\"self-integrity\",\"ok\":false,\"detail\":\"sha256 mismatch: got $SELF_SHA want $EXPECTED_SHA\"}")
+fi
+
+# --- Point 2: services -------------------------------------------------------
+# sddm: assert enabled (survives reboots) but do not require active — headless
+# virtio has no display so sddm will not activate on this boot.
 svc_check NetworkManager
 svc_check sshd
-svc_check sddm
+svc_enabled_check sddm
 svc_check qemu-guest-agent
+# vee-firstboot is oneshot/RemainAfterExit — active means it completed.
 svc_check vee-firstboot
+
+# --- Point 4: firstboot actually ran ----------------------------------------
+# The service writes this sentinel after ExecStart succeeds. Checking
+# is-active alone would pass if RemainAfterExit=yes is set but the script
+# never actually ran (e.g. ConditionPathExists suppressed it).
+file_check firstboot-done /etc/vee-firstboot-done
+
+# vee-firstboot.sh resolves the host gateway as vee-host; verify the entry
+# made it into /etc/hosts (proves the script body executed, not just the unit).
+if grep -q 'vee-host' /etc/hosts 2>/dev/null; then
+  checks+=("{\"name\":\"firstboot-vee-host\",\"ok\":true,\"detail\":\"vee-host in /etc/hosts\"}")
+else
+  checks+=("{\"name\":\"firstboot-vee-host\",\"ok\":false,\"detail\":\"vee-host missing from /etc/hosts\"}")
+fi
 
 # User/group
 group_check gamer wheel
@@ -639,6 +685,25 @@ pkg_check plasma-desktop
 pkg_check pipewire
 pkg_check wireplumber
 pkg_check gamemode
+
+# --- Point 3: GPU/SPICE validation ------------------------------------------
+# /dev/dri must exist — virtio-gpu creates at least renderD128 at boot.
+if [[ -d /dev/dri ]] && ls /dev/dri/renderD* /dev/dri/card* >/dev/null 2>&1; then
+  dri_nodes=$(ls /dev/dri/ | tr '\n' ' ')
+  checks+=("{\"name\":\"gpu-dri-nodes\",\"ok\":true,\"detail\":\"$dri_nodes\"}")
+else
+  checks+=("{\"name\":\"gpu-dri-nodes\",\"ok\":false,\"detail\":\"/dev/dri missing or empty\"}")
+fi
+
+# SPICE vdagent: the virtio-serial port must be present as a chardev.
+# The kernel exposes it as /dev/virtio-ports/com.redhat.spice.0 (symlink to
+# the vportNpM device). Its presence proves QEMU wired up the SPICE vdagent
+# chardev and the guest kernel loaded the virtio-serial driver.
+if [[ -e /dev/virtio-ports/com.redhat.spice.0 ]]; then
+  checks+=("{\"name\":\"spice-vdagent-chardev\",\"ok\":true,\"detail\":\"/dev/virtio-ports/com.redhat.spice.0 present\"}")
+else
+  checks+=("{\"name\":\"spice-vdagent-chardev\",\"ok\":false,\"detail\":\"/dev/virtio-ports/com.redhat.spice.0 missing\"}")
+fi
 
 # Config files
 file_check sddm-autologin /etc/sddm.conf.d/autologin.conf
@@ -669,6 +734,10 @@ joined=$(IFS=,; echo "${checks[*]}")
 printf '{"checks":[%%s]}\n' "$joined"
 CHECKEOF
 chmod 0755 /mnt/usr/local/bin/vee-check
+
+# Point 1: write the reference checksum so vee-check can verify itself.
+# The chroot is still mounted; compute against the mounted path.
+sha256sum /mnt/usr/local/bin/vee-check | awk '{print $1}' > /mnt/etc/vee-check.sha256
 
 umount -R /mnt
 poweroff`, user, gpuPkgs, hostname, hostname, strings.Join(sshKeys, "\n"), kasmvncService, nvidiaSetup, kasmvncSetup)
