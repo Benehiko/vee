@@ -88,6 +88,7 @@ type Opts struct {
 	// calling Build; Build itself does no prompting.
 	TorrentExtras  *TorrentExtras
 	JellyfinExtras *JellyfinExtras
+	RunnerExtras   *RunnerExtras
 }
 
 // TorrentExtras carries the data that the torrent template needs to be built,
@@ -104,6 +105,14 @@ type TorrentExtras struct {
 type JellyfinExtras struct {
 	Libraries []media.Source
 	Secrets   map[string]string
+}
+
+// RunnerExtras carries the GitHub Actions runner registration data collected
+// interactively before invoking the github-runner template.
+type RunnerExtras struct {
+	URL    string   // repo or org URL, e.g. https://github.com/owner/repo
+	Token  string   // short-lived registration token from the GitHub API
+	Labels []string // runner labels; defaults to [self-hosted, linux, kvm] when empty
 }
 
 // Build returns a fully-populated *vm.VMConfig for the given Opts. It does not
@@ -274,6 +283,12 @@ func configFromTemplate(ctx context.Context, prov provider.Provider, opts Opts, 
 			version = images.KnownUbuntuVersions[0]
 		}
 		return templates.NewUbuntuServerConfig(ctx, prov, version, opts.Name)
+	case "github-runner":
+		if opts.RunnerExtras == nil {
+			return nil, fmt.Errorf("github-runner template requires interactive prompts; collect them and pass via Opts.RunnerExtras")
+		}
+		return templates.NewGitHubRunnerConfig(ctx, prov, opts.Name, sshKeys,
+			opts.RunnerExtras.URL, opts.RunnerExtras.Token, opts.RunnerExtras.Labels)
 	default:
 		return defaultConfig(prov, opts), nil
 	}

@@ -44,6 +44,8 @@ var (
 	createNICMAC        string
 	createGPUVendor     string
 	createMedia         []string
+	createRunnerURL     string
+	createRunnerLabels  []string
 )
 
 var createCmd = &cobra.Command{
@@ -68,6 +70,10 @@ Templates apply sane defaults automatically:
   jellyfin        4G / 2 CPUs, Ubuntu cloud image, Jellyfin via official APT repo,
                   Avahi mDNS so http://<name> resolves on the LAN. Attach libraries
                   with repeatable --media flags (NFS/SMB/host-dir/block/USB).
+  github-runner   4G / 4 CPUs, Ubuntu cloud image, self-hosted GitHub Actions runner.
+                  Uses outbound HTTPS long-polling; no inbound port forwarding required.
+                  Pass --runner-url (repo or org URL) and enter the registration token
+                  when prompted. Defaults to labels: self-hosted,linux,kvm.
 
 Supported distros for devbox/server: ubuntu, arch, fedora
 Use --distro-version latest (default) or a specific version string.
@@ -131,6 +137,26 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
 				return fmt.Errorf("collect media secrets: %w", secErr)
 			}
 			opts.JellyfinExtras = &build.JellyfinExtras{Libraries: libs, Secrets: secrets}
+		}
+		if opts.Template == "github-runner" {
+			if createRunnerURL == "" {
+				return fmt.Errorf("--runner-url is required for the github-runner template")
+			}
+			fmt.Fprint(os.Stderr, "GitHub runner registration token: ")
+			tokenBytes, readErr := term.ReadPassword(int(os.Stdin.Fd()))
+			fmt.Fprintln(os.Stderr)
+			if readErr != nil {
+				return fmt.Errorf("read runner token: %w", readErr)
+			}
+			labels := createRunnerLabels
+			if len(labels) == 0 {
+				labels = []string{"self-hosted", "linux", "kvm"}
+			}
+			opts.RunnerExtras = &build.RunnerExtras{
+				URL:    createRunnerURL,
+				Token:  strings.TrimSpace(string(tokenBytes)),
+				Labels: labels,
+			}
 		}
 
 		cfg, err := build.Build(cmd.Context(), prov, opts)
@@ -299,6 +325,8 @@ func init() {
 	createCmd.Flags().StringVar(&createNICMAC, "nic-mac", "", "Fixed MAC address for the bridge NIC (passthrough template; empty = deterministic)")
 	createCmd.Flags().StringVar(&createGPUVendor, "gpu-vendor", "amd", "Guest GPU vendor for driver selection: amd, nvidia, virtio (gaming-arch/gaming-bazzite templates)")
 	createCmd.Flags().StringArrayVar(&createMedia, "media", nil, "Media source for jellyfin template (repeatable). Forms: hostdir:/host@/guest[:ro], nfs://server/export@/guest[:ro], smb://[user@]server/share@/guest[:ro], block:/dev/disk/by-id/...@/guest[:fstype], usb:VENDOR:PRODUCT@/guest[:fstype]")
+	createCmd.Flags().StringVar(&createRunnerURL, "runner-url", "", "GitHub repo or org URL for runner registration (github-runner template)")
+	createCmd.Flags().StringArrayVar(&createRunnerLabels, "runner-labels", nil, "Runner labels (github-runner template; default: self-hosted,linux,kvm)")
 
 	_ = createCmd.RegisterFlagCompletionFunc("template", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 		return []string{
@@ -314,6 +342,7 @@ func init() {
 			"truenas\tTrueNAS SCALE VM",
 			"docker\tAlpine Linux VM with Docker daemon on tcp://localhost:2375",
 			"jellyfin\tJellyfin media server with NFS/SMB/USB/host-dir libraries + mDNS",
+			"github-runner\tSelf-hosted GitHub Actions runner (outbound HTTPS, no port forwarding needed)",
 		}, cobra.ShellCompDirectiveNoFileComp
 	})
 	_ = createCmd.RegisterFlagCompletionFunc("gpu-vendor", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
