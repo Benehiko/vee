@@ -565,6 +565,9 @@ arch-chroot /mnt systemctl --global enable pipewire pipewire-pulse wireplumber
 
 echo "==> vee-install: stage=grub"
 arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=GRUB
+# Disable os-prober: it scans all block devices which hangs inside a VM
+# (IDE CDROMs, virtio disk) and is not needed — there is only one OS.
+echo "GRUB_DISABLE_OS_PROBER=true" >> /mnt/etc/default/grub
 arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
 
 # Set GRUB as the only boot entry — delete PXE/misc entries so the VM
