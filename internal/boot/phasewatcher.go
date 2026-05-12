@@ -16,8 +16,9 @@ import (
 
 // Phase is a coarse-grained label for where a VM is in its boot sequence.
 // Phases monotonically advance (BIOSPost → Bootloader → KernelBoot → Init →
-// CloudInit → Ready); a Failed transition is terminal and carries a panic
-// line.
+// CloudInit → Install → Ready); a Failed transition is terminal and carries a
+// panic line. Install is a sub-phase of CloudInit used by templates that run a
+// long install.sh script; it emits Detail strings naming the current stage.
 type Phase string
 
 const (
@@ -27,6 +28,7 @@ const (
 	PhaseKernelBoot Phase = "Kernel boot"
 	PhaseInit       Phase = "Init"
 	PhaseCloudInit  Phase = "Cloud-init"
+	PhaseInstall    Phase = "Installing"
 	PhaseReady      Phase = "Ready"
 	PhaseFailed     Phase = "Failed"
 )
@@ -45,8 +47,10 @@ func rank(p Phase) int {
 		return 4
 	case PhaseCloudInit:
 		return 5
-	case PhaseReady:
+	case PhaseInstall:
 		return 6
+	case PhaseReady:
+		return 7
 	default:
 		return 0
 	}
@@ -66,38 +70,67 @@ type pattern struct {
 	// fail signals this match terminates the boot as PhaseFailed; the matched
 	// line is captured into Event.PanicLine.
 	fail bool
+	// detailGroup, when > 0, captures the nth submatch of re as Event.Detail.
+	detailGroup int
+}
+
+// installStageLabels maps the stage= token from vee-install banners to a
+// human-readable label shown in the spinner.
+var installStageLabels = map[string]string{
+	"clock-sync":       "waiting for clock sync",
+	"clock-sync-done":  "clock synced",
+	"network-wait":     "waiting for network",
+	"network-ready":    "network ready",
+	"partition":        "partitioning disk",
+	"reflector":        "selecting mirrors",
+	"reflector-done":   "mirrors selected",
+	"reflector-failed": "mirrors: using fallback",
+	"pacstrap":         "installing base system (this takes a while)",
+	"pacstrap-done":    "base system installed",
+	"fstab":            "generating fstab",
+	"locale":           "configuring locale",
+	"users":            "creating users",
+	"services":         "enabling services",
+	"grub":             "installing bootloader",
+	"cleanup":          "finalising install",
+	"done":             "install complete",
 }
 
 // patterns is evaluated in order on every fresh log line; first match wins.
 // Failure patterns are checked first so a kernel panic during cloud-init still
 // surfaces as Failed rather than being shadowed by a CloudInit match.
 var patterns = []pattern{
-	{regexp.MustCompile(`Kernel panic`), PhaseFailed, true},
-	{regexp.MustCompile(`end Kernel panic`), PhaseFailed, true},
-	{regexp.MustCompile(`Oops:`), PhaseFailed, true},
-	{regexp.MustCompile(`BUG:`), PhaseFailed, true},
-	{regexp.MustCompile(`No bootable device`), PhaseFailed, true},
+	{regexp.MustCompile(`Kernel panic`), PhaseFailed, true, 0},
+	{regexp.MustCompile(`end Kernel panic`), PhaseFailed, true, 0},
+	{regexp.MustCompile(`Oops:`), PhaseFailed, true, 0},
+	{regexp.MustCompile(`BUG:`), PhaseFailed, true, 0},
+	{regexp.MustCompile(`No bootable device`), PhaseFailed, true, 0},
+	{regexp.MustCompile(`==> vee-install: FAILED`), PhaseFailed, true, 0},
 
-	{regexp.MustCompile(`cloud-init.*finished`), PhaseReady, false},
-	{regexp.MustCompile(`cloud-init\[\d+\]:`), PhaseCloudInit, false},
-	{regexp.MustCompile(`Cloud-init v\.`), PhaseCloudInit, false},
+	// Fine-grained install stages emitted by install.sh via the serial port.
+	// Checked before the generic CloudInit pattern so they promote to PhaseInstall.
+	{regexp.MustCompile(`==> vee-install: stage=(\S+)`), PhaseInstall, false, 1},
 
-	{regexp.MustCompile(`Reached target`), PhaseInit, false},
-	{regexp.MustCompile(`systemd\[1\]:`), PhaseInit, false},
-	{regexp.MustCompile(`Welcome to `), PhaseInit, false},
+	{regexp.MustCompile(`cloud-init.*finished`), PhaseReady, false, 0},
+	{regexp.MustCompile(`cloud-init\[\d+\]:`), PhaseCloudInit, false, 0},
+	{regexp.MustCompile(`Cloud-init v\.`), PhaseCloudInit, false, 0},
 
-	{regexp.MustCompile(`Linux version `), PhaseKernelBoot, false},
-	{regexp.MustCompile(`^\[\s*0\.\d+\] `), PhaseKernelBoot, false},
-	{regexp.MustCompile(`Command line:`), PhaseKernelBoot, false},
+	{regexp.MustCompile(`Reached target`), PhaseInit, false, 0},
+	{regexp.MustCompile(`systemd\[1\]:`), PhaseInit, false, 0},
+	{regexp.MustCompile(`Welcome to `), PhaseInit, false, 0},
 
-	{regexp.MustCompile(`GRUB version`), PhaseBootloader, false},
-	{regexp.MustCompile(`^Booting `), PhaseBootloader, false},
-	{regexp.MustCompile(`Loading initial ramdisk`), PhaseBootloader, false},
-	{regexp.MustCompile(`systemd-boot`), PhaseBootloader, false},
+	{regexp.MustCompile(`Linux version `), PhaseKernelBoot, false, 0},
+	{regexp.MustCompile(`^\[\s*0\.\d+\] `), PhaseKernelBoot, false, 0},
+	{regexp.MustCompile(`Command line:`), PhaseKernelBoot, false, 0},
 
-	{regexp.MustCompile(`BdsDxe:`), PhaseBIOSPost, false},
-	{regexp.MustCompile(`UEFI Interactive Shell`), PhaseBIOSPost, false},
-	{regexp.MustCompile(`SeaBIOS`), PhaseBIOSPost, false},
+	{regexp.MustCompile(`GRUB version`), PhaseBootloader, false, 0},
+	{regexp.MustCompile(`^Booting `), PhaseBootloader, false, 0},
+	{regexp.MustCompile(`Loading initial ramdisk`), PhaseBootloader, false, 0},
+	{regexp.MustCompile(`systemd-boot`), PhaseBootloader, false, 0},
+
+	{regexp.MustCompile(`BdsDxe:`), PhaseBIOSPost, false, 0},
+	{regexp.MustCompile(`UEFI Interactive Shell`), PhaseBIOSPost, false, 0},
+	{regexp.MustCompile(`SeaBIOS`), PhaseBIOSPost, false, 0},
 }
 
 // Watcher tails a serial console log and emits Phase transitions on a channel.
@@ -182,7 +215,7 @@ func (w *Watcher) Run(ctx context.Context, out chan<- Event) error {
 					lastLineAt = time.Now()
 					progressed = true
 
-					phase, fail, panicLine := classify(full)
+					phase, fail, panicLine, detail := classify(full)
 					if phase == PhaseUnknown {
 						continue
 					}
@@ -190,12 +223,19 @@ func (w *Watcher) Run(ctx context.Context, out chan<- Event) error {
 						emit(Event{Phase: PhaseFailed, PanicLine: panicLine, At: lastLineAt})
 						return nil
 					}
+					// Install sub-phases re-emit at the same rank to surface detail
+					// updates; all other phases must strictly advance forward.
+					if phase == PhaseInstall {
+						last = phase
+						emit(Event{Phase: phase, Detail: detail, At: lastLineAt})
+						continue
+					}
 					// Only advance forward; never regress.
 					if rank(phase) <= rank(last) {
 						continue
 					}
 					last = phase
-					emit(Event{Phase: phase, At: lastLineAt})
+					emit(Event{Phase: phase, Detail: detail, At: lastLineAt})
 					if phase == PhaseReady {
 						return nil
 					}
@@ -224,12 +264,24 @@ func (w *Watcher) Run(ctx context.Context, out chan<- Event) error {
 }
 
 // classify returns the phase for a line, whether the line is a terminal
-// failure, and the original line (for failure capture).
-func classify(line string) (Phase, bool, string) {
+// failure, the original line (for failure capture), and an optional detail
+// string extracted from a capture group when detailGroup > 0.
+func classify(line string) (phase Phase, fail bool, panicLine string, detail string) {
 	for _, p := range patterns {
-		if p.re.MatchString(line) {
-			return p.phase, p.fail, line
+		m := p.re.FindStringSubmatch(line)
+		if m == nil {
+			continue
 		}
+		det := ""
+		if p.detailGroup > 0 && p.detailGroup < len(m) {
+			token := m[p.detailGroup]
+			if label, ok := installStageLabels[token]; ok {
+				det = label
+			} else {
+				det = token
+			}
+		}
+		return p.phase, p.fail, line, det
 	}
-	return PhaseUnknown, false, ""
+	return PhaseUnknown, false, "", ""
 }

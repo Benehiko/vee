@@ -314,9 +314,9 @@ fi`, user)
 	}
 
 	installScript := fmt.Sprintf(`#!/bin/bash
-# Trace every command so cloud-init-output.log captures progress; redirect
-# everything to a dedicated install log too, in case cloud-init buffers.
-exec > >(tee -a /var/log/vee-install.log) 2>&1
+# Redirect all output to both the install log and the serial console so that
+# vee can tail the serial port and show live progress to the user.
+exec > >(tee -a /var/log/vee-install.log /dev/ttyS0) 2>&1
 set -euxo pipefail
 DISK=/dev/vda
 USER=%s
@@ -325,12 +325,13 @@ USER=%s
 # (manual or vee restart) is not blocked by stale partitions on $DISK.
 on_err() {
   rc=$?
-  echo "==> install.sh failed at line $1 (exit $rc)"
+  echo "==> vee-install: FAILED at line $1 (exit $rc)"
   umount -R /mnt 2>/dev/null || true
   exit $rc
 }
 trap 'on_err $LINENO' ERR
 
+echo "==> vee-install: stage=clock-sync"
 # Wait for time sync — the live ISO boots with the clock at 1970-01-01,
 # which makes every HTTPS cert look "not yet valid" and breaks pacman /
 # reflector. Force NTP up before any network fetch.
@@ -341,8 +342,9 @@ for i in $(seq 1 30); do
   fi
   sleep 2
 done
-echo "==> clock: $(date -u '+%%Y-%%m-%%dT%%H:%%M:%%SZ')"
+echo "==> vee-install: stage=clock-sync-done clock=$(date -u '+%%Y-%%m-%%dT%%H:%%M:%%SZ')"
 
+echo "==> vee-install: stage=network-wait"
 # Wait for a default route + working DNS — runcmd fires before
 # network-online.target on some images.
 for i in $(seq 1 30); do
@@ -351,7 +353,9 @@ for i in $(seq 1 30); do
   fi
   sleep 2
 done
+echo "==> vee-install: stage=network-ready"
 
+echo "==> vee-install: stage=partition"
 # Partition: 512M EFI + rest as root
 parted -s "$DISK" mklabel gpt
 parted -s "$DISK" mkpart ESP fat32 1MiB 513MiB
@@ -365,6 +369,7 @@ mount "${DISK}2" /mnt
 mkdir -p /mnt/boot/efi
 mount "${DISK}1" /mnt/boot/efi
 
+echo "==> vee-install: stage=reflector"
 # Pick fastest mirrors before pacstrap. Reflector reaches out over HTTPS
 # only — rsync rate-tests routinely time out from this network. We write
 # to a tempfile so a partial/failed reflector run never leaves an empty
@@ -377,9 +382,9 @@ if reflector --protocol https --latest 20 --sort rate \
    && [ -s /etc/pacman.d/mirrorlist.new ] \
    && grep -q '^Server = ' /etc/pacman.d/mirrorlist.new; then
   mv /etc/pacman.d/mirrorlist.new /etc/pacman.d/mirrorlist
-  echo "==> reflector picked $(grep -c '^Server = ' /etc/pacman.d/mirrorlist) mirrors"
+  echo "==> vee-install: stage=reflector-done mirrors=$(grep -c '^Server = ' /etc/pacman.d/mirrorlist)"
 else
-  echo "==> reflector failed or produced empty mirrorlist; keeping ISO mirrorlist"
+  echo "==> vee-install: stage=reflector-failed using ISO mirrorlist"
   rm -f /etc/pacman.d/mirrorlist.new
   cp /etc/pacman.d/mirrorlist.iso /etc/pacman.d/mirrorlist
 fi
@@ -417,6 +422,7 @@ p.write_text(txt)
 PYEOF
 pacman -Sy --noconfirm
 
+echo "==> vee-install: stage=pacstrap"
 # Base system + gaming stack
 pacstrap /mnt base linux linux-firmware grub efibootmgr sudo \
   networkmanager openssh qemu-guest-agent \
@@ -425,9 +431,12 @@ pacstrap /mnt base linux linux-firmware grub efibootmgr sudo \
   pipewire pipewire-pulse pipewire-alsa wireplumber \
   %s
 
-# fstab
+echo "==> vee-install: stage=pacstrap-done"
+
+echo "==> vee-install: stage=fstab"
 genfstab -U /mnt >> /mnt/etc/fstab
 
+echo "==> vee-install: stage=locale"
 # Locale + timezone
 arch-chroot /mnt ln -sf /usr/share/zoneinfo/UTC /etc/localtime
 echo "en_US.UTF-8 UTF-8" >> /mnt/etc/locale.gen
@@ -467,7 +476,7 @@ txt = ''.join(kept).rstrip('\n') + '\n\n[multilib]\nInclude = /etc/pacman.d/mirr
 p.write_text(txt)
 PYEOF
 
-# Create users
+echo "==> vee-install: stage=users"
 arch-chroot /mnt useradd -m -G wheel,gamemode -s /bin/bash "$USER"
 echo "$USER:vee" | arch-chroot /mnt chpasswd
 sed -i 's/^# %%wheel ALL=(ALL:ALL) NOPASSWD: ALL/%%wheel ALL=(ALL:ALL) NOPASSWD: ALL/' /mnt/etc/sudoers
@@ -549,11 +558,12 @@ chmod +x /mnt/etc/vee-firstboot.sh
 
 %s
 
+echo "==> vee-install: stage=services"
 arch-chroot /mnt systemctl enable NetworkManager sshd sddm qemu-guest-agent vee-firstboot
 arch-chroot /mnt systemctl --global enable pipewire pipewire-pulse wireplumber
 %s
 
-# GRUB install
+echo "==> vee-install: stage=grub"
 arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=GRUB
 arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
 
@@ -739,7 +749,9 @@ chmod 0755 /mnt/usr/local/bin/vee-check
 # The chroot is still mounted; compute against the mounted path.
 sha256sum /mnt/usr/local/bin/vee-check | awk '{print $1}' > /mnt/etc/vee-check.sha256
 
+echo "==> vee-install: stage=cleanup"
 umount -R /mnt
+echo "==> vee-install: stage=done"
 poweroff`, user, gpuPkgs, hostname, hostname, strings.Join(sshKeys, "\n"), kasmvncService, nvidiaSetup, kasmvncSetup)
 
 	writeFiles := []vm.CloudInitWriteFile{

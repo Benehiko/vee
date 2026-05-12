@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"bufio"
+	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,11 +50,18 @@ var startCmd = &cobra.Command{
 		}
 
 		wasInstalling := isInstalling(mgr, name)
-		if err := mgr.Start(cmd.Context(), name, startForeground); err != nil {
+		if startForeground {
+			// Stream serial log + phase spinner in parallel while the install
+			// pass runs. The serial streamer is cancelled once Start returns.
+			serialCtx, cancelSerial := context.WithCancel(cmd.Context())
+			serialPath := filepath.Join(prov.Config().StoragePath, name, "serial.log")
+			go streamSerialForeground(serialCtx, serialPath)
+			err := mgr.Start(cmd.Context(), name, true)
+			cancelSerial()
 			return err
 		}
-		if startForeground {
-			return nil
+		if err := mgr.Start(cmd.Context(), name, false); err != nil {
+			return err
 		}
 		// If the VM powered off immediately (install pass complete), skip the
 		// readiness spinner — there is nothing to wait for.
@@ -248,4 +257,38 @@ func (m *startSpinnerModel) View() string {
 
 func init() {
 	startCmd.Flags().BoolVar(&startForeground, "foreground", false, "Run in foreground (block until VM exits)")
+}
+
+// streamSerialForeground tails the serial console log to stderr (ANSI-stripped)
+// until ctx is cancelled. Intended for the --foreground install pass so the
+// user can see live install progress without a separate `vee tunnel serial`.
+func streamSerialForeground(ctx context.Context, logPath string) {
+	dst := &ansiStripper{w: os.Stderr}
+
+	var f *os.File
+	// Poll until the file appears — QEMU may not have written it yet.
+	for f == nil {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(250 * time.Millisecond):
+		}
+		fh, err := os.Open(logPath)
+		if err == nil {
+			f = fh
+		}
+	}
+	defer func() { _ = f.Close() }()
+
+	buf := make([]byte, 32*1024)
+	for {
+		select {
+		case <-ctx.Done():
+			// Drain any remaining bytes before returning.
+			_, _ = io.CopyBuffer(dst, f, buf)
+			return
+		case <-time.After(250 * time.Millisecond):
+			_, _ = io.CopyBuffer(dst, f, buf)
+		}
+	}
 }
