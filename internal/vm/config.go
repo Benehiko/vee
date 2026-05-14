@@ -155,6 +155,10 @@ type VMConfig struct {
 	// Leave empty for the default (UTC). Set for Windows and gaming VMs.
 	RTC string `yaml:"rtc,omitempty"         json:"rtc,omitempty"`
 	// AutoStart marks the VM to be started automatically by the vee daemon on boot.
-	AutoStart bool      `yaml:"auto_start,omitempty"  json:"auto_start,omitempty"`
-	CreatedAt time.Time `yaml:"created_at"            json:"created_at"`
+	AutoStart bool `yaml:"auto_start,omitempty"  json:"auto_start,omitempty"`
+	// SkipInstall skips the auto-install pass on first boot. The VM boots
+	// directly from its primary disk as if installation were already complete.
+	// Set this when attaching a disk that already has an OS on it.
+	SkipInstall bool      `yaml:"skip_install,omitempty" json:"skip_install,omitempty"`
+	CreatedAt   time.Time `yaml:"created_at"            json:"created_at"`
 }

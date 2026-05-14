@@ -18,6 +18,7 @@ import (
 
 var (
 	createNoStart       bool
+	createNoAutoInstall bool
 	createTemplate      string
 	createMemory        string
 	createCPUs          int
@@ -301,11 +302,15 @@ func optsFromFlags(cmd *cobra.Command, name string) build.Opts {
 	if cmd.Flags().Changed("ovmf-vars") {
 		opts.OVMFVars = createOVMFVars
 	}
+	if cmd.Flags().Changed("no-auto-install") {
+		opts.NoAutoInstall = createNoAutoInstall
+	}
 	return opts
 }
 
 func init() {
 	createCmd.Flags().BoolVar(&createNoStart, "no-start", false, "Create VM config without starting it")
+	createCmd.Flags().BoolVar(&createNoAutoInstall, "no-auto-install", false, "Skip the auto-install pass; boot directly from the primary disk (use when the disk already has an OS)")
 	createCmd.Flags().StringVar(&createTemplate, "template", "ubuntu-server", "VM template: ubuntu-server, gaming, torrent, devbox, server, windows")
 	createCmd.Flags().StringVar(&createMemory, "memory", "2G", "Memory size (overrides template default)")
 	createCmd.Flags().IntVar(&createCPUs, "cpus", 2, "Number of vCPUs (overrides template default)")

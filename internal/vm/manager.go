@@ -133,6 +133,24 @@ func (m *Manager) Create(ctx context.Context, cfg *VMConfig) error {
 		return err
 	}
 
+	// Warn if any disk appears to contain existing data.
+	warnings, err := CheckDisksForData(cfg)
+	if err != nil {
+		return fmt.Errorf("disk check: %w", err)
+	}
+	if len(warnings) > 0 {
+		fmt.Fprintln(os.Stderr, "Warning: the following disks appear to contain existing data:")
+		for _, w := range warnings {
+			fmt.Fprintf(os.Stderr, "  %s: %s\n", w.Path, w.Reason)
+		}
+		fmt.Fprint(os.Stderr, "Continue anyway? [y/N]: ")
+		var answer string
+		_, _ = fmt.Scanln(&answer)
+		if strings.ToLower(strings.TrimSpace(answer)) != "y" {
+			return fmt.Errorf("aborted")
+		}
+	}
+
 	// Copy OVMF_VARS.fd per-VM if UEFI is requested.
 	if cfg.UEFI.Enabled {
 		src := cfg.UEFI.VarsPath
@@ -225,6 +243,27 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 		}
 		m.cleanupStaleVM(name, cfg, state)
 		state = &VMState{}
+	}
+
+	// SkipInstall: treat the disk as already-installed. Strip any install ISOs
+	// and mark state ready before the normal install-state logic runs.
+	if cfg.SkipInstall && state.InstallState == "" {
+		filtered := cfg.Disks[:0]
+		for _, d := range cfg.Disks {
+			if !d.InstallISO {
+				filtered = append(filtered, d)
+			}
+		}
+		cfg.Disks = filtered
+		if err := m.saveConfig(cfg); err != nil {
+			return fmt.Errorf("save config (skip install): %w", err)
+		}
+		state.InstallState = InstallStateReady
+		now := time.Now()
+		state.InstalledAt = &now
+		if err := m.saveState(name, state); err != nil {
+			return fmt.Errorf("save state (skip install): %w", err)
+		}
 	}
 
 	// Detect any one-shot installer ISO disks (InstallISO=true).
@@ -1028,7 +1067,36 @@ func (m *Manager) Delete(name string) error {
 	if m.db != nil {
 		_ = dbDeleteVM(m.db, name)
 	}
-	return os.RemoveAll(m.vmDir(name))
+	return deleteVMDir(m.vmDir(name))
+}
+
+// deleteVMDir removes all contents of dir except the backups/ subdirectory.
+// If no backups exist the directory itself is removed; otherwise it is kept so
+// backups remain accessible at their original path.
+func deleteVMDir(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	hasBackups := false
+	for _, e := range entries {
+		if e.Name() == "backups" && e.IsDir() {
+			hasBackups = true
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
+			return err
+		}
+	}
+
+	if !hasBackups {
+		return os.Remove(dir)
+	}
+	return nil
 }
 
 type ListEntry struct {

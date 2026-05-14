@@ -92,6 +92,11 @@ type Opts struct {
 	NVMeDev  string
 	OVMFVars string
 
+	// NoAutoInstall skips the auto-install pass. The VM boots directly from
+	// its primary disk, treating it as already installed. Use when attaching
+	// a disk that already has an OS on it.
+	NoAutoInstall bool
+
 	// Interactive-only fields. Populated by the CLI/TUI surface before
 	// calling Build; Build itself does no prompting.
 	TorrentExtras  *TorrentExtras
@@ -402,6 +407,9 @@ func applyOverrides(cfg *vm.VMConfig, opts Opts, prov provider.Provider) {
 	// template's custom user and the distro's default user.
 	if opts.Password != "" && cfg.CloudInit != nil {
 		cfg.CloudInit.Password = opts.Password
+	}
+	if opts.NoAutoInstall {
+		cfg.SkipInstall = true
 	}
 }
 
