@@ -499,9 +499,13 @@ func defaultConfig(prov provider.Provider, opts Opts) *vm.VMConfig {
 	if nicMode == "" {
 		nicMode = "user"
 	}
-	uefi := false
+	uefi := opts.BootDisk != "" // boot-disk VMs need UEFI; can be overridden by explicit --uefi flag
 	if opts.UEFI != nil {
 		uefi = *opts.UEFI
+	}
+	bridge := opts.NICBridge
+	if bridge == "" && nicMode == "bridge" {
+		bridge = "br0"
 	}
 	return &vm.VMConfig{
 		Name:     opts.Name,
@@ -514,7 +518,7 @@ func defaultConfig(prov provider.Provider, opts Opts) *vm.VMConfig {
 		CPUModel: conf.DefaultCPUModel,
 		NIC: vm.NICConfig{
 			Mode:   nicMode,
-			Bridge: opts.NICBridge,
+			Bridge: bridge,
 			Model:  "virtio-net-pci",
 		},
 		GPU:  vm.GPUConfig{Mode: vm.GPUNone},

@@ -221,8 +221,10 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
 // user explicitly set.
 func optsFromFlags(cmd *cobra.Command, name string) build.Opts {
 	opts := build.Opts{
-		Name:     name,
-		Template: createTemplate,
+		Name: name,
+	}
+	if cmd.Flags().Changed("template") {
+		opts.Template = createTemplate
 	}
 	if cmd.Flags().Changed("memory") {
 		opts.Memory = createMemory
