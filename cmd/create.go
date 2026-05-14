@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/Benehiko/vee/internal/blockdev"
 	"github.com/Benehiko/vee/internal/gpu"
 	"github.com/Benehiko/vee/internal/images"
 	"github.com/Benehiko/vee/internal/tui"
@@ -384,5 +385,20 @@ func init() {
 	})
 	_ = createCmd.RegisterFlagCompletionFunc("nic-mode", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 		return []string{"user", "bridge"}, cobra.ShellCompDirectiveNoFileComp
+	})
+	_ = createCmd.RegisterFlagCompletionFunc("data-disk", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+		devs, err := blockdev.ListUnmounted()
+		if err != nil || len(devs) == 0 {
+			return nil, cobra.ShellCompDirectiveNoFileComp
+		}
+		completions := make([]string, 0, len(devs))
+		for _, d := range devs {
+			desc := d.Model
+			if desc == "" {
+				desc = d.Name
+			}
+			completions = append(completions, d.ByIDPath+"\t"+desc)
+		}
+		return completions, cobra.ShellCompDirectiveNoFileComp
 	})
 }
