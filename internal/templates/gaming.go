@@ -135,9 +135,10 @@ func NewGamingArchConfig(ctx context.Context, p provider.Provider, name string, 
 			RunCmds:    runCmds,
 			WriteFiles: writeFiles,
 		},
-		SSHUser:   user,
-		RTC:       "base=localtime,clock=host",
-		CreatedAt: time.Now(),
+		SSHUser:    user,
+		RTC:        "base=localtime,clock=host",
+		GuestAgent: true,
+		CreatedAt:  time.Now(),
 	}
 
 	// SPICE is always the display path for gaming-arch — either directly for
@@ -234,8 +235,9 @@ func NewGamingBazziteConfig(ctx context.Context, p provider.Provider, name strin
 				InstallISO: true,
 			},
 		},
-		RTC:       "base=localtime,clock=host",
-		CreatedAt: time.Now(),
+		RTC:        "base=localtime,clock=host",
+		GuestAgent: true,
+		CreatedAt:  time.Now(),
 	}
 
 	if opts.Passthrough {
@@ -506,10 +508,13 @@ net.core.rmem_max=26214400
 net.core.wmem_max=26214400
 EOF
 
-# GRUB kernel params
+# GRUB kernel params. console=ttyS0,115200 is critical for vee: vee's boot
+# phase watcher tails serial.log to detect SSH-ready/multi-user. Without a
+# serial console on the installed kernel, the watcher idles past install and
+# vee start hangs until its 10-minute timeout even though SSH is up.
 mkdir -p /mnt/etc/default/grub.d
 cat > /mnt/etc/default/grub.d/99-gaming.cfg <<'EOF'
-GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT split_lock_detect=off"
+GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT console=tty0 console=ttyS0,115200 split_lock_detect=off"
 EOF
 
 # SDDM autologin
@@ -574,18 +579,20 @@ arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
 # boots straight to GRUB on next start without waiting for PXE timeouts.
 # Run in a subshell with -eu disabled: efibootmgr may not surface EFI vars
 # inside the chroot on virtio VMs, so grub_num can be empty without error.
-arch-chroot /mnt bash -c '
-  set +eu
-  grub_num=$(efibootmgr 2>/dev/null | grep -i "GRUB" | grep -o "Boot[0-9A-F]*" | head -1 | grep -o "[0-9A-F]*" || true)
-  if [ -n "$grub_num" ]; then
-    efibootmgr --quiet --bootorder "$grub_num" || true
-    # Delete all non-GRUB entries
-    efibootmgr 2>/dev/null | grep "^Boot[0-9A-F]*" | grep -v "Boot'"$grub_num"'" | grep -o "Boot[0-9A-F]*" | while read entry; do
-      num="${entry#Boot}"
-      efibootmgr --quiet --delete-bootnum --bootnum "$num" || true
-    done
-  fi
-' || true
+# NOTE: heredoc avoids the quote-juggling that previously leaked $grub_num
+# into the outer (set -u) shell. Everything between BOOTORDER and BOOTORDER
+# is fed verbatim to the chrooted bash, which runs with -eu disabled.
+arch-chroot /mnt bash <<'BOOTORDER' || true
+set +eu
+grub_num=$(efibootmgr 2>/dev/null | grep -i "GRUB" | grep -o "Boot[0-9A-F]*" | head -1 | grep -o "[0-9A-F]*" || true)
+if [ -n "$grub_num" ]; then
+  efibootmgr --quiet --bootorder "$grub_num" || true
+  efibootmgr 2>/dev/null | grep "^Boot[0-9A-F]*" | grep -v "Boot${grub_num}" | grep -o "Boot[0-9A-F]*" | while read entry; do
+    num="${entry#Boot}"
+    efibootmgr --quiet --delete-bootnum --bootnum "$num" || true
+  done
+fi
+BOOTORDER
 
 %s
 
