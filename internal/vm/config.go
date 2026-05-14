@@ -136,17 +136,21 @@ type VMConfig struct {
 	CloudInit      *CloudInitConfig `yaml:"cloud_init,omitempty"    json:"cloud_init,omitempty"`
 	TPM            *TPMConfig       `yaml:"tpm,omitempty"           json:"tpm,omitempty"`
 	SSHUser        string           `yaml:"ssh_user,omitempty"      json:"ssh_user,omitempty"`
-	SSHShare       bool             `yaml:"ssh_share,omitempty"     json:"ssh_share,omitempty"`
-	VsockCID       uint32           `yaml:"vsock_cid,omitempty"     json:"vsock_cid,omitempty"`
-	Headless       bool             `yaml:"headless,omitempty"      json:"headless,omitempty"`
-	SSHPort        int              `yaml:"ssh_port,omitempty"      json:"ssh_port,omitempty"`
-	GuestAgent     bool             `yaml:"guest_agent,omitempty"   json:"guest_agent,omitempty"`
-	ExtraDevices   []string         `yaml:"extra_devices,omitempty" json:"extra_devices,omitempty"`
-	VGA            string           `yaml:"vga,omitempty"           json:"vga,omitempty"`
-	Hostname       string           `yaml:"hostname,omitempty"      json:"hostname,omitempty"`
-	TrueNASAPIKey  string           `yaml:"truenas_api_key,omitempty" json:"truenas_api_key,omitempty"`
-	TrueNASUser    string           `yaml:"truenas_user,omitempty"  json:"truenas_user,omitempty"`
-	VPNProvider    string           `yaml:"vpn_provider,omitempty"  json:"vpn_provider,omitempty"`
+	// SSHHost overrides IP resolution for SSH-based operations (backup, status).
+	// Set this for non-template VMs whose IP cannot be resolved from the MAC.
+	// Format: host or host:port (port defaults to 22).
+	SSHHost       string   `yaml:"ssh_host,omitempty"      json:"ssh_host,omitempty"`
+	SSHShare      bool     `yaml:"ssh_share,omitempty"     json:"ssh_share,omitempty"`
+	VsockCID      uint32   `yaml:"vsock_cid,omitempty"     json:"vsock_cid,omitempty"`
+	Headless      bool     `yaml:"headless,omitempty"      json:"headless,omitempty"`
+	SSHPort       int      `yaml:"ssh_port,omitempty"      json:"ssh_port,omitempty"`
+	GuestAgent    bool     `yaml:"guest_agent,omitempty"   json:"guest_agent,omitempty"`
+	ExtraDevices  []string `yaml:"extra_devices,omitempty" json:"extra_devices,omitempty"`
+	VGA           string   `yaml:"vga,omitempty"           json:"vga,omitempty"`
+	Hostname      string   `yaml:"hostname,omitempty"      json:"hostname,omitempty"`
+	TrueNASAPIKey string   `yaml:"truenas_api_key,omitempty" json:"truenas_api_key,omitempty"`
+	TrueNASUser   string   `yaml:"truenas_user,omitempty"  json:"truenas_user,omitempty"`
+	VPNProvider   string   `yaml:"vpn_provider,omitempty"  json:"vpn_provider,omitempty"`
 	// Services lists named guest services available via vee tunnel.
 	Services []ServiceEntry `yaml:"services,omitempty" json:"services,omitempty"`
 	// CPUPinning is a list of host CPU indices to pin the VM's vCPU threads to

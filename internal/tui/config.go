@@ -37,6 +37,8 @@ const (
 	efUEFI
 	efSPICEPort
 	efSSHPort
+	efSSHUser
+	efSSHHost
 	efHostname
 	efCount
 )
@@ -60,6 +62,8 @@ var editFieldLabels = [efCount]string{
 	efUEFI:          "UEFI",
 	efSPICEPort:     "SPICE port",
 	efSSHPort:       "SSH port",
+	efSSHUser:       "SSH user",
+	efSSHHost:       "SSH host",
 	efHostname:      "Hostname",
 }
 
@@ -143,6 +147,8 @@ func cfgToInputValues(cfg *vm.VMConfig) [efCount]string {
 		efUEFI:          boolStr(cfg.UEFI.Enabled),
 		efSPICEPort:     spicePort,
 		efSSHPort:       strconv.Itoa(cfg.SSHPort),
+		efSSHUser:       cfg.SSHUser,
+		efSSHHost:       cfg.SSHHost,
 		efHostname:      cfg.Hostname,
 	}
 }
@@ -595,6 +601,8 @@ func (m editModel) doSave() tea.Cmd {
 		cfg.VGA = strings.TrimSpace(inputs[efVGA].Value())
 		cfg.Headless = parseBool(inputs[efHeadless].Value())
 		cfg.UEFI.Enabled = parseBool(inputs[efUEFI].Value())
+		cfg.SSHUser = strings.TrimSpace(inputs[efSSHUser].Value())
+		cfg.SSHHost = strings.TrimSpace(inputs[efSSHHost].Value())
 		cfg.Hostname = strings.TrimSpace(inputs[efHostname].Value())
 
 		if port := atoi(inputs[efSPICEPort].Value()); port > 0 {

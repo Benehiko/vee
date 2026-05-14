@@ -14,6 +14,9 @@ type SSHConn struct {
 	Host     string
 	Port     int
 	Identity string
+	// Password is only used transiently during first-connect key injection.
+	// It is never persisted.
+	Password string
 }
 
 func (c SSHConn) args(remote string) []string {

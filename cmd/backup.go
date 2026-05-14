@@ -1,13 +1,17 @@
 package cmd
 
 import (
+	"bufio"
 	"fmt"
+	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/Benehiko/vee/internal/backup"
 	"github.com/Benehiko/vee/internal/tui"
@@ -144,42 +148,162 @@ func listBackupRuns(name string) error {
 	return nil
 }
 
+func veeIdentityPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	p := filepath.Join(home, ".vee", "ssh", "id_ed25519")
+	if _, err := os.Stat(p); err != nil {
+		return ""
+	}
+	return p
+}
+
 func buildSSHConn(cfg *vm.VMConfig, state *vm.VMState) (backup.SSHConn, error) {
 	user := cfg.SSHUser
 	if user == "" && cfg.CloudInit != nil && cfg.CloudInit.User != "" {
 		user = cfg.CloudInit.User
 	}
 
-	identity := ""
-	if home, err := os.UserHomeDir(); err == nil {
-		veeKey := filepath.Join(home, ".vee", "ssh", "id_ed25519")
-		if _, err := os.Stat(veeKey); err == nil {
-			identity = veeKey
-		}
-	}
+	identity := veeIdentityPath()
 
 	var host string
 	var port int
+
 	switch {
+	case cfg.SSHHost != "":
+		// Persisted override — use directly.
+		h, p, err := parseSSHHost(cfg.SSHHost)
+		if err != nil {
+			return backup.SSHConn{}, fmt.Errorf("parse ssh_host %q: %w", cfg.SSHHost, err)
+		}
+		host, port = h, p
+
 	case state.SSHPort > 0:
 		host = "127.0.0.1"
 		port = state.SSHPort
+
 	case cfg.NIC.Mode == "bridge" || cfg.NIC.Mode == "":
 		mac := cfg.NIC.MAC
-		if mac == "" {
-			return backup.SSHConn{}, fmt.Errorf("VM %q has no MAC address; cannot resolve IP", cfg.Name)
+		if mac != "" {
+			ip, err := vm.ResolveIPFromMAC(mac)
+			if err == nil {
+				host = ip
+				port = 22
+				break
+			}
 		}
-		ip, err := vm.ResolveIPFromMAC(mac)
-		if err != nil {
-			return backup.SSHConn{}, fmt.Errorf("resolve IP for %q: %w", cfg.Name, err)
-		}
-		host = ip
-		port = 22
+		// MAC resolution failed — fall through to interactive prompt.
+		fallthrough
+
 	default:
-		return backup.SSHConn{}, fmt.Errorf("VM %q has no SSH port and is not on a bridge network", cfg.Name)
+		// No automatic resolution possible; ask the user.
+		conn, err := promptSSHConn(cfg.Name)
+		if err != nil {
+			return backup.SSHConn{}, err
+		}
+		// Try to inject the vee public key so future runs are passwordless.
+		if identity != "" {
+			if injErr := injectSSHKey(conn, identity+".pub"); injErr != nil {
+				fmt.Fprintf(os.Stderr, "Warning: could not inject SSH key: %v\n", injErr)
+			} else {
+				fmt.Println("SSH key injected — future connections will be passwordless.")
+				conn.Identity = identity
+			}
+		}
+		// Persist host and user so we never prompt again.
+		cfg.SSHHost = net.JoinHostPort(conn.Host, fmt.Sprintf("%d", conn.Port))
+		cfg.SSHUser = conn.User
+		if err := vm.NewManager(prov).SaveConfig(cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not persist SSH connection info: %v\n", err)
+		}
+		return conn, nil
 	}
 
 	return backup.SSHConn{User: user, Host: host, Port: port, Identity: identity}, nil
+}
+
+// parseSSHHost splits "host", "host:port", or "[host]:port" into (host, port).
+// Port defaults to 22.
+func parseSSHHost(s string) (string, int, error) {
+	h, p, err := net.SplitHostPort(s)
+	if err != nil {
+		// No port — treat whole string as host.
+		return s, 22, nil
+	}
+	var port int
+	if _, err := fmt.Sscan(p, &port); err != nil || port <= 0 {
+		return "", 0, fmt.Errorf("invalid port %q", p)
+	}
+	return h, port, nil
+}
+
+// promptSSHConn asks the user for a connection string and password,
+// returning a populated SSHConn (without identity — key injection happens later).
+func promptSSHConn(vmName string) (backup.SSHConn, error) {
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Printf("Cannot resolve IP for %q automatically.\n", vmName)
+	fmt.Print("SSH connection (user@host or user@host:port): ")
+	raw, err := reader.ReadString('\n')
+	if err != nil {
+		return backup.SSHConn{}, fmt.Errorf("read connection string: %w", err)
+	}
+	raw = strings.TrimSpace(raw)
+
+	var user, hostport string
+	if idx := strings.Index(raw, "@"); idx > 0 {
+		user = raw[:idx]
+		hostport = raw[idx+1:]
+	} else {
+		return backup.SSHConn{}, fmt.Errorf("expected user@host, got %q", raw)
+	}
+
+	host, port, err := parseSSHHost(hostport)
+	if err != nil {
+		return backup.SSHConn{}, err
+	}
+
+	fmt.Printf("Password for %s: ", raw)
+	pw, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Println()
+	if err != nil {
+		return backup.SSHConn{}, fmt.Errorf("read password: %w", err)
+	}
+
+	return backup.SSHConn{User: user, Host: host, Port: port, Password: string(pw)}, nil
+}
+
+// injectSSHKey copies pubKeyPath into the remote authorized_keys via ssh-copy-id.
+func injectSSHKey(conn backup.SSHConn, pubKeyPath string) error {
+	if _, err := os.Stat(pubKeyPath); err != nil {
+		return fmt.Errorf("public key not found: %w", err)
+	}
+	target := fmt.Sprintf("%s@%s", conn.User, net.JoinHostPort(conn.Host, fmt.Sprintf("%d", conn.Port)))
+	args := []string{
+		"-i", pubKeyPath,
+		"-o", "StrictHostKeyChecking=no",
+		"-p", fmt.Sprintf("%d", conn.Port),
+	}
+	if conn.Password != "" {
+		// ssh-copy-id can't take a password directly; use sshpass if available.
+		if sshpass, err := exec.LookPath("sshpass"); err == nil {
+			fullArgs := append([]string{"-p", conn.Password, "ssh-copy-id"}, args...)
+			fullArgs = append(fullArgs, target)
+			cmd := exec.Command(sshpass, fullArgs...)
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			return cmd.Run()
+		}
+		// sshpass not available — fall back to interactive (user re-enters password).
+		fmt.Println("(sshpass not found; you may be prompted for your password again)")
+	}
+	args = append(args, target)
+	cmd := exec.Command("ssh-copy-id", args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
 
 func defaultDest(vmName string) string {
