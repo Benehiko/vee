@@ -19,7 +19,10 @@ func RegisterHostname(hostname, ip string) error {
 		return err
 	}
 	entry := fmt.Sprintf("%s\t%s\t%s.local %s\n", ip, hostname, hostname, hostsMarker)
-	cmd := exec.Command("sudo", "tee", "-a", hostsFile)
+	// -n: never prompt for password. If sudo would block on a password we want
+	// a fast error so the caller can log+continue, not a 12-minute hang under
+	// non-interactive runners (e2e tests, headless daemons).
+	cmd := exec.Command("sudo", "-n", "tee", "-a", hostsFile)
 	cmd.Stdin = strings.NewReader(entry)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("write /etc/hosts: %w: %s", err, out)
@@ -53,7 +56,7 @@ func removeHostsEntry(hostname string) error {
 	}
 
 	content := strings.Join(kept, "\n") + "\n"
-	cmd := exec.Command("sudo", "tee", hostsFile)
+	cmd := exec.Command("sudo", "-n", "tee", hostsFile)
 	cmd.Stdin = strings.NewReader(content)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("write %s: %w: %s", hostsFile, err, out)
