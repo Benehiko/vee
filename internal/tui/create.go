@@ -379,6 +379,9 @@ func (m createModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.advancedOpen = !m.advancedOpen
 				return m, nil
 			}
+			if m.field == fieldVirtiofsDir {
+				return m, runDirPicker(m.virtiofsDir)
+			}
 			// Submit when on the final visible field, otherwise advance.
 			if m.field == m.lastVisibleField() {
 				m.submitting = true
@@ -411,6 +414,11 @@ func (m createModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(ch) == 1 {
 				m.appendChar(ch)
 			}
+		}
+
+	case dirPickerResult:
+		if msg.path != "" {
+			m.virtiofsDir = msg.path
 		}
 
 	case createDoneMsg:
@@ -593,7 +601,7 @@ func (m createModel) View() string {
 			{"GPU PCI", m.gpuPCI + cursor(m.field == fieldGPUPCI), fieldGPUPCI, gpuModeNames[m.gpuModeIdx] != "passthrough"},
 			{"GPU Vendor", selectorNamed(gpuVendorNames, m.gpuVendorIdx, m.field == fieldGPUVendor), fieldGPUVendor, gpuModeNames[m.gpuModeIdx] != "virtio"},
 			{"Anti-detect", boolValue(m.antiDetect, m.field == fieldAntiDetect), fieldAntiDetect, gpuModeNames[m.gpuModeIdx] != "passthrough"},
-			{"Virtiofs Dir", m.virtiofsDir + cursor(m.field == fieldVirtiofsDir), fieldVirtiofsDir, false},
+			{"Virtiofs Dir", virtiofsDirValue(m.virtiofsDir, m.field == fieldVirtiofsDir), fieldVirtiofsDir, false},
 			{"Virtiofs Tag", m.virtiofsTag + cursor(m.field == fieldVirtiofsTag), fieldVirtiofsTag, false},
 			{"Data Disk", dataDiskSelector(m.dataDevs, m.dataDevIdx, m.field == fieldDataDisks), fieldDataDisks, false},
 			{"Import SSH Keys", m.sshKeyFile + cursor(m.field == fieldSSHKeyFile), fieldSSHKeyFile, false},
@@ -913,4 +921,16 @@ func parseInt(s string) int {
 		return 0
 	}
 	return n
+}
+
+// virtiofsDirValue renders the Virtiofs Dir field. When focused it shows a
+// "browse" hint; when a path is set it shows the path.
+func virtiofsDirValue(dir string, focused bool) string {
+	if dir != "" {
+		return dir + cursor(focused)
+	}
+	if focused {
+		return styleFieldFocus.Render("[ browse ]")
+	}
+	return styleFaint.Render("(enter to browse)")
 }
