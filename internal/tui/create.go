@@ -109,6 +109,7 @@ type createModel struct {
 
 	field        createField
 	advancedOpen bool
+	dirPicker    *hostDirPickerModel // non-nil while the dir browser overlay is active
 
 	// Basics.
 	name         string
@@ -348,6 +349,30 @@ func (m createModel) fieldVisible(f createField) bool {
 func (m createModel) Init() tea.Cmd { return nil }
 
 func (m createModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Dir picker overlay — route all input to the picker while it's open.
+	if m.dirPicker != nil {
+		if key, ok := msg.(tea.KeyMsg); ok {
+			switch key.String() {
+			case "esc", "q":
+				m.dirPicker = nil
+				return m, nil
+			case " ", "c":
+				m.virtiofsDir = m.dirPicker.cwd
+				m.dirPicker = nil
+				return m, nil
+			default:
+				m.dirPicker.handleKey(key.String())
+				return m, nil
+			}
+		}
+		if ws, ok := msg.(tea.WindowSizeMsg); ok {
+			if ws.Height > 4 {
+				m.dirPicker.height = ws.Height - 4
+			}
+		}
+		return m, nil
+	}
+
 	switch msg := msg.(type) {
 
 	case tea.KeyMsg:
@@ -380,7 +405,9 @@ func (m createModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if m.field == fieldVirtiofsDir {
-				return m, runDirPicker(m.virtiofsDir)
+				p := newHostDirPicker(m.virtiofsDir)
+				m.dirPicker = &p
+				return m, nil
 			}
 			// Submit when on the final visible field, otherwise advance.
 			if m.field == m.lastVisibleField() {
@@ -414,11 +441,6 @@ func (m createModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(ch) == 1 {
 				m.appendChar(ch)
 			}
-		}
-
-	case dirPickerResult:
-		if msg.path != "" {
-			m.virtiofsDir = msg.path
 		}
 
 	case createDoneMsg:
@@ -556,6 +578,10 @@ type fieldDef struct {
 }
 
 func (m createModel) View() string {
+	if m.dirPicker != nil {
+		return m.dirPicker.View()
+	}
+
 	var sb strings.Builder
 
 	sb.WriteString(styleFormTitle.Render("  Create VM  "))

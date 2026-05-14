@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -19,11 +18,10 @@ var (
 	styleDirSel    = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Bold(true)
 )
 
-// dirPickerResult carries the directory chosen by the host dir picker.
-type dirPickerResult struct{ path string }
-
-// hostDirPickerModel is a standalone bubbletea model for picking a host directory.
-// It is launched as a blocking sub-program via runDirPicker.
+// hostDirPickerModel browses the host filesystem.
+// Embed it in the parent model; call handleKey and View directly.
+// esc/q signals cancel (caller sets dirPicker = nil).
+// space/c signals confirm (caller reads cwd and sets dirPicker = nil).
 type hostDirPickerModel struct {
 	cwd        string
 	entries    []os.DirEntry // dirs in cwd
@@ -31,7 +29,6 @@ type hostDirPickerModel struct {
 	scrollOff  int
 	height     int
 	showHidden bool
-	Result     string
 }
 
 func newHostDirPicker(startDir string) hostDirPickerModel {
@@ -73,68 +70,48 @@ func (m *hostDirPickerModel) cd(dir string) {
 	m.scrollOff = 0
 }
 
-func (m hostDirPickerModel) Init() tea.Cmd { return nil }
-
-func (m hostDirPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		// Reserve: title + cwd + blank + help = 4 rows.
-		if msg.Height > 4 {
-			m.height = msg.Height - 4
+// handleKey processes a key string. Returns true if the key was consumed.
+// esc/q and space/c are handled by the parent before calling handleKey.
+func (m *hostDirPickerModel) handleKey(key string) {
+	switch key {
+	case "up", "k":
+		if m.cursor > 0 {
+			m.cursor--
+			m.clampScroll()
 		}
 
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "ctrl+c", "q", "esc":
-			return m, tea.Quit
-
-		case "up", "k":
-			if m.cursor > 0 {
-				m.cursor--
-				m.clampScroll()
-			}
-
-		case "down", "j":
-			if m.cursor < len(m.entries)-1 {
-				m.cursor++
-				m.clampScroll()
-			}
-
-		case "pgup":
-			m.cursor -= m.height
-			if m.cursor < 0 {
-				m.cursor = 0
-			}
+	case "down", "j":
+		if m.cursor < len(m.entries)-1 {
+			m.cursor++
 			m.clampScroll()
-
-		case "pgdown":
-			m.cursor += m.height
-			if m.cursor >= len(m.entries) {
-				m.cursor = len(m.entries) - 1
-			}
-			m.clampScroll()
-
-		case "right", "enter", "l":
-			// Enter selected directory.
-			if len(m.entries) > 0 {
-				m.cd(filepath.Join(m.cwd, m.entries[m.cursor].Name()))
-			}
-
-		case "left", "h":
-			// Go up.
-			m.cd(filepath.Dir(m.cwd))
-
-		case ".":
-			m.showHidden = !m.showHidden
-			m.cd(m.cwd) // reload with new hidden setting
-
-		case " ", "c":
-			// Confirm current directory.
-			m.Result = m.cwd
-			return m, tea.Quit
 		}
+
+	case "pgup":
+		m.cursor -= m.height
+		if m.cursor < 0 {
+			m.cursor = 0
+		}
+		m.clampScroll()
+
+	case "pgdown":
+		m.cursor += m.height
+		if m.cursor >= len(m.entries) {
+			m.cursor = len(m.entries) - 1
+		}
+		m.clampScroll()
+
+	case "right", "enter", "l":
+		if len(m.entries) > 0 {
+			m.cd(filepath.Join(m.cwd, m.entries[m.cursor].Name()))
+		}
+
+	case "left", "h":
+		m.cd(filepath.Dir(m.cwd))
+
+	case ".":
+		m.showHidden = !m.showHidden
+		m.cd(m.cwd)
 	}
-	return m, nil
 }
 
 func (m *hostDirPickerModel) clampScroll() {
@@ -180,18 +157,4 @@ func (m hostDirPickerModel) View() string {
 		"↑/↓ move  → enter dir  ← parent  space/c confirm  . toggle hidden  esc cancel",
 	))
 	return b.String()
-}
-
-// runDirPicker launches the host dir picker as a blocking sub-program and
-// returns a tea.Cmd that sends dirPickerResult when done.
-func runDirPicker(startDir string) tea.Cmd {
-	return func() tea.Msg {
-		m := newHostDirPicker(startDir)
-		prog := tea.NewProgram(m, tea.WithAltScreen())
-		final, err := prog.Run()
-		if err != nil {
-			return dirPickerResult{}
-		}
-		return dirPickerResult{path: final.(hostDirPickerModel).Result}
-	}
 }
