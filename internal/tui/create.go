@@ -79,6 +79,7 @@ const (
 	fieldSSHKeyFile // import existing SSH public keys file
 	fieldUser
 	fieldPassword
+	fieldCreate // [ Create ] submit button
 
 	fieldCount
 )
@@ -399,6 +400,9 @@ func (m createModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.field = nextField(m.field, 1)
 		case "shift+tab", "up":
 			m.field = nextField(m.field, -1)
+		case "ctrl+enter", "ctrl+s":
+			m.submitting = true
+			return m, m.doSubmit()
 		case "enter":
 			if m.field == fieldAdvancedToggle {
 				m.advancedOpen = !m.advancedOpen
@@ -409,8 +413,7 @@ func (m createModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.dirPicker = &p
 				return m, nil
 			}
-			// Submit when on the final visible field, otherwise advance.
-			if m.field == m.lastVisibleField() {
+			if m.field == fieldCreate {
 				m.submitting = true
 				return m, m.doSubmit()
 			}
@@ -559,17 +562,6 @@ func clampIdx(i, max int) int {
 	return i
 }
 
-// lastVisibleField walks fields backwards from fieldCount-1 and returns the
-// first one that's currently visible — that's where Enter triggers submit.
-func (m createModel) lastVisibleField() createField {
-	for f := fieldCount - 1; f >= 0; f-- {
-		if m.fieldVisible(f) {
-			return f
-		}
-	}
-	return fieldName
-}
-
 type fieldDef struct {
 	label string
 	value string
@@ -638,6 +630,18 @@ func (m createModel) View() string {
 	}
 
 	sb.WriteString("\n")
+
+	// [ Create ] button.
+	if !m.submitting {
+		btn := "[ Create ]"
+		if m.field == fieldCreate {
+			sb.WriteString("  " + styleFieldFocus.Render(btn) + "\n")
+		} else {
+			sb.WriteString("  " + styleFieldValue.Render(btn) + "\n")
+		}
+	}
+
+	sb.WriteString("\n")
 	if m.err != "" {
 		sb.WriteString(styleFormErr.Render("  Error: "+m.err) + "\n\n")
 	}
@@ -645,7 +649,7 @@ func (m createModel) View() string {
 		sb.WriteString(styleFieldFocus.Render("  Creating…") + "\n")
 	}
 
-	sb.WriteString(styleFormHelp.Render("tab/↑↓ navigate  ←/→ choose option  space toggle  enter submit  esc cancel"))
+	sb.WriteString(styleFormHelp.Render("tab/↑↓ navigate  ←/→ choose option  space toggle  ctrl+enter create  esc cancel"))
 	return sb.String()
 }
 
