@@ -149,12 +149,10 @@ func NewGamingArchConfig(ctx context.Context, p provider.Provider, name string, 
 	}
 
 	if opts.Passthrough {
-		// Add a secondary virtio-gpu alongside the VFIO GPU for SPICE/KasmVNC.
+		// Add a secondary virtio-gpu alongside the VFIO GPU for SPICE display.
+		// KasmVNC service is not installed in-guest yet — see kasmvncSetup below.
 		cfg.VGA = "none"
 		cfg.ExtraDevices = []string{"virtio-gpu-pci,edid=on,xres=1920,yres=1080"}
-		cfg.Services = append(cfg.Services, vm.ServiceEntry{
-			Name: "kasmvnc", Port: 8443, Protocol: vm.ServiceHTTPS,
-		})
 	}
 
 	if opts.VirtiofsMountDir != "" {
@@ -246,7 +244,6 @@ func NewGamingBazziteConfig(ctx context.Context, p provider.Provider, name strin
 		cfg.SPICE = &vm.SPICEConfig{Port: 0, DisableTicketing: true}
 		cfg.Services = []vm.ServiceEntry{
 			{Name: "spice", Port: 0, Protocol: vm.ServiceSPICE},
-			{Name: "kasmvnc", Port: 8443, Protocol: vm.ServiceHTTPS},
 		}
 	}
 
@@ -275,40 +272,13 @@ func archGamingSetup(user string, sshKeys []string, hostname string, opts Gaming
 		gpuPkgs = "nvidia nvidia-utils lib32-nvidia-utils vulkan-icd-loader lib32-vulkan-icd-loader vulkan-tools"
 	}
 
+	// KasmVNC setup is temporarily disabled: kasmvncpasswd reads from /dev/tty
+	// even with -w, which fails inside arch-chroot (no controlling terminal) and
+	// aborts the install before vee-check is written. SPICE is the supported
+	// remote display path for passthrough VMs until a TTY-free password seed is
+	// wired up (e.g. writing ~/.kasm/passwd directly).
 	kasmvncService := ""
 	kasmvncSetup := ""
-	if opts.Passthrough {
-		kasmvncService = fmt.Sprintf(`cat > /mnt/etc/systemd/system/kasmvnc.service <<'SVCEOF'
-[Unit]
-Description=KasmVNC remote desktop server
-After=sddm.service
-
-[Service]
-Type=simple
-User=%s
-ExecStart=/usr/bin/Xvnc :1 -interface 0.0.0.0 -websocketPort 8443 -cert /etc/ssl/certs/ca-certificates.crt -SecurityTypes None
-Restart=on-failure
-
-[Install]
-WantedBy=multi-user.target
-SVCEOF`, user)
-
-		kasmvncSetup = fmt.Sprintf(`
-arch-chroot /mnt pacman -S --noconfirm git base-devel
-arch-chroot /mnt sudo -u %[1]s bash -c 'cd /tmp && git clone https://aur.archlinux.org/yay.git && cd yay && makepkg -si --noconfirm'
-# kasmvnc AUR package name varies by release; try known names, skip if none found.
-for _pkg in kasmvnc kasmvncserver-bin kasmvnc-bin; do
-  if arch-chroot /mnt sudo -u %[1]s yay -Si --aur "$_pkg" &>/dev/null; then
-    arch-chroot /mnt sudo -u %[1]s yay -S --noconfirm "$_pkg" && break
-  fi
-done
-if arch-chroot /mnt which Xvnc &>/dev/null; then
-  arch-chroot /mnt sudo -u %[1]s bash -c 'mkdir -p ~/.vnc && kasmvncpasswd -w vee -u %[1]s'
-  arch-chroot /mnt systemctl enable kasmvnc
-else
-  echo "==> kasmvnc not installed (no matching AUR package); skipping VNC setup"
-fi`, user)
-	}
 
 	nvidiaSetup := ""
 	if opts.GPUVendor == GPUVendorNvidia {

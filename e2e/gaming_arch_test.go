@@ -3,6 +3,7 @@
 package e2e_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -83,6 +84,9 @@ func TestGamingArchInstall(t *testing.T) {
 	t.Log("running post-install health checks via vee-check (first boot)...")
 	runVeeCheck(t, sshAddr, "gamer", privKeyPath, "first boot")
 
+	t.Log("running `vee check` CLI (first boot) — exercises QGA path...")
+	runVeeCheckCLI(t, home, vmName, "first boot")
+
 	// Phase 5: stop and restart — verifies the VM boots from disk cleanly on a
 	// second cycle (catches boot-order / PXE regression) and that all installed
 	// state (packages, fstab, groups, services) persists across reboots.
@@ -101,6 +105,9 @@ func TestGamingArchInstall(t *testing.T) {
 
 	t.Log("running post-install health checks via vee-check (second boot)...")
 	runVeeCheck(t, sshAddr, "gamer", privKeyPath, "second boot")
+
+	t.Log("running `vee check` CLI (second boot) — exercises QGA path...")
+	runVeeCheckCLI(t, home, vmName, "second boot")
 
 	// Phase 6: stop (cleanup handles delete).
 	t.Log("stopping VM...")
@@ -133,4 +140,32 @@ func runVeeCheck(t *testing.T, sshAddr, user, privKeyPath, label string) {
 	if allPassed {
 		t.Logf("[%s] all %d health checks passed", label, len(checks))
 	}
+}
+
+// runVeeCheckCLI invokes `vee check <name>` and asserts the command exits 0,
+// reports the health summary, and contains no failing checks. This exercises
+// the QGA path inside the manager (different from runVeeCheck, which talks to
+// the same script over SSH). Regression guard for two real bugs:
+//   - install pipeline silently failing before /usr/local/bin/vee-check is
+//     written (e.g. the kasmvncpasswd TTY abort from 2026-05-14)
+//   - runCheckScript swallowing the real QGA error and surfacing
+//     "no QGA socket or SSH port" instead
+func runVeeCheckCLI(t *testing.T, home, vmName, label string) {
+	t.Helper()
+
+	cmd := veeCmd(t, home, "check", vmName)
+	var buf bytes.Buffer
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("[%s] vee check failed: %v\noutput:\n%s", label, err, buf.String())
+	}
+	out := buf.String()
+	if !strings.Contains(out, "health checks:") {
+		t.Fatalf("[%s] vee check output missing summary line:\n%s", label, out)
+	}
+	if strings.Contains(out, "\tFAIL\t") {
+		t.Fatalf("[%s] vee check reported FAIL rows:\n%s", label, out)
+	}
+	t.Logf("[%s] vee check CLI passed", label)
 }

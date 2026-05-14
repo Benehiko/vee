@@ -1514,13 +1514,22 @@ func (m *Manager) RunHealthCheck(ctx context.Context, name string) ([]HealthChec
 func (m *Manager) runCheckScript(_ context.Context, cfg *VMConfig, state *VMState) (string, error) {
 	if state.QGASocket != "" {
 		client, err := qemu.NewQGAClient(state.QGASocket, 5*time.Second)
-		if err == nil {
-			defer func() { _ = client.Close() }()
-			out, _, _, runErr := client.RunCommand("/usr/local/bin/vee-check", nil)
-			if runErr == nil {
-				return strings.TrimSpace(out), nil
-			}
+		if err != nil {
+			return "", fmt.Errorf("connect QGA socket %s: %w", state.QGASocket, err)
 		}
+		defer func() { _ = client.Close() }()
+		out, stderr, exitCode, runErr := client.RunCommand("/usr/local/bin/vee-check", nil)
+		if runErr != nil {
+			return "", fmt.Errorf("QGA exec /usr/local/bin/vee-check: %w", runErr)
+		}
+		if exitCode != 0 {
+			detail := strings.TrimSpace(stderr)
+			if detail == "" {
+				detail = strings.TrimSpace(out)
+			}
+			return "", fmt.Errorf("/usr/local/bin/vee-check exited %d: %s", exitCode, detail)
+		}
+		return strings.TrimSpace(out), nil
 	}
 	if state.SSHPort > 0 {
 		home, _ := os.UserHomeDir()
