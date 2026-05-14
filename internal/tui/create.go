@@ -143,8 +143,9 @@ type createModel struct {
 	password      string
 	noAutoInstall bool // boot from existing disk, skip install pass; hides Template
 
-	err        string
-	submitting bool
+	err            string
+	submitting     bool
+	confirmPending bool // true while the "are you sure?" popup is shown
 }
 
 type createDoneMsg struct{ err error }
@@ -350,6 +351,21 @@ func (m createModel) fieldVisible(f createField) bool {
 func (m createModel) Init() tea.Cmd { return nil }
 
 func (m createModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Confirm popup — only y/n/esc are meaningful.
+	if m.confirmPending {
+		if key, ok := msg.(tea.KeyMsg); ok {
+			switch key.String() {
+			case "y", "Y":
+				m.confirmPending = false
+				m.submitting = true
+				return m, m.doSubmit()
+			case "n", "N", "esc":
+				m.confirmPending = false
+			}
+		}
+		return m, nil
+	}
+
 	// Dir picker overlay — route all input to the picker while it's open.
 	if m.dirPicker != nil {
 		if key, ok := msg.(tea.KeyMsg); ok {
@@ -400,9 +416,9 @@ func (m createModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.field = nextField(m.field, 1)
 		case "shift+tab", "up":
 			m.field = nextField(m.field, -1)
-		case "ctrl+enter", "ctrl+s":
-			m.submitting = true
-			return m, m.doSubmit()
+		case "C":
+			m.confirmPending = true
+			return m, nil
 		case "enter":
 			if m.field == fieldAdvancedToggle {
 				m.advancedOpen = !m.advancedOpen
@@ -414,8 +430,8 @@ func (m createModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if m.field == fieldCreate {
-				m.submitting = true
-				return m, m.doSubmit()
+				m.confirmPending = true
+				return m, nil
 			}
 			m.field = nextField(m.field, 1)
 		case " ":
@@ -573,6 +589,13 @@ func (m createModel) View() string {
 	if m.dirPicker != nil {
 		return m.dirPicker.View()
 	}
+	if m.confirmPending {
+		return styleFormTitle.Render("  Create VM  ") + "\n\n" +
+			"  Create VM " + styleFieldFocus.Render(m.name) + "?\n\n" +
+			"  " + styleFieldValue.Render("[ y ]") + "  yes\n" +
+			"  " + styleFieldValue.Render("[ n ]") + "  no\n\n" +
+			styleFormHelp.Render("y confirm  n/esc cancel")
+	}
 
 	var sb strings.Builder
 
@@ -649,7 +672,7 @@ func (m createModel) View() string {
 		sb.WriteString(styleFieldFocus.Render("  Creating…") + "\n")
 	}
 
-	sb.WriteString(styleFormHelp.Render("tab/↑↓ navigate  ←/→ choose option  space toggle  ctrl+enter create  esc cancel"))
+	sb.WriteString(styleFormHelp.Render("tab/↑↓ navigate  ←/→ choose option  space toggle  C create  esc cancel"))
 	return sb.String()
 }
 
