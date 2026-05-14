@@ -604,9 +604,9 @@ func (m createModel) View() string {
 
 	basics := []fieldDef{
 		{"Name", m.name + cursor(m.field == fieldName), fieldName, false},
-		{"Template", templateSelector(m.tmplIdx, m.field == fieldTemplate), fieldTemplate, false},
-		{"Distro", distroSelector(m.distroIdx, m.field == fieldDistro), fieldDistro, !m.isDistroAware()},
-		{"Version", versionSelector(m.selectedDistro(), m.distroVerIdx, m.field == fieldDistroVersion), fieldDistroVersion, !m.isDistroAware()},
+		{"Template", templateSelector(m.tmplIdx, m.field == fieldTemplate), fieldTemplate, m.noAutoInstall},
+		{"Distro", distroSelector(m.distroIdx, m.field == fieldDistro), fieldDistro, !m.isDistroAware() || m.noAutoInstall},
+		{"Version", versionSelector(m.selectedDistro(), m.distroVerIdx, m.field == fieldDistroVersion), fieldDistroVersion, !m.isDistroAware() || m.noAutoInstall},
 		{"Memory", m.memory + cursor(m.field == fieldMemory), fieldMemory, false},
 		{"CPUs", m.cpus + cursor(m.field == fieldCPUs), fieldCPUs, false},
 		{"Disk", diskModeSelector(m.dMode, m.field == fieldDiskMode), fieldDiskMode, false},

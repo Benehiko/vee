@@ -297,6 +297,9 @@ func configFromTemplate(ctx context.Context, prov provider.Provider, opts Opts, 
 		if opts.DistroVersion == "" || opts.DistroVersion == "latest" {
 			version = images.KnownUbuntuVersions[0]
 		}
+		if opts.NoAutoInstall {
+			return templates.NewUbuntuServerConfigNoISO(prov, version, opts.Name)
+		}
 		return templates.NewUbuntuServerConfig(ctx, prov, version, opts.Name)
 	case "github-runner":
 		if opts.RunnerExtras == nil {
