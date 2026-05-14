@@ -80,6 +80,14 @@ type Opts struct {
 	// Hostname.
 	Hostname string
 
+	// User overrides the guest login username. Only the gaming-arch template
+	// honors this — other cloud-init templates hard-code their username in
+	// systemd units and file paths.
+	User string
+	// Password sets the guest login password (chpasswd) for any cloud-init
+	// template. Empty means no password is set (SSH key-only).
+	Password string
+
 	// Passthrough template specifics.
 	NVMeDev  string
 	OVMFVars string
@@ -219,6 +227,8 @@ func configFromTemplate(ctx context.Context, prov provider.Provider, opts Opts, 
 			MAC:              opts.NICMAC,
 			Headless:         headless,
 			SSHPort:          opts.SSHPort,
+			User:             opts.User,
+			Password:         opts.Password,
 		}
 	}
 
@@ -386,6 +396,12 @@ func applyOverrides(cfg *vm.VMConfig, opts Opts, prov provider.Provider) {
 		cfg.Hostname = opts.Hostname
 	} else if cfg.Hostname == "" {
 		cfg.Hostname = opts.Name
+	}
+	// Password is applied uniformly across any template that carries a
+	// CloudInitConfig — chpasswd in the rendered runcmd handles both the
+	// template's custom user and the distro's default user.
+	if opts.Password != "" && cfg.CloudInit != nil {
+		cfg.CloudInit.Password = opts.Password
 	}
 }
 

@@ -88,6 +88,7 @@ type CloudInitWriteFile struct {
 type CloudInitConfig struct {
 	Hostname    string               `yaml:"hostname,omitempty"     json:"hostname,omitempty"`
 	User        string               `yaml:"user,omitempty"         json:"user,omitempty"`
+	Password    string               `yaml:"password,omitempty"     json:"password,omitempty"`
 	DefaultUser string               `yaml:"default_user,omitempty" json:"default_user,omitempty"`
 	SSHKeys     []string             `yaml:"ssh_keys,omitempty"     json:"ssh_keys,omitempty"`
 	Packages    []string             `yaml:"packages,omitempty"     json:"packages,omitempty"`

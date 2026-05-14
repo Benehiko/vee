@@ -85,6 +85,58 @@ func TestUserDataRunCmds(t *testing.T) {
 	}
 }
 
+func TestUserDataPassword(t *testing.T) {
+	ud := mustUserData(t, &cloudinit.Config{
+		User:        "gamer",
+		DefaultUser: "ubuntu",
+		Password:    "hunter2",
+		RunCmds:     []string{"echo trailing"},
+	})
+	if !strings.Contains(ud, "echo 'gamer:hunter2' | chpasswd") {
+		t.Errorf("custom user chpasswd missing: %q", ud)
+	}
+	if !strings.Contains(ud, "echo 'ubuntu:hunter2' | chpasswd") {
+		t.Errorf("default user chpasswd missing: %q", ud)
+	}
+	// Password runcmds must come before the template's own runcmds so the
+	// account is usable from the console immediately.
+	gamerIdx := strings.Index(ud, "echo 'gamer:hunter2'")
+	tailIdx := strings.Index(ud, "echo trailing")
+	if gamerIdx < 0 || tailIdx < 0 || gamerIdx > tailIdx {
+		t.Errorf("password runcmd not prepended: %q", ud)
+	}
+}
+
+func TestUserDataPasswordSameUserAndDefault(t *testing.T) {
+	ud := mustUserData(t, &cloudinit.Config{
+		User:        "ubuntu",
+		DefaultUser: "ubuntu",
+		Password:    "pw",
+	})
+	if strings.Count(ud, "chpasswd") != 1 {
+		t.Errorf("expected single chpasswd line when user==default: %q", ud)
+	}
+}
+
+func TestUserDataPasswordQuoteEscape(t *testing.T) {
+	ud := mustUserData(t, &cloudinit.Config{
+		User:     "alice",
+		Password: "it's",
+	})
+	if !strings.Contains(ud, `echo 'alice:it'\''s' | chpasswd`) {
+		t.Errorf("single-quote escape wrong: %q", ud)
+	}
+}
+
+func TestUserDataNoPasswordNoChpasswd(t *testing.T) {
+	ud := mustUserData(t, &cloudinit.Config{
+		User: "vee",
+	})
+	if strings.Contains(ud, "chpasswd") {
+		t.Errorf("unexpected chpasswd when password unset: %q", ud)
+	}
+}
+
 func TestMetaDataHostname(t *testing.T) {
 	md := cloudinit.RenderMetaData(&cloudinit.Config{Hostname: "testvm"})
 	if !strings.Contains(md, "local-hostname: testvm") {

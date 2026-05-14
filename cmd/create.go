@@ -46,6 +46,7 @@ var (
 	createMedia         []string
 	createRunnerURL     string
 	createRunnerLabels  []string
+	createPassword      string
 )
 
 var createCmd = &cobra.Command{
@@ -287,6 +288,12 @@ func optsFromFlags(cmd *cobra.Command, name string) build.Opts {
 	if cmd.Flags().Changed("hostname") {
 		opts.Hostname = createHostname
 	}
+	if cmd.Flags().Changed("user") {
+		opts.User = createUser
+	}
+	if cmd.Flags().Changed("password") {
+		opts.Password = createPassword
+	}
 	if cmd.Flags().Changed("nvme-dev") {
 		opts.NVMeDev = createNVMeDev
 	}
@@ -312,7 +319,8 @@ func init() {
 	createCmd.Flags().StringVar(&createVirtiofsDir, "virtiofs-dir", "", "Host directory to share via virtiofsd")
 	createCmd.Flags().StringVar(&createVirtiofsTag, "virtiofs-tag", "share", "Mount tag for the virtiofs share")
 	createCmd.Flags().StringVar(&createSSHKeyFile, "ssh-keys", "", "Path to file containing SSH public keys (one per line)")
-	createCmd.Flags().StringVar(&createUser, "user", "", "Default cloud-init username (overrides template default)")
+	createCmd.Flags().StringVar(&createUser, "user", "", "Guest login username (gaming-arch only; other templates hard-code their user)")
+	createCmd.Flags().StringVar(&createPassword, "password", "", "Guest login password (chpasswd via cloud-init; gaming-arch defaults to the username)")
 	createCmd.Flags().BoolVar(&createSSHShare, "ssh-share", false, "Enable SSH agent sharing into VM via AF_VSOCK")
 	createCmd.Flags().BoolVar(&createHeadless, "headless", false, "Run VM headless (no display window); SSH-only access")
 	createCmd.Flags().IntVar(&createSSHPort, "ssh-port", 0, "Host port forwarded to VM port 22 (headless VMs only)")

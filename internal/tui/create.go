@@ -80,6 +80,8 @@ const (
 	fieldSSHPort
 	fieldSSHShare
 	fieldSSHKeyFile
+	fieldUser
+	fieldPassword
 
 	fieldCount
 )
@@ -140,6 +142,8 @@ type createModel struct {
 	sshPort      string
 	sshShare     bool
 	sshKeyFile   string
+	user         string
+	password     string
 
 	err        string
 	submitting bool
@@ -280,6 +284,14 @@ func (m *createModel) applyPrefill(o build.Opts) {
 	}
 	if o.SSHKeyFile != "" {
 		m.sshKeyFile = o.SSHKeyFile
+		m.advancedOpen = true
+	}
+	if o.User != "" {
+		m.user = o.User
+		m.advancedOpen = true
+	}
+	if o.Password != "" {
+		m.password = o.Password
 		m.advancedOpen = true
 	}
 }
@@ -440,6 +452,10 @@ func (m *createModel) appendChar(ch string) {
 		m.sshPort += ch
 	case fieldSSHKeyFile:
 		m.sshKeyFile += ch
+	case fieldUser:
+		m.user += ch
+	case fieldPassword:
+		m.password += ch
 	}
 }
 
@@ -477,6 +493,10 @@ func (m *createModel) removeChar() {
 		m.sshPort = trim(m.sshPort)
 	case fieldSSHKeyFile:
 		m.sshKeyFile = trim(m.sshKeyFile)
+	case fieldUser:
+		m.user = trim(m.user)
+	case fieldPassword:
+		m.password = trim(m.password)
 	}
 }
 
@@ -583,6 +603,8 @@ func (m createModel) View() string {
 			{"SSH Port", m.sshPort + cursor(m.field == fieldSSHPort), fieldSSHPort, false},
 			{"SSH Share", boolValue(m.sshShare, m.field == fieldSSHShare), fieldSSHShare, false},
 			{"SSH Keys", m.sshKeyFile + cursor(m.field == fieldSSHKeyFile), fieldSSHKeyFile, false},
+			{"User", m.user + cursor(m.field == fieldUser), fieldUser, false},
+			{"Password", maskPassword(m.password) + cursor(m.field == fieldPassword), fieldPassword, false},
 		}
 		m.renderFields(&sb, advanced)
 	}
@@ -845,8 +867,21 @@ func (m createModel) toBuildOpts() build.Opts {
 		if m.sshKeyFile != "" {
 			opts.SSHKeyFile = m.sshKeyFile
 		}
+		if m.user != "" {
+			opts.User = m.user
+		}
+		if m.password != "" {
+			opts.Password = m.password
+		}
 	}
 	return opts
+}
+
+func maskPassword(s string) string {
+	if s == "" {
+		return ""
+	}
+	return strings.Repeat("•", len(s))
 }
 
 func parseInt(s string) int {

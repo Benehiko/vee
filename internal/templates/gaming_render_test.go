@@ -6,7 +6,7 @@ import (
 )
 
 func TestGamingInstallScriptRender(t *testing.T) {
-	files, runs := archGamingSetup("alano", []string{"ssh-ed25519 AAAA..."}, "lotmonster-gaming", GamingOptions{
+	files, runs := archGamingSetup("alano", "s3cr3t", []string{"ssh-ed25519 AAAA..."}, "lotmonster-gaming", GamingOptions{
 		GPUVendor:   GPUVendorAMD,
 		Passthrough: false,
 	})
@@ -23,6 +23,9 @@ func TestGamingInstallScriptRender(t *testing.T) {
 		"trap 'on_err $LINENO' ERR",
 		"reflector --protocol https --latest",
 		"pacstrap /mnt base linux",
+		"USER=alano",
+		"PASSWORD=s3cr3t",
+		`echo "$USER:$PASSWORD" | arch-chroot /mnt chpasswd`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("install script missing %q", want)

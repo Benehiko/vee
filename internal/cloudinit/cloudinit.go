@@ -23,6 +23,10 @@ type WriteFile struct {
 type Config struct {
 	Hostname string
 	User     string
+	// Password is the plain-text login password for User and DefaultUser.
+	// Rendered via chpasswd in runcmd so console / TTY login works without an
+	// SSH key. Empty means no password is set (key-only login).
+	Password string
 	// DefaultUser is the distro's built-in cloud image user (e.g. "ubuntu").
 	// When set, SSH keys are injected into this user in addition to User.
 	DefaultUser string
@@ -126,6 +130,26 @@ func renderUserData(cfg *Config) (string, error) {
 
 	writeFiles := cfg.WriteFiles
 	runCmds := cfg.RunCmds
+
+	// Password is applied via chpasswd before any other runcmd so console /
+	// TTY login is available as soon as the user exists. Apply to both the
+	// custom user (when set) and the distro default user so users can log in
+	// either way regardless of which identity the template promoted.
+	if cfg.Password != "" {
+		targets := []string{}
+		if cfg.User != "" {
+			targets = append(targets, cfg.User)
+		}
+		if cfg.DefaultUser != "" && cfg.DefaultUser != cfg.User {
+			targets = append(targets, cfg.DefaultUser)
+		}
+		safePw := strings.ReplaceAll(cfg.Password, "'", `'\''`)
+		pwCmds := make([]string, 0, len(targets))
+		for _, t := range targets {
+			pwCmds = append(pwCmds, fmt.Sprintf("echo '%s:%s' | chpasswd", t, safePw))
+		}
+		runCmds = append(pwCmds, runCmds...)
+	}
 
 	if len(writeFiles) > 0 {
 		sb.WriteString("write_files:\n")

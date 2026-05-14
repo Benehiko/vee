@@ -160,6 +160,7 @@ func (m *Manager) Create(ctx context.Context, cfg *VMConfig) error {
 		ci := &cloudinit.Config{
 			Hostname:    cfg.CloudInit.Hostname,
 			User:        cfg.CloudInit.User,
+			Password:    cfg.CloudInit.Password,
 			DefaultUser: cfg.CloudInit.DefaultUser,
 			SSHKeys:     cfg.CloudInit.SSHKeys,
 			Packages:    cfg.CloudInit.Packages,

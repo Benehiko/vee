@@ -44,6 +44,10 @@ type GamingOptions struct {
 	Headless bool
 	// SSHPort is the host port forwarded to guest port 22 (user-mode NIC only).
 	SSHPort int
+	// User overrides the default guest login username ("gamer").
+	User string
+	// Password overrides the default guest login password (matches username).
+	Password string
 }
 
 // NewGamingArchConfig builds a VMConfig for an Arch Linux gaming VM.
@@ -67,8 +71,15 @@ func NewGamingArchConfig(ctx context.Context, p provider.Provider, name string, 
 	conf := p.Config()
 	vmDir := filepath.Join(conf.StoragePath, name)
 
-	user := "gamer"
-	writeFiles, runCmds := archGamingSetup(user, sshKeys, name, opts)
+	user := opts.User
+	if user == "" {
+		user = "gamer"
+	}
+	password := opts.Password
+	if password == "" {
+		password = user
+	}
+	writeFiles, runCmds := archGamingSetup(user, password, sshKeys, name, opts)
 
 	gpuMode := vm.GPUVirtio
 	gpuCfg := vm.GPUConfig{Mode: gpuMode}
@@ -262,7 +273,7 @@ func NewGamingBazziteConfig(ctx context.Context, p provider.Provider, name strin
 // target the real disk via pacstrap + arch-chroot, not the live environment.
 // All configuration is written into the chroot; the VM powers off at the end
 // so vee can eject the ISO and boot from the installed disk.
-func archGamingSetup(user string, sshKeys []string, hostname string, opts GamingOptions) ([]vm.CloudInitWriteFile, []string) {
+func archGamingSetup(user, password string, sshKeys []string, hostname string, opts GamingOptions) ([]vm.CloudInitWriteFile, []string) {
 	gpuPkgs := "mesa lib32-mesa vulkan-radeon lib32-vulkan-radeon vulkan-icd-loader lib32-vulkan-icd-loader vulkan-tools"
 	if !opts.Passthrough {
 		gpuPkgs += " vulkan-virtio lib32-vulkan-mesa-layers"
@@ -292,6 +303,7 @@ exec > >(tee -a /var/log/vee-install.log /dev/ttyS0) 2>&1
 set -euxo pipefail
 DISK=/dev/vda
 USER=%s
+PASSWORD=%s
 
 # On failure, surface the line + unwind any mounts so a subsequent re-run
 # (manual or vee restart) is not blocked by stale partitions on $DISK.
@@ -450,7 +462,7 @@ PYEOF
 
 echo "==> vee-install: stage=users"
 arch-chroot /mnt useradd -m -G wheel,gamemode -s /bin/bash "$USER"
-echo "$USER:vee" | arch-chroot /mnt chpasswd
+echo "$USER:$PASSWORD" | arch-chroot /mnt chpasswd
 sed -i 's/^# %%wheel ALL=(ALL:ALL) NOPASSWD: ALL/%%wheel ALL=(ALL:ALL) NOPASSWD: ALL/' /mnt/etc/sudoers
 
 # SSH keys
@@ -756,7 +768,7 @@ sha256sum /mnt/usr/local/bin/vee-check | awk '{print $1}' > /mnt/etc/vee-check.s
 echo "==> vee-install: stage=cleanup"
 umount -R /mnt
 echo "==> vee-install: stage=done"
-poweroff`, user, gpuPkgs, hostname, hostname, strings.Join(sshKeys, "\n"), kasmvncService, nvidiaSetup, kasmvncSetup)
+poweroff`, user, password, gpuPkgs, hostname, hostname, strings.Join(sshKeys, "\n"), kasmvncService, nvidiaSetup, kasmvncSetup)
 
 	writeFiles := []vm.CloudInitWriteFile{
 		{
