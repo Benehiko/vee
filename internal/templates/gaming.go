@@ -631,6 +631,25 @@ svc_enabled_check() {
   fi
 }
 
+# svc_oneshot_check passes if a oneshot ran to completion at least once.
+# A oneshot+RemainAfterExit unit gated by ConditionPathExists=!<marker> shows
+# active=active during the boot that ran it and active=inactive on every
+# subsequent boot (Condition suppresses the unit). Treat marker file presence
+# AND ExecMainStatus=0 as success.
+svc_oneshot_check() {
+  local name=$1 marker=$2
+  local active result
+  active=$(systemctl is-active "$name" 2>&1 || true)
+  result=$(systemctl show "$name" -p ExecMainStatus --value 2>/dev/null || true)
+  if [[ "$active" == "active" ]]; then
+    checks+=("{\"name\":\"svc:$name\",\"ok\":true,\"detail\":\"active (RemainAfterExit)\"}")
+  elif [[ -e "$marker" && ( -z "$result" || "$result" == "0" ) ]]; then
+    checks+=("{\"name\":\"svc:$name\",\"ok\":true,\"detail\":\"completed (marker=$marker exit=$result)\"}")
+  else
+    checks+=("{\"name\":\"svc:$name\",\"ok\":false,\"detail\":\"active=$active marker=$marker exit=$result\"}")
+  fi
+}
+
 pkg_check() {
   local name=$1
   local out
@@ -681,8 +700,10 @@ svc_check NetworkManager
 svc_check sshd
 svc_enabled_check sddm
 svc_check qemu-guest-agent
-# vee-firstboot is oneshot/RemainAfterExit — active means it completed.
-svc_check vee-firstboot
+# vee-firstboot is oneshot+RemainAfterExit gated by ConditionPathExists=!marker.
+# It is active only on the boot that ran it; subsequent boots skip via the
+# condition. Treat marker presence as a successful prior run.
+svc_oneshot_check vee-firstboot /etc/vee-firstboot-done
 
 # --- Point 4: firstboot actually ran ----------------------------------------
 # The service writes this sentinel after ExecStart succeeds. Checking
