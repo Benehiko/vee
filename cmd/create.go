@@ -393,7 +393,7 @@ func init() {
 		}
 		completions := make([]string, 0, len(devs))
 		for _, d := range devs {
-			desc := d.Model
+			desc := d.DescribeShort()
 			if desc == "" {
 				desc = d.Name
 			}

@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -16,6 +17,10 @@ type Device struct {
 	ByIDPath string
 	// Model is read from /sys/block/<name>/device/model (may be empty).
 	Model string
+	// SizeBytes is the device capacity in bytes (0 if unknown).
+	SizeBytes uint64
+	// Serial is the disk serial parsed from the by-id link (after the last _).
+	Serial string
 }
 
 // ListNVMe returns all NVMe namespaces visible in /sys/block.
@@ -43,12 +48,14 @@ func listByPrefix(prefix string) ([]Device, error) {
 			continue
 		}
 		d := Device{
-			Name:     name,
-			ByIDPath: "/dev/" + name,
-			Model:    readModel(name),
+			Name:      name,
+			ByIDPath:  "/dev/" + name,
+			Model:     readModel(name),
+			SizeBytes: readSize(name),
 		}
 		if stable, ok := byID[name]; ok {
 			d.ByIDPath = stable
+			d.Serial = parseSerial(stable)
 		}
 		devs = append(devs, d)
 	}
@@ -78,6 +85,55 @@ func buildByIDMap() (map[string]string, error) {
 	return m, nil
 }
 
+// readSize returns the device capacity in bytes. /sys/block/<n>/size is a
+// count of 512-byte sectors regardless of the underlying logical block size.
+func readSize(name string) uint64 {
+	b, err := os.ReadFile(filepath.Join("/sys/block", name, "size"))
+	if err != nil {
+		return 0
+	}
+	sectors, err := strconv.ParseUint(strings.TrimSpace(string(b)), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return sectors * 512
+}
+
+// parseSerial extracts the trailing serial token from a by-id path. by-id
+// names look like ata-<model>_<serial> or nvme-<model>_<serial>; the segment
+// after the final underscore is conventionally the unit serial.
+func parseSerial(byIDPath string) string {
+	base := filepath.Base(byIDPath)
+	if i := strings.LastIndex(base, "_"); i >= 0 && i+1 < len(base) {
+		return base[i+1:]
+	}
+	return ""
+}
+
+// humanSize formats a byte count as a short human-readable string (e.g.
+// "22TB", "1.8TB"). Uses powers of 1000 to match disk-vendor labelling.
+func humanSize(b uint64) string {
+	if b == 0 {
+		return ""
+	}
+	const unit = 1000
+	if b < unit {
+		return strconv.FormatUint(b, 10) + "B"
+	}
+	div, exp := uint64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	suffix := []string{"KB", "MB", "GB", "TB", "PB"}[exp]
+	whole := b / div
+	frac := (b % div) * 10 / div
+	if frac == 0 || whole >= 100 {
+		return strconv.FormatUint(whole, 10) + suffix
+	}
+	return strconv.FormatUint(whole, 10) + "." + strconv.FormatUint(frac, 10) + suffix
+}
+
 func readModel(name string) string {
 	// NVMe: /sys/block/nvme0n1/device/model  (via namespace → ctrl symlink)
 	// SATA: /sys/block/sda/device/model
@@ -97,10 +153,27 @@ func readModel(name string) string {
 // Label returns a display string for the device.
 func (d Device) Label() string {
 	label := d.ByIDPath
-	if d.Model != "" {
-		label += "  [" + d.Model + "]"
+	if desc := d.DescribeShort(); desc != "" {
+		label += "  " + desc
 	}
 	return label
+}
+
+// DescribeShort returns a compact human description: "<size> <model> [<serial>]".
+// Empty fields are skipped, so a device with no by-id link still renders the
+// size + model. Use this for shell-completion descriptions and TUI hints.
+func (d Device) DescribeShort() string {
+	parts := make([]string, 0, 3)
+	if size := humanSize(d.SizeBytes); size != "" {
+		parts = append(parts, size)
+	}
+	if d.Model != "" {
+		parts = append(parts, d.Model)
+	}
+	if d.Serial != "" {
+		parts = append(parts, "["+d.Serial+"]")
+	}
+	return strings.Join(parts, " ")
 }
 
 // ListUnmounted returns all block devices that have no mounted partitions or
