@@ -50,8 +50,8 @@ type createField int
 
 const (
 	// Basics — always visible.
-	fieldName createField = iota
-	fieldTemplate
+	fieldName     createField = iota
+	fieldTemplate             // hidden when noAutoInstall
 	fieldDistro
 	fieldDistroVersion
 	fieldMemory
@@ -65,21 +65,18 @@ const (
 
 	// Advanced — visible only when advancedOpen.
 	fieldNICMode
-	fieldNICBridge
-	fieldNICMAC
+	fieldNICBridge // visible only when bridge mode
 	fieldHostname
 	fieldHeadless
 	fieldUEFI
 	fieldGPUMode
-	fieldGPUPCI
-	fieldGPUVendor
-	fieldAntiDetect
+	fieldGPUPCI     // visible only when passthrough
+	fieldGPUVendor  // hidden when none or passthrough
+	fieldAntiDetect // visible only when passthrough
 	fieldVirtiofsDir
 	fieldVirtiofsTag
-	fieldSPICEPort
-	fieldSSHPort
-	fieldSSHShare
-	fieldSSHKeyFile
+	fieldDataDisks  // repeatable block device passthrough
+	fieldSSHKeyFile // import existing SSH public keys file
 	fieldUser
 	fieldPassword
 
@@ -126,24 +123,23 @@ type createModel struct {
 	blockDevIdx  int
 
 	// Advanced.
-	nicModeIdx   int
-	nicBridge    string
-	nicMAC       string
-	hostname     string
-	headless     bool
-	uefi         bool
-	gpuModeIdx   int
-	gpuPCI       string
-	gpuVendorIdx int
-	antiDetect   bool
-	virtiofsDir  string
-	virtiofsTag  string
-	spicePort    string
-	sshPort      string
-	sshShare     bool
-	sshKeyFile   string
-	user         string
-	password     string
+	nicModeIdx    int
+	nicBridge     string
+	hostname      string
+	headless      bool
+	uefi          bool
+	gpuModeIdx    int
+	gpuPCI        string
+	gpuVendorIdx  int
+	antiDetect    bool
+	virtiofsDir   string
+	virtiofsTag   string
+	dataDevs      []blockdev.Device // block devices available for data-disk passthrough
+	dataDevIdx    int               // 0 = none, 1..N = dataDevs[dataDevIdx-1]
+	sshKeyFile    string            // path to file of extra SSH public keys to import
+	user          string
+	password      string
+	noAutoInstall bool // boot from existing disk, skip install pass; hides Template
 
 	err        string
 	submitting bool
@@ -161,7 +157,10 @@ func newCreateModel(mgr *vm.Manager, p provider.Provider) createModel {
 		dMode:       diskModeNone,
 		diskSize:    "20G",
 		blockDevs:   devs,
+		dataDevs:    devs,
 		virtiofsTag: "share",
+		user:        "vee",
+		password:    "vee",
 	}
 }
 
@@ -221,10 +220,6 @@ func (m *createModel) applyPrefill(o build.Opts) {
 		m.nicBridge = o.NICBridge
 		m.advancedOpen = true
 	}
-	if o.NICMAC != "" {
-		m.nicMAC = o.NICMAC
-		m.advancedOpen = true
-	}
 	if o.Hostname != "" {
 		m.hostname = o.Hostname
 		m.advancedOpen = true
@@ -270,28 +265,23 @@ func (m *createModel) applyPrefill(o build.Opts) {
 	if o.VirtiofsTag != "" {
 		m.virtiofsTag = o.VirtiofsTag
 	}
-	if o.SPICEPort != nil && *o.SPICEPort > 0 {
-		m.spicePort = fmt.Sprintf("%d", *o.SPICEPort)
-		m.advancedOpen = true
-	}
-	if o.SSHPort > 0 {
-		m.sshPort = fmt.Sprintf("%d", o.SSHPort)
-		m.advancedOpen = true
-	}
-	if o.SSHShare != nil {
-		m.sshShare = *o.SSHShare
-		m.advancedOpen = true
-	}
 	if o.SSHKeyFile != "" {
 		m.sshKeyFile = o.SSHKeyFile
 		m.advancedOpen = true
 	}
 	if o.User != "" {
 		m.user = o.User
-		m.advancedOpen = true
 	}
 	if o.Password != "" {
 		m.password = o.Password
+	}
+	if o.NoAutoInstall {
+		m.noAutoInstall = true
+		// Existing disk: clear the default user/password pre-fill.
+		m.user = ""
+		m.password = ""
+	}
+	if len(o.DataDisks) > 0 {
 		m.advancedOpen = true
 	}
 }
@@ -326,14 +316,28 @@ func (m createModel) isDistroAware() bool {
 // reachable by Tab/Shift-Tab navigation.
 func (m createModel) fieldVisible(f createField) bool {
 	switch f {
+	case fieldTemplate:
+		return !m.noAutoInstall
 	case fieldDistro, fieldDistroVersion:
-		return m.isDistroAware()
+		return m.isDistroAware() && !m.noAutoInstall
 	case fieldDiskSize:
 		return m.dMode == diskModeNew
 	case fieldDiskDev:
 		return m.dMode == diskModePassthrough
 	case fieldAdvancedToggle:
 		return true
+	case fieldNICBridge:
+		return m.advancedOpen && nicModeNames[m.nicModeIdx] == "bridge"
+	case fieldGPUPCI:
+		return m.advancedOpen && gpuModeNames[m.gpuModeIdx] == "passthrough"
+	case fieldGPUVendor:
+		// Vendor only matters for virtio mode; passthrough uses the physical card.
+		return m.advancedOpen && gpuModeNames[m.gpuModeIdx] == "virtio"
+	case fieldAntiDetect:
+		return m.advancedOpen && gpuModeNames[m.gpuModeIdx] == "passthrough"
+	case fieldUser, fieldPassword:
+		// Only meaningful for new VMs (auto-install injects cloud-init).
+		return !m.noAutoInstall
 	}
 	if f >= fieldNICMode {
 		return m.advancedOpen
@@ -392,8 +396,6 @@ func (m createModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.uefi = !m.uefi
 			case fieldAntiDetect:
 				m.antiDetect = !m.antiDetect
-			case fieldSSHShare:
-				m.sshShare = !m.sshShare
 			default:
 				// Allow space inside text inputs.
 				m.appendChar(" ")
@@ -436,8 +438,6 @@ func (m *createModel) appendChar(ch string) {
 		m.diskSize += ch
 	case fieldNICBridge:
 		m.nicBridge += ch
-	case fieldNICMAC:
-		m.nicMAC += ch
 	case fieldHostname:
 		m.hostname += ch
 	case fieldGPUPCI:
@@ -446,10 +446,6 @@ func (m *createModel) appendChar(ch string) {
 		m.virtiofsDir += ch
 	case fieldVirtiofsTag:
 		m.virtiofsTag += ch
-	case fieldSPICEPort:
-		m.spicePort += ch
-	case fieldSSHPort:
-		m.sshPort += ch
 	case fieldSSHKeyFile:
 		m.sshKeyFile += ch
 	case fieldUser:
@@ -477,8 +473,6 @@ func (m *createModel) removeChar() {
 		m.diskSize = trim(m.diskSize)
 	case fieldNICBridge:
 		m.nicBridge = trim(m.nicBridge)
-	case fieldNICMAC:
-		m.nicMAC = trim(m.nicMAC)
 	case fieldHostname:
 		m.hostname = trim(m.hostname)
 	case fieldGPUPCI:
@@ -487,10 +481,6 @@ func (m *createModel) removeChar() {
 		m.virtiofsDir = trim(m.virtiofsDir)
 	case fieldVirtiofsTag:
 		m.virtiofsTag = trim(m.virtiofsTag)
-	case fieldSPICEPort:
-		m.spicePort = trim(m.spicePort)
-	case fieldSSHPort:
-		m.sshPort = trim(m.sshPort)
 	case fieldSSHKeyFile:
 		m.sshKeyFile = trim(m.sshKeyFile)
 	case fieldUser:
@@ -520,6 +510,9 @@ func (m *createModel) adjustSelector(delta int) {
 		m.gpuModeIdx = clampIdx(m.gpuModeIdx+delta, len(gpuModeNames))
 	case fieldGPUVendor:
 		m.gpuVendorIdx = clampIdx(m.gpuVendorIdx+delta, len(gpuVendorNames))
+	case fieldDataDisks:
+		// 0 = none; 1..N = dataDevs[idx-1]
+		m.dataDevIdx = clampIdx(m.dataDevIdx+delta, len(m.dataDevs)+1)
 	}
 }
 
@@ -586,25 +579,26 @@ func (m createModel) View() string {
 	}
 
 	if m.advancedOpen {
+		nicBridgePlaceholder := m.nicBridge
+		if nicBridgePlaceholder == "" && nicModeNames[m.nicModeIdx] == "bridge" {
+			nicBridgePlaceholder = styleFaint.Render("br0")
+		}
 		advanced := []fieldDef{
 			{"NIC Mode", selectorNamed(nicModeNames, m.nicModeIdx, m.field == fieldNICMode), fieldNICMode, false},
-			{"NIC Bridge", m.nicBridge + cursor(m.field == fieldNICBridge), fieldNICBridge, false},
-			{"NIC MAC", m.nicMAC + cursor(m.field == fieldNICMAC), fieldNICMAC, false},
+			{"NIC Bridge", nicBridgePlaceholder + cursor(m.field == fieldNICBridge), fieldNICBridge, nicModeNames[m.nicModeIdx] != "bridge"},
 			{"Hostname", m.hostname + cursor(m.field == fieldHostname), fieldHostname, false},
 			{"Headless", boolValue(m.headless, m.field == fieldHeadless), fieldHeadless, false},
 			{"UEFI", boolValue(m.uefi, m.field == fieldUEFI), fieldUEFI, false},
 			{"GPU Mode", selectorNamed(gpuModeNames, m.gpuModeIdx, m.field == fieldGPUMode), fieldGPUMode, false},
-			{"GPU PCI", m.gpuPCI + cursor(m.field == fieldGPUPCI), fieldGPUPCI, false},
-			{"GPU Vendor", selectorNamed(gpuVendorNames, m.gpuVendorIdx, m.field == fieldGPUVendor), fieldGPUVendor, false},
-			{"Anti-detect", boolValue(m.antiDetect, m.field == fieldAntiDetect), fieldAntiDetect, false},
+			{"GPU PCI", m.gpuPCI + cursor(m.field == fieldGPUPCI), fieldGPUPCI, gpuModeNames[m.gpuModeIdx] != "passthrough"},
+			{"GPU Vendor", selectorNamed(gpuVendorNames, m.gpuVendorIdx, m.field == fieldGPUVendor), fieldGPUVendor, gpuModeNames[m.gpuModeIdx] != "virtio"},
+			{"Anti-detect", boolValue(m.antiDetect, m.field == fieldAntiDetect), fieldAntiDetect, gpuModeNames[m.gpuModeIdx] != "passthrough"},
 			{"Virtiofs Dir", m.virtiofsDir + cursor(m.field == fieldVirtiofsDir), fieldVirtiofsDir, false},
 			{"Virtiofs Tag", m.virtiofsTag + cursor(m.field == fieldVirtiofsTag), fieldVirtiofsTag, false},
-			{"SPICE Port", m.spicePort + cursor(m.field == fieldSPICEPort), fieldSPICEPort, false},
-			{"SSH Port", m.sshPort + cursor(m.field == fieldSSHPort), fieldSSHPort, false},
-			{"SSH Share", boolValue(m.sshShare, m.field == fieldSSHShare), fieldSSHShare, false},
-			{"SSH Keys", m.sshKeyFile + cursor(m.field == fieldSSHKeyFile), fieldSSHKeyFile, false},
-			{"User", m.user + cursor(m.field == fieldUser), fieldUser, false},
-			{"Password", maskPassword(m.password) + cursor(m.field == fieldPassword), fieldPassword, false},
+			{"Data Disk", dataDiskSelector(m.dataDevs, m.dataDevIdx, m.field == fieldDataDisks), fieldDataDisks, false},
+			{"Import SSH Keys", m.sshKeyFile + cursor(m.field == fieldSSHKeyFile), fieldSSHKeyFile, false},
+			{"User", m.user + cursor(m.field == fieldUser), fieldUser, m.noAutoInstall},
+			{"Password", maskPassword(m.password) + cursor(m.field == fieldPassword), fieldPassword, m.noAutoInstall},
 		}
 		m.renderFields(&sb, advanced)
 	}
@@ -740,6 +734,34 @@ func diskModeSelector(mode diskMode, focused bool) string {
 	return strings.Join(parts, " ")
 }
 
+// dataDiskSelector renders a selector where index 0 = "none" and 1..N select a device.
+func dataDiskSelector(devs []blockdev.Device, idx int, focused bool) string {
+	var parts []string
+	// "none" option at index 0.
+	if idx == 0 {
+		if focused {
+			parts = append(parts, styleFieldFocus.Render("[ none ]"))
+		} else {
+			parts = append(parts, styleFieldValue.Render("[ none ]"))
+		}
+	} else {
+		parts = append(parts, styleFaint.Render("none"))
+	}
+	for i, d := range devs {
+		label := d.Label()
+		if i+1 == idx {
+			if focused {
+				parts = append(parts, styleFieldFocus.Render("[ "+label+" ]"))
+			} else {
+				parts = append(parts, styleFieldValue.Render("[ "+label+" ]"))
+			}
+		} else {
+			parts = append(parts, styleFaint.Render(d.ByIDPath))
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
 func diskDevSelector(devs []blockdev.Device, idx int, focused bool) string {
 	if len(devs) == 0 {
 		return styleFaint.Render("(no unmounted devices)")
@@ -776,11 +798,18 @@ func (m createModel) doSubmit() tea.Cmd {
 		if err != nil {
 			return createDoneMsg{err: err}
 		}
-		// Disk passthrough: the TUI exposes a single block device. Append it
-		// here rather than going through --disk-style overrides.
+		// Primary disk passthrough.
 		if m.dMode == diskModePassthrough && len(m.blockDevs) > 0 {
 			cfg.Disks = append(cfg.Disks, vm.DiskConfig{
 				Path:        m.blockDevs[m.blockDevIdx].ByIDPath,
+				Passthrough: true,
+			})
+		}
+		// Data disk passthrough: index 0 = none, 1..N = dataDevs[idx-1].
+		if m.advancedOpen && m.dataDevIdx > 0 && m.dataDevIdx-1 < len(m.dataDevs) {
+			dev := m.dataDevs[m.dataDevIdx-1]
+			cfg.Disks = append(cfg.Disks, vm.DiskConfig{
+				Path:        dev.ByIDPath,
 				Passthrough: true,
 			})
 		}
@@ -813,6 +842,7 @@ func (m createModel) toBuildOpts() build.Opts {
 	if m.dMode == diskModeNew && m.diskSize != "" {
 		opts.Disk = m.diskSize
 	}
+	opts.NoAutoInstall = m.noAutoInstall
 	// Advanced.
 	if m.advancedOpen {
 		if mode := nicModeNames[m.nicModeIdx]; mode != "" {
@@ -820,9 +850,8 @@ func (m createModel) toBuildOpts() build.Opts {
 		}
 		if m.nicBridge != "" {
 			opts.NICBridge = m.nicBridge
-		}
-		if m.nicMAC != "" {
-			opts.NICMAC = m.nicMAC
+		} else if nicModeNames[m.nicModeIdx] == "bridge" {
+			opts.NICBridge = "br0"
 		}
 		if m.hostname != "" {
 			opts.Hostname = m.hostname
@@ -841,8 +870,10 @@ func (m createModel) toBuildOpts() build.Opts {
 		if m.gpuPCI != "" {
 			opts.GPUPCI = m.gpuPCI
 		}
-		if vendor := gpuVendorNames[m.gpuVendorIdx]; vendor != "" {
-			opts.GPUVendor = vendor
+		if gpuModeNames[m.gpuModeIdx] == "virtio" {
+			if vendor := gpuVendorNames[m.gpuVendorIdx]; vendor != "" {
+				opts.GPUVendor = vendor
+			}
 		}
 		if m.antiDetect {
 			v := true
@@ -854,19 +885,11 @@ func (m createModel) toBuildOpts() build.Opts {
 		if m.virtiofsTag != "" {
 			opts.VirtiofsTag = m.virtiofsTag
 		}
-		if p := parseInt(m.spicePort); p > 0 {
-			opts.SPICEPort = &p
-		}
-		if p := parseInt(m.sshPort); p > 0 {
-			opts.SSHPort = p
-		}
-		if m.sshShare {
-			v := true
-			opts.SSHShare = &v
-		}
 		if m.sshKeyFile != "" {
 			opts.SSHKeyFile = m.sshKeyFile
 		}
+	}
+	if !m.noAutoInstall {
 		if m.user != "" {
 			opts.User = m.user
 		}
