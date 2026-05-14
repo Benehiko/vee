@@ -392,8 +392,23 @@ func applyOverrides(cfg *vm.VMConfig, opts Opts, prov provider.Provider) {
 			Cache:     "none",
 		}}, cfg.Disks...)
 	}
-	if len(opts.DataDisks) > 0 && opts.Template != "truenas" {
-		for _, raw := range opts.DataDisks {
+	// Merge DataDisks and BootDisk into a unified list, deduplicating by path.
+	// --boot-disk implies --data-disk, so specifying only --boot-disk is enough.
+	if opts.Template != "truenas" {
+		allDisks := append([]string{}, opts.DataDisks...)
+		if opts.BootDisk != "" {
+			found := false
+			for _, raw := range opts.DataDisks {
+				if templates.ParseDataDisk(raw).Path == opts.BootDisk {
+					found = true
+					break
+				}
+			}
+			if !found {
+				allDisks = append(allDisks, opts.BootDisk)
+			}
+		}
+		for _, raw := range allDisks {
 			dd := templates.ParseDataDisk(raw)
 			disk := vm.DiskConfig{
 				Path:        dd.Path,
@@ -408,13 +423,6 @@ func applyOverrides(cfg *vm.VMConfig, opts Opts, prov provider.Provider) {
 				disk.BootIndex = 1
 			}
 			cfg.Disks = append(cfg.Disks, disk)
-		}
-	}
-	if opts.BootDisk != "" {
-		for i := range cfg.Disks {
-			if cfg.Disks[i].Path == opts.BootDisk && cfg.Disks[i].BootIndex == 0 {
-				cfg.Disks[i].BootIndex = 1
-			}
 		}
 	}
 	if opts.SSHShare != nil {

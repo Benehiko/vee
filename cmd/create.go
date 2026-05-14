@@ -337,7 +337,7 @@ func init() {
 	createCmd.Flags().StringVar(&createDistro, "distro", "ubuntu", "Base OS distro for devbox/server templates: ubuntu, arch, fedora")
 	createCmd.Flags().StringVar(&createDistroVersion, "distro-version", "latest", "ISO version for the selected distro (e.g. 24.04, 2025.05.01, 42) or 'latest'")
 	createCmd.Flags().StringArrayVar(&createDataDisks, "data-disk", nil, "Host block device for passthrough data disk, optionally with serial: path[:serial] (repeatable)")
-	createCmd.Flags().StringVar(&createBootDisk, "boot-disk", "", "Path of the data-disk to boot from (sets UEFI bootindex=1 on that device)")
+	createCmd.Flags().StringVar(&createBootDisk, "boot-disk", "", "Host block device to boot from (implies --data-disk; sets UEFI bootindex=1)")
 	createCmd.Flags().StringVar(&createHostname, "hostname", "", "Hostname registered in /etc/hosts (or systemd-resolved) on start (default: VM name)")
 	createCmd.Flags().StringVar(&createNVMeDev, "nvme-dev", "", "Host NVMe block device for raw boot passthrough (passthrough template)")
 	createCmd.Flags().StringVar(&createOVMFVars, "ovmf-vars", "", "Path to existing OVMF_VARS.fd to reuse for UEFI state (passthrough template)")
