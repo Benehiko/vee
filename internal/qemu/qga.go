@@ -50,6 +50,11 @@ func (c *QGAClient) execute(cmd string, args map[string]any) (json.RawMessage, e
 		return nil, err
 	}
 	data = append(data, '\n')
+	// Bound the write+read so a guest QGA daemon that has connected the
+	// virtio-serial port but not yet started responding (early boot) cannot
+	// block this probe indefinitely.
+	_ = c.conn.SetDeadline(time.Now().Add(3 * time.Second))
+	defer func() { _ = c.conn.SetDeadline(time.Time{}) }()
 	if _, err := c.conn.Write(data); err != nil {
 		return nil, err
 	}
