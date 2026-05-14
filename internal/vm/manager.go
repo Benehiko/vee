@@ -801,7 +801,18 @@ func ResolveIPFromQGA(qgaSocket string) (string, error) {
 }
 
 // Stop sends a graceful QMP powerdown and waits for the process to exit.
+// The shutdown is recorded as user-initiated, so the daemon will NOT
+// restart the VM on its next autostart pass.
 func (m *Manager) Stop(ctx context.Context, name string) error {
+	return m.stopWithReason(ctx, name, ShutdownReasonUser)
+}
+
+// stopWithReason is the internal stop path. The reason determines how
+// DesiredState is written: ShutdownReasonUser parks the VM at
+// DesiredStateStopped (the daemon honours that and won't restart it),
+// whereas ShutdownReasonHost preserves DesiredStateRunning so autostart
+// VMs come back up on the next host boot.
+func (m *Manager) stopWithReason(_ context.Context, name, reason string) error {
 	state, err := m.loadState(name)
 	if err != nil {
 		return err
@@ -860,16 +871,31 @@ func (m *Manager) Stop(ctx context.Context, name string) error {
 	preserved := &VMState{
 		InstallState:       installState,
 		InstalledAt:        state.InstalledAt,
-		DesiredState:       DesiredStateStopped,
-		LastShutdownReason: ShutdownReasonUser,
+		DesiredState:       desiredStateForReason(reason),
+		LastShutdownReason: reason,
 	}
 	return m.saveState(name, preserved)
+}
+
+// desiredStateForReason maps a shutdown reason onto the DesiredState the
+// daemon should observe next boot. Host-initiated stops keep the VM marked
+// "running" so autostart fires on the next cold boot; everything else
+// (explicit user stop, guest poweroff) parks the VM as "stopped".
+func desiredStateForReason(reason string) string {
+	if reason == ShutdownReasonHost {
+		return DesiredStateRunning
+	}
+	return DesiredStateStopped
 }
 
 // ForceStop bypasses QMP and immediately SIGKILLs the qemu process plus its
 // virtiofsd helpers. Cleans up state and hostname registration the same way
 // Stop does. Use only when a graceful Stop has wedged.
-func (m *Manager) ForceStop(_ context.Context, name string) error {
+func (m *Manager) ForceStop(ctx context.Context, name string) error {
+	return m.forceStopWithReason(ctx, name, ShutdownReasonUser)
+}
+
+func (m *Manager) forceStopWithReason(_ context.Context, name, reason string) error {
 	state, err := m.loadState(name)
 	if err != nil {
 		return err
@@ -905,8 +931,8 @@ func (m *Manager) ForceStop(_ context.Context, name string) error {
 	preserved := &VMState{
 		InstallState:       installState,
 		InstalledAt:        state.InstalledAt,
-		DesiredState:       DesiredStateStopped,
-		LastShutdownReason: ShutdownReasonUser,
+		DesiredState:       desiredStateForReason(reason),
+		LastShutdownReason: reason,
 	}
 	return m.saveState(name, preserved)
 }
@@ -914,8 +940,9 @@ func (m *Manager) ForceStop(_ context.Context, name string) error {
 // StopAllRunning gracefully stops every VM that is currently Running per its
 // state file. Stops run concurrently; total wall time is bounded by
 // perVMTimeout regardless of VM count. Errors are logged but do not abort
-// the batch — best-effort.
-func (m *Manager) StopAllRunning(ctx context.Context, perVMTimeout time.Duration) error {
+// the batch — best-effort. The reason is recorded on each VM so the daemon
+// can decide whether to restart autostart VMs on the next boot.
+func (m *Manager) StopAllRunning(ctx context.Context, perVMTimeout time.Duration, reason string) error {
 	entries, err := m.List()
 	if err != nil {
 		return fmt.Errorf("list VMs: %w", err)
@@ -944,7 +971,7 @@ func (m *Manager) StopAllRunning(ctx context.Context, perVMTimeout time.Duration
 			defer wg.Done()
 			stopCtx, cancel := context.WithTimeout(ctx, perVMTimeout)
 			defer cancel()
-			if err := m.Stop(stopCtx, name); err != nil {
+			if err := m.stopWithReason(stopCtx, name, reason); err != nil {
 				log.Warn("graceful stop failed during shutdown",
 					zap.String("vm", name), zap.Error(err))
 				errCh <- fmt.Errorf("%s: %w", name, err)

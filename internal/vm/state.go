@@ -19,6 +19,7 @@ const (
 	ShutdownReasonUser  = "user"  // vee stop / vee stop --force
 	ShutdownReasonGuest = "guest" // guest OS initiated poweroff (e.g. `poweroff` inside the VM)
 	ShutdownReasonCrash = "crash" // QEMU exited without a recorded reason
+	ShutdownReasonHost  = "host"  // daemon stopped the VM because the host is shutting down
 )
 
 // HealthCheck holds the result of a single vee-check assertion run inside the VM.

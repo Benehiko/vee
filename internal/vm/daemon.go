@@ -180,7 +180,7 @@ func (m *Manager) handleHostShutdown(ctx context.Context) {
 	defer cancel()
 	_ = ctx // outer ctx may already be cancelled by systemd; use a fresh one for stop work
 
-	if err := m.StopAllRunning(stopCtx, daemonStopPerVMTimeout); err != nil {
+	if err := m.StopAllRunning(stopCtx, daemonStopPerVMTimeout, ShutdownReasonHost); err != nil {
 		log.Warn("some VMs did not stop cleanly", zap.Error(err))
 		_ = notify.Send(
 			"vee: shutdown completed with errors",
