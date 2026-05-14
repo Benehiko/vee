@@ -206,14 +206,18 @@ func buildSSHConn(cfg *vm.VMConfig, state *vm.VMState) (backup.SSHConn, error) {
 		// Try to inject the vee public key so future runs are passwordless.
 		if identity != "" {
 			if injErr := injectSSHKey(conn, identity+".pub"); injErr != nil {
-				fmt.Fprintf(os.Stderr, "Warning: could not inject SSH key: %v\n", injErr)
-			} else {
-				fmt.Println("SSH key injected — future connections will be passwordless.")
-				conn.Identity = identity
+				return backup.SSHConn{}, fmt.Errorf("inject SSH key: %w", injErr)
 			}
+			fmt.Println("SSH key injected — future connections will be passwordless.")
+			conn.Identity = identity
+			conn.Password = "" // key is in place; drop the password
 		}
 		// Persist host and user so we never prompt again.
-		cfg.SSHHost = net.JoinHostPort(conn.Host, fmt.Sprintf("%d", conn.Port))
+		sshHost := conn.Host
+		if conn.Port != 22 {
+			sshHost = fmt.Sprintf("%s:%d", conn.Host, conn.Port)
+		}
+		cfg.SSHHost = sshHost
 		cfg.SSHUser = conn.User
 		if err := vm.NewManager(prov).SaveConfig(cfg); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: could not persist SSH connection info: %v\n", err)
@@ -279,7 +283,8 @@ func injectSSHKey(conn backup.SSHConn, pubKeyPath string) error {
 	if _, err := os.Stat(pubKeyPath); err != nil {
 		return fmt.Errorf("public key not found: %w", err)
 	}
-	target := fmt.Sprintf("%s@%s", conn.User, net.JoinHostPort(conn.Host, fmt.Sprintf("%d", conn.Port)))
+	// ssh-copy-id expects user@host with port via -p, not user@host:port.
+	target := fmt.Sprintf("%s@%s", conn.User, conn.Host)
 	args := []string{
 		"-i", pubKeyPath,
 		"-o", "StrictHostKeyChecking=no",
