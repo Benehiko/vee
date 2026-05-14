@@ -54,6 +54,7 @@ type Opts struct {
 	// Disk options.
 	Disk      string   // primary qcow2 size, e.g. "50G"
 	DataDisks []string // host block devices for passthrough, repeatable
+	BootDisk  string   // path of the data-disk to mark as UEFI boot priority 1
 
 	// SPICE / display.
 	SPICEPort *int
@@ -390,6 +391,31 @@ func applyOverrides(cfg *vm.VMConfig, opts Opts, prov provider.Provider) {
 			Media:     "disk",
 			Cache:     "none",
 		}}, cfg.Disks...)
+	}
+	if len(opts.DataDisks) > 0 && opts.Template != "truenas" {
+		for _, raw := range opts.DataDisks {
+			dd := templates.ParseDataDisk(raw)
+			disk := vm.DiskConfig{
+				Path:        dd.Path,
+				Format:      "raw",
+				Interface:   "virtio",
+				Media:       "disk",
+				Cache:       "none",
+				Passthrough: true,
+				Serial:      dd.Serial,
+			}
+			if opts.BootDisk != "" && dd.Path == opts.BootDisk {
+				disk.BootIndex = 1
+			}
+			cfg.Disks = append(cfg.Disks, disk)
+		}
+	}
+	if opts.BootDisk != "" {
+		for i := range cfg.Disks {
+			if cfg.Disks[i].Path == opts.BootDisk && cfg.Disks[i].BootIndex == 0 {
+				cfg.Disks[i].BootIndex = 1
+			}
+		}
 	}
 	if opts.SSHShare != nil {
 		cfg.SSHShare = *opts.SSHShare

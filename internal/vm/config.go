@@ -16,6 +16,9 @@ type DiskConfig struct {
 	// Passthrough marks this as a raw host block device (e.g. /dev/disk/by-id/...).
 	// Path must point to the host device. Format, cache, aio are set automatically.
 	Passthrough bool `yaml:"passthrough,omitempty" json:"passthrough,omitempty"`
+	// BootIndex sets the UEFI boot priority for this disk. 1 = highest priority.
+	// 0 means unset (firmware default ordering). Lower values boot first.
+	BootIndex int `yaml:"boot_index,omitempty" json:"boot_index,omitempty"`
 	// InstallISO marks a cdrom disk as a one-shot installer image. vee attaches
 	// it on the first boot (InstallState = pending) and removes it from the
 	// saved config once the install is complete (InstallState = ready), so the

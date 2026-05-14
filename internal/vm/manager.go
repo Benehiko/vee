@@ -1198,6 +1198,7 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 			qemu.WithBackingFile(d.BackingFile),
 			qemu.WithSerial(d.Serial),
 			qemu.WithPassthrough(d.Passthrough),
+			qemu.WithBootIndex(d.BootIndex),
 		)
 		_ = i
 		opts = append(opts, qemu.AddDisk(disk))

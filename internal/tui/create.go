@@ -75,8 +75,9 @@ const (
 	fieldAntiDetect // visible only when passthrough
 	fieldVirtiofsDir
 	fieldVirtiofsTag
-	fieldDataDisks  // repeatable block device passthrough
-	fieldSSHKeyFile // import existing SSH public keys file
+	fieldDataDisks    // repeatable block device passthrough
+	fieldDataDiskBoot // visible only when a data disk is selected
+	fieldSSHKeyFile   // import existing SSH public keys file
 	fieldUser
 	fieldPassword
 	fieldCreate // [ Create ] submit button
@@ -138,6 +139,7 @@ type createModel struct {
 	virtiofsTag   string
 	dataDevs      []blockdev.Device // block devices available for data-disk passthrough
 	dataDevIdx    int               // 0 = none, 1..N = dataDevs[dataDevIdx-1]
+	dataDiskBoot  bool              // mark the selected data disk as UEFI boot priority 1
 	sshKeyFile    string            // path to file of extra SSH public keys to import
 	user          string
 	password      string
@@ -286,6 +288,15 @@ func (m *createModel) applyPrefill(o build.Opts) {
 	}
 	if len(o.DataDisks) > 0 {
 		m.advancedOpen = true
+		if o.BootDisk != "" {
+			for i, d := range m.dataDevs {
+				if d.ByIDPath == o.BootDisk {
+					m.dataDevIdx = i + 1
+					m.dataDiskBoot = true
+					break
+				}
+			}
+		}
 	}
 }
 
@@ -338,6 +349,8 @@ func (m createModel) fieldVisible(f createField) bool {
 		return m.advancedOpen && gpuModeNames[m.gpuModeIdx] == "virtio"
 	case fieldAntiDetect:
 		return m.advancedOpen && gpuModeNames[m.gpuModeIdx] == "passthrough"
+	case fieldDataDiskBoot:
+		return m.advancedOpen && m.dataDevIdx > 0
 	case fieldUser, fieldPassword:
 		// Only meaningful for new VMs (auto-install injects cloud-init).
 		return !m.noAutoInstall
@@ -445,6 +458,8 @@ func (m createModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.uefi = !m.uefi
 			case fieldAntiDetect:
 				m.antiDetect = !m.antiDetect
+			case fieldDataDiskBoot:
+				m.dataDiskBoot = !m.dataDiskBoot
 			default:
 				// Allow space inside text inputs.
 				m.appendChar(" ")
@@ -562,6 +577,9 @@ func (m *createModel) adjustSelector(delta int) {
 	case fieldDataDisks:
 		// 0 = none; 1..N = dataDevs[idx-1]
 		m.dataDevIdx = clampIdx(m.dataDevIdx+delta, len(m.dataDevs)+1)
+		if m.dataDevIdx == 0 {
+			m.dataDiskBoot = false
+		}
 	}
 }
 
@@ -645,6 +663,7 @@ func (m createModel) View() string {
 			{"Virtiofs Dir", virtiofsDirValue(m.virtiofsDir, m.field == fieldVirtiofsDir), fieldVirtiofsDir, false},
 			{"Virtiofs Tag", m.virtiofsTag + cursor(m.field == fieldVirtiofsTag), fieldVirtiofsTag, false},
 			{"Data Disk", dataDiskSelector(m.dataDevs, m.dataDevIdx, m.field == fieldDataDisks), fieldDataDisks, false},
+			{"  Boot Disk", boolValue(m.dataDiskBoot, m.field == fieldDataDiskBoot), fieldDataDiskBoot, m.dataDevIdx == 0},
 			{"Import SSH Keys", m.sshKeyFile + cursor(m.field == fieldSSHKeyFile), fieldSSHKeyFile, false},
 			{"User", m.user + cursor(m.field == fieldUser), fieldUser, m.noAutoInstall},
 			{"Password", maskPassword(m.password) + cursor(m.field == fieldPassword), fieldPassword, m.noAutoInstall},
@@ -869,9 +888,14 @@ func (m createModel) doSubmit() tea.Cmd {
 		// Data disk passthrough: index 0 = none, 1..N = dataDevs[idx-1].
 		if m.advancedOpen && m.dataDevIdx > 0 && m.dataDevIdx-1 < len(m.dataDevs) {
 			dev := m.dataDevs[m.dataDevIdx-1]
+			bootIndex := 0
+			if m.dataDiskBoot {
+				bootIndex = 1
+			}
 			cfg.Disks = append(cfg.Disks, vm.DiskConfig{
 				Path:        dev.ByIDPath,
 				Passthrough: true,
+				BootIndex:   bootIndex,
 			})
 		}
 		if err := mgr.Create(ctx, cfg); err != nil {

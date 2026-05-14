@@ -87,6 +87,9 @@ type Disk struct {
 	// The Path must be a host device (e.g. /dev/disk/by-id/...).
 	// Sets format=raw, cache=none, aio=native automatically.
 	Passthrough bool
+	// BootIndex sets the UEFI boot priority via bootindex=N on the -device arg.
+	// 0 means unset. 1 = highest priority; lower values boot first.
+	BootIndex int
 }
 
 var _ Builder = &Disk{}
@@ -163,6 +166,12 @@ func WithSerial(serial string) DiskOptions {
 func WithPassthrough(passthrough bool) DiskOptions {
 	return func(disk *Disk) {
 		disk.Passthrough = passthrough
+	}
+}
+
+func WithBootIndex(idx int) DiskOptions {
+	return func(disk *Disk) {
+		disk.BootIndex = idx
 	}
 }
 
@@ -339,6 +348,9 @@ func (q *Disk) Args() []string {
 			"drive=" + id,
 			fmt.Sprintf("bus=ahci0.%d", q.diskIndex),
 		}
+		if q.BootIndex > 0 {
+			deviceArgs = append(deviceArgs, fmt.Sprintf("bootindex=%d", q.BootIndex))
+		}
 		return []string{
 			"-drive", strings.Join(driveArgs, ","),
 			"-device", strings.Join(deviceArgs, ","),
@@ -361,6 +373,9 @@ func (q *Disk) Args() []string {
 		}
 		if q.Serial != "" {
 			deviceArgs = append(deviceArgs, "serial="+q.Serial)
+		}
+		if q.BootIndex > 0 {
+			deviceArgs = append(deviceArgs, fmt.Sprintf("bootindex=%d", q.BootIndex))
 		}
 		return []string{
 			"-drive", strings.Join(driveArgs, ","),
