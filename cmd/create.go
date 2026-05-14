@@ -100,7 +100,11 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
 
 		// Name (or any flag) but no --template: drop into the TUI form
 		// pre-filled from whatever flags the user did supply.
-		if !cmd.Flags().Changed("template") {
+		// Exception: --boot-disk (or --data-disk) without a template means
+		// "bare VM booting from this disk" — skip the TUI and go direct.
+		if !cmd.Flags().Changed("template") &&
+			!cmd.Flags().Changed("boot-disk") &&
+			!cmd.Flags().Changed("data-disk") {
 			return tui.RunCreate(cmd.Context(), prov, name, optsFromFlags(cmd, name))
 		}
 

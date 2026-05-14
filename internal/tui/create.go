@@ -288,13 +288,14 @@ func (m *createModel) applyPrefill(o build.Opts) {
 	}
 	if len(o.DataDisks) > 0 {
 		m.advancedOpen = true
-		if o.BootDisk != "" {
-			for i, d := range m.dataDevs {
-				if d.ByIDPath == o.BootDisk {
-					m.dataDevIdx = i + 1
-					m.dataDiskBoot = true
-					break
-				}
+	}
+	if o.BootDisk != "" {
+		m.advancedOpen = true
+		for i, d := range m.dataDevs {
+			if d.ByIDPath == o.BootDisk {
+				m.dataDevIdx = i + 1
+				m.dataDiskBoot = true
+				break
 			}
 		}
 	}

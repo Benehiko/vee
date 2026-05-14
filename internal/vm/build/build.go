@@ -135,7 +135,7 @@ func Build(ctx context.Context, prov provider.Provider, opts Opts) (*vm.VMConfig
 	if opts.Name == "" {
 		return nil, fmt.Errorf("name is required")
 	}
-	if opts.Template == "" {
+	if opts.Template == "" && opts.BootDisk == "" && len(opts.DataDisks) == 0 {
 		return nil, fmt.Errorf("template is required")
 	}
 
@@ -392,6 +392,18 @@ func applyOverrides(cfg *vm.VMConfig, opts Opts, prov provider.Provider) {
 			Cache:     "none",
 		}}, cfg.Disks...)
 	}
+	// When skipping install with a boot disk, the passthrough disk is the OS
+	// disk — strip any template-default qcow2 disks so they are not created.
+	if opts.NoAutoInstall && opts.BootDisk != "" {
+		filtered := cfg.Disks[:0]
+		for _, d := range cfg.Disks {
+			if !d.Passthrough && d.Format == "qcow2" {
+				continue
+			}
+			filtered = append(filtered, d)
+		}
+		cfg.Disks = filtered
+	}
 	// Merge DataDisks and BootDisk into a unified list, deduplicating by path.
 	// --boot-disk implies --data-disk, so specifying only --boot-disk is enough.
 	if opts.Template != "truenas" {
@@ -445,7 +457,7 @@ func applyOverrides(cfg *vm.VMConfig, opts Opts, prov provider.Provider) {
 	if opts.Password != "" && cfg.CloudInit != nil {
 		cfg.CloudInit.Password = opts.Password
 	}
-	if opts.NoAutoInstall {
+	if opts.NoAutoInstall || (opts.Template == "" && opts.BootDisk != "") {
 		cfg.SkipInstall = true
 	}
 }

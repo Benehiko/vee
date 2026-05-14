@@ -30,6 +30,11 @@ func CheckDisksForData(cfg *VMConfig) ([]DiskWarning, error) {
 		if d.Media == "cdrom" || d.InstallISO {
 			continue
 		}
+		// Passthrough disks are expected to contain data when SkipInstall is
+		// set — the user explicitly chose to boot from an existing disk.
+		if d.Passthrough && cfg.SkipInstall {
+			continue
+		}
 		if d.Passthrough {
 			w, err := checkBlockDevice(d.Path)
 			if err != nil {
