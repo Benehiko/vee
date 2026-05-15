@@ -115,6 +115,81 @@ func CurrentDriver(addr string) string {
 	return filepath.Base(target)
 }
 
+// RebindReset performs a driver unbind/rebind cycle to soft-reset a VFIO GPU
+// that cannot be reset via FLR (e.g. AMD Navi31/RDNA3). The sequence is:
+//
+//  1. Unbind from vfio-pci
+//  2. Bind to the native driver (e.g. amdgpu) — driver init acts as soft reset
+//  3. Unbind from the native driver
+//  4. Rebind to vfio-pci
+//
+// This is a best-effort workaround for GPUs without working FLR support.
+// Requires write access to root-owned sysfs entries — run vee as root or via
+// sudo when rebind_reset is enabled. nativeDriver is typically "amdgpu".
+func RebindReset(addr, nativeDriver string) error {
+	pciAddr := normalizePCIAddr(addr)
+	base := filepath.Join("/sys/bus/pci/devices", pciAddr)
+	driverLink := filepath.Join(base, "driver")
+	overridePath := filepath.Join(base, "driver_override")
+
+	// Step 1: unbind from vfio-pci (or whatever is currently bound).
+	if target, err := os.Readlink(driverLink); err == nil {
+		unbindPath := filepath.Join(driverLink, "unbind")
+		if werr := os.WriteFile(unbindPath, []byte(pciAddr), 0o200); werr != nil {
+			return fmt.Errorf("unbind from %s: %w", filepath.Base(target), werr)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	// Step 2: bind to native driver via driver_override + probe.
+	if err := os.WriteFile(overridePath, []byte(nativeDriver), 0o200); err != nil {
+		return fmt.Errorf("set driver_override to %s: %w", nativeDriver, err)
+	}
+	if err := os.WriteFile("/sys/bus/pci/drivers_probe", []byte(pciAddr), 0o200); err != nil {
+		// Clear override so we don't leave the device in a weird state.
+		_ = os.WriteFile(overridePath, []byte("\x00"), 0o200)
+		return fmt.Errorf("probe for %s bind: %w", nativeDriver, err)
+	}
+
+	// Wait for native driver to fully initialize (GPU soft-reset happens here).
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if filepath.Base(func() string { t, _ := os.Readlink(driverLink); return t }()) == nativeDriver {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if filepath.Base(func() string { t, _ := os.Readlink(driverLink); return t }()) != nativeDriver {
+		return fmt.Errorf("device %s did not bind to %s within timeout", pciAddr, nativeDriver)
+	}
+	// Hold briefly so the driver fully initializes.
+	time.Sleep(500 * time.Millisecond)
+
+	// Step 3: unbind native driver.
+	unbindNative := filepath.Join(driverLink, "unbind")
+	if err := os.WriteFile(unbindNative, []byte(pciAddr), 0o200); err != nil {
+		return fmt.Errorf("unbind from %s: %w", nativeDriver, err)
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	// Step 4: rebind to vfio-pci.
+	if err := os.WriteFile(overridePath, []byte("vfio-pci"), 0o200); err != nil {
+		return fmt.Errorf("set driver_override to vfio-pci: %w", err)
+	}
+	if err := os.WriteFile("/sys/bus/pci/drivers_probe", []byte(pciAddr), 0o200); err != nil {
+		return fmt.Errorf("probe for vfio-pci bind: %w", err)
+	}
+
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if filepath.Base(func() string { t, _ := os.Readlink(driverLink); return t }()) == "vfio-pci" {
+			return nil
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return fmt.Errorf("device %s did not rebind to vfio-pci", pciAddr)
+}
+
 // normalizePCIAddr ensures the address has a domain prefix (0000:).
 func normalizePCIAddr(addr string) string {
 	if !strings.Contains(addr, ":") || strings.Count(addr, ":") == 1 {

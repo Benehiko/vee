@@ -1282,6 +1282,29 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 						"(3) cold reboot the host",
 					strings.Join(stuck, ", "))
 			}
+
+			// Soft-reset AMD GPUs that lack FLR by cycling through the native
+			// driver before handing back to vfio-pci. This is a best-effort
+			// workaround for Navi31/RDNA3 and similar hardware; only the
+			// primary GPU address is cycled (the audio sibling shares the same
+			// reset domain and doesn't need a separate cycle).
+			if cfg.GPU.RebindReset && cfg.GPU.RebindResetDriver != "" {
+				m.provider.Logger().Info("performing driver rebind reset",
+					zap.String("pci_addr", cfg.GPU.PCIAddr),
+					zap.String("native_driver", cfg.GPU.RebindResetDriver),
+				)
+				if err := gpu.RebindReset(cfg.GPU.PCIAddr, cfg.GPU.RebindResetDriver); err != nil {
+					m.provider.Logger().Warn("driver rebind reset failed — continuing anyway",
+						zap.String("pci_addr", cfg.GPU.PCIAddr),
+						zap.Error(err),
+					)
+				} else {
+					m.provider.Logger().Info("driver rebind reset complete",
+						zap.String("pci_addr", cfg.GPU.PCIAddr),
+					)
+				}
+			}
+
 			primary := qemu.NewVFIODevice(cfg.GPU.PCIAddr)
 			if cfg.GPU.ROMBar || cfg.GPU.ROMFile != "" {
 				primary.ROMBar = true

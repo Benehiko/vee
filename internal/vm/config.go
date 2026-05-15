@@ -58,8 +58,14 @@ type GPUConfig struct {
 	// GPUs passed through via VFIO so the guest amdgpu driver can read the
 	// VBIOS and initialize display CRTCs. Defaults to false (rombar=0) which
 	// is correct for devices where no display output is needed.
-	ROMBar     bool `yaml:"rom_bar,omitempty"    json:"rom_bar,omitempty"`
-	AntiDetect bool `yaml:"anti_detect,omitempty" json:"anti_detect,omitempty"`
+	ROMBar bool `yaml:"rom_bar,omitempty"    json:"rom_bar,omitempty"`
+	// RebindReset performs a vfio-pci → native driver → vfio-pci rebind cycle
+	// before each VM start as a soft reset workaround for AMD GPUs that do not
+	// support FLR (e.g. Navi31/RDNA3). The native driver name (e.g. "amdgpu")
+	// must be provided via RebindResetDriver.
+	RebindReset       bool   `yaml:"rebind_reset,omitempty"        json:"rebind_reset,omitempty"`
+	RebindResetDriver string `yaml:"rebind_reset_driver,omitempty" json:"rebind_reset_driver,omitempty"`
+	AntiDetect        bool   `yaml:"anti_detect,omitempty"         json:"anti_detect,omitempty"`
 }
 
 type UEFIConfig struct {
