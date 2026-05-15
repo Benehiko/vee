@@ -463,7 +463,7 @@ p.write_text(txt)
 PYEOF
 
 echo "==> vee-install: stage=users"
-arch-chroot /mnt useradd -m -G wheel,gamemode -s /bin/bash "$USER"
+arch-chroot /mnt useradd -m -G wheel,gamemode,video,render,input -s /bin/bash "$USER"
 echo "$USER:$PASSWORD" | arch-chroot /mnt chpasswd
 sed -i 's/^# %%wheel ALL=(ALL:ALL) NOPASSWD: ALL/%%wheel ALL=(ALL:ALL) NOPASSWD: ALL/' /mnt/etc/sudoers
 
@@ -568,11 +568,11 @@ echo "==> vee-firstboot: stage=sunshine-config"
 SUNSHINE_CONF_DIR="/home/$VEEUSER/.config/sunshine"
 mkdir -p "$SUNSHINE_CONF_DIR"
 
-# Sane defaults: KMS capture for amdgpu passthrough, VAAPI encoder,
-# no web-UI credential gate on first launch (pin-based pairing only).
+# Sane defaults: KMS capture for amdgpu passthrough, VAAPI encoder.
+# Sunshine's web UI listens on port+1, so port=47989 → web UI on 47990.
 cat > "$SUNSHINE_CONF_DIR/sunshine.conf" <<'SEOF'
 # Sunshine configuration — managed by vee
-port = 47990
+port = 47989
 capture = kms
 encoder = vaapi
 sunshine_name = vee-gaming
