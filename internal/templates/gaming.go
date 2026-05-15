@@ -513,7 +513,7 @@ EOF
 # vee start hangs until its 10-minute timeout even though SSH is up.
 mkdir -p /mnt/etc/default/grub.d
 cat > /mnt/etc/default/grub.d/99-gaming.cfg <<'EOF'
-GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT console=tty0 console=ttyS0,115200 split_lock_detect=off"
+GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT console=tty0 console=ttyS0,115200 split_lock_detect=off video=DP-1:e video=HDMI-A-1:e"
 EOF
 
 # SDDM autologin
@@ -569,17 +569,28 @@ echo "==> vee-firstboot: stage=sunshine-config"
 SUNSHINE_CONF_DIR="/home/$VEEUSER/.config/sunshine"
 mkdir -p "$SUNSHINE_CONF_DIR"
 
-# Sane defaults: KMS capture for amdgpu passthrough, VAAPI encoder.
+# Sane defaults: KMS capture for amdgpu passthrough, VAAPI encoder on the
+# passthrough GPU render node (renderD129 — renderD128 is virtio-gpu).
 # Sunshine's web UI listens on port+1, so port=47990 → web UI on 47991.
 cat > "$SUNSHINE_CONF_DIR/sunshine.conf" <<'SEOF'
 # Sunshine configuration — managed by vee
 port = 47990
 capture = kms
 encoder = vaapi
+adapter_name = /dev/dri/renderD129
 sunshine_name = vee-gaming
 min_log_level = info
 SEOF
-chown -R "$VEEUSER:$VEEUSER" "$SUNSHINE_CONF_DIR"
+
+# Force VAAPI to use the passthrough GPU render node, not virtio-gpu.
+mkdir -p "/home/$VEEUSER/.config/systemd/user/sunshine.service.d"
+cat > "/home/$VEEUSER/.config/systemd/user/sunshine.service.d/vaapi-amd.conf" <<'SEOF'
+[Service]
+Environment=LIBVA_DRM_DEVICE=/dev/dri/renderD129
+Environment=LIBVA_DRIVER_NAME=radeonsi
+SEOF
+
+chown -R "$VEEUSER:$VEEUSER" "$SUNSHINE_CONF_DIR" "/home/$VEEUSER/.config/systemd"
 
 echo "==> vee-firstboot: stage=sunshine-enable"
 loginctl enable-linger "$VEEUSER"
