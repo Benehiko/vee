@@ -102,8 +102,14 @@ func NewVFIOSiblingFunction(pciAddr, busID string, fn int) *VFIODevice {
 }
 
 func (v *VFIODevice) Args() []string {
-	device := fmt.Sprintf("vfio-pci,host=%s,bus=%s,addr=0x%x",
-		v.PCIAddr, v.BusID, v.GuestFunction)
+	// On a pcie-root-port the parent bus only exposes slot 0.
+	// Sibling functions (fn > 0) must use addr=0.N (slot.function) — not addr=0xN.
+	addr := "addr=0x0"
+	if v.GuestFunction > 0 {
+		addr = fmt.Sprintf("addr=0.%d", v.GuestFunction)
+	}
+	device := fmt.Sprintf("vfio-pci,host=%s,bus=%s,%s",
+		v.PCIAddr, v.BusID, addr)
 	if v.Multifunction {
 		device += ",multifunction=on"
 	}

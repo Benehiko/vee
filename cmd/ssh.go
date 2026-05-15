@@ -78,12 +78,15 @@ Examples:
 			port = state.SSHPort
 
 		case cfg.NIC.Mode == "bridge" || cfg.NIC.Mode == "":
-			// Bridge mode — try to resolve IP from neighbour table via MAC.
+			// Bridge mode — try ARP/neighbour table first, fall back to QGA.
 			mac := cfg.NIC.MAC
 			if mac == "" {
 				return fmt.Errorf("VM %q has no MAC address recorded; cannot resolve IP", name)
 			}
 			ip, resolveErr := vm.ResolveIPFromMAC(mac)
+			if resolveErr != nil && state.QGASocket != "" {
+				ip, resolveErr = vm.ResolveIPFromQGA(state.QGASocket)
+			}
 			if resolveErr != nil {
 				return fmt.Errorf("could not resolve IP for VM %q (MAC %s): %w\nGet the IP with: vee ip %s", name, mac, resolveErr, name)
 			}

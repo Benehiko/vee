@@ -65,7 +65,7 @@ func TestVFIODeviceSiblingArgs(t *testing.T) {
 		t.Errorf("sibling must not emit its own pcie-root-port: %s", args)
 	}
 	for _, want := range []string{
-		"vfio-pci,host=0000:08:00.1,bus=pcie.1,addr=0x1",
+		"vfio-pci,host=0000:08:00.1,bus=pcie.1,addr=0.1",
 		"rombar=0",
 	} {
 		if !strings.Contains(args, want) {
