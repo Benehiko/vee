@@ -53,8 +53,13 @@ type GPUConfig struct {
 	// ROMFile is a path to a VBIOS dump to pass to the guest via romfile=.
 	// Required on some AMD GPUs when rombar=1 alone is insufficient for the
 	// guest driver to initialize display output.
-	ROMFile    string `yaml:"rom_file,omitempty"   json:"rom_file,omitempty"`
-	AntiDetect bool   `yaml:"anti_detect,omitempty" json:"anti_detect,omitempty"`
+	ROMFile string `yaml:"rom_file,omitempty"   json:"rom_file,omitempty"`
+	// ROMBar enables the PCI ROM BAR for the GPU (rombar=1). Required on AMD
+	// GPUs passed through via VFIO so the guest amdgpu driver can read the
+	// VBIOS and initialize display CRTCs. Defaults to false (rombar=0) which
+	// is correct for devices where no display output is needed.
+	ROMBar     bool `yaml:"rom_bar,omitempty"    json:"rom_bar,omitempty"`
+	AntiDetect bool `yaml:"anti_detect,omitempty" json:"anti_detect,omitempty"`
 }
 
 type UEFIConfig struct {

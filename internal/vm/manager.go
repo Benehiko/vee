@@ -1283,6 +1283,9 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 					strings.Join(stuck, ", "))
 			}
 			primary := qemu.NewVFIODevice(cfg.GPU.PCIAddr)
+			if cfg.GPU.ROMBar || cfg.GPU.ROMFile != "" {
+				primary.ROMBar = true
+			}
 			if cfg.GPU.ROMFile != "" {
 				primary.ROMFile = cfg.GPU.ROMFile
 			}
