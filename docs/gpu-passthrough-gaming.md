@@ -1,301 +1,238 @@
-# ▸ GPU PASSTHROUGH GAMING — SUNSHINE + MOONLIGHT
+# GPU Passthrough Gaming — Sunshine + Moonlight
 
 ```
-╔══════════════════════════════════════════════════════════════╗
-║  STREAM THE GRID :: GPU PASSTHROUGH + GAME STREAMING         ║
-║  Sunshine captures. Moonlight connects. You play.            ║
-╚══════════════════════════════════════════════════════════════╝
+[ HOST ] ── VFIO ── [ GPU ] ── amdgpu ── [ GUEST ]
+                                              │
+                                         Sunshine (KMS capture)
+                                              │
+                                        Moonlight client
 ```
+
+The `gaming-arch` template provisions an Arch Linux guest with KDE Plasma, Steam, and Sunshine pre-configured for GPU passthrough. Moonlight connects from any client device on the same network.
 
 ---
 
-## ▸ OVERVIEW
+## Host requirements
 
-```
-  [ HOST ] ──── VFIO ──── [ GPU ] ──── amdgpu/nvidia ──── [ GUEST ]
-                                                               │
-                                                          Sunshine
-                                                               │
-                                                         ══════╪══════
-                                                         Moonlight client
-```
-
-- QEMU passes the GPU through to the guest via VFIO
-- The guest runs `amdgpu` (or `nvidia`) as normal
-- Sunshine captures the GPU-rendered desktop and streams it over the network
-- Moonlight connects from any client device
-
-No physical monitor required. The kernel `video=` parameter forces the display connector on so Sunshine always has a display to capture.
-
----
-
-## ▸ HOST PREREQUISITES
-
-See [prerequisites.md](prerequisites.md) for VFIO group setup, memlock limits, and the AMD Navi ROM BAR quirk.
-
-Bind all devices in the GPU's IOMMU group to `vfio-pci`:
+- GPU bound to `vfio-pci` before any VM starts (see [prerequisites.md](prerequisites.md))
+- All devices in the GPU's IOMMU group bound together:
 
 ```sh
 vee gpu bind 0000:08:00.0
-vee gpu bind 0000:08:00.1   # GPU audio — must be bound together
+vee gpu bind 0000:08:00.1   # GPU audio — same IOMMU reset domain
 ```
 
-Verify:
+- The gaming-arch VM must be started as root (required for driver rebind reset):
 
 ```sh
-vee gpu status 0000:08:00.0
+sudo vee start <name>
 ```
 
 ---
 
-## ▸ VM CONFIGURATION (`vm.yaml`)
+## VM configuration
 
 ```yaml
 gpu:
   mode: passthrough
   pci_addr: "0000:08:00.0"
   extra_vfio_addrs:
-    - "0000:08:00.1"          # GPU audio peer — same IOMMU reset domain
-  rom_file: "/home/user/.vee/gpu.rom"   # Sapphire/AMD Navi VBIOS dump
+    - "0000:08:00.1"                           # GPU audio — pass together
+  rom_bar: true                                # expose VBIOS ROM BAR to guest
+  rom_file: "/home/user/.vee/gpu-vbios.rom"   # VBIOS dump (see below)
+  rebind_reset: true                           # soft-reset via driver cycle on start
+  rebind_reset_driver: "amdgpu"
   anti_detect: true
-
-ssh_user: youruser
-guest_agent: true
 ```
 
-`extra_vfio_addrs` passes all devices in the IOMMU group together. Without it QEMU cannot take ownership of the group.
+`extra_vfio_addrs` ensures all devices in the IOMMU group are passed together — QEMU cannot take ownership of a group unless all its devices are bound.
 
 ---
 
-## ▸ VBIOS (`rom_file`)
+## Dumping the GPU VBIOS
 
-AMD Navi GPUs (RX 6000 / 7000) return an invalid ROM signature when `vfio-pci` probes the ROM BAR — causing a 65-second reset hang. Supply a VBIOS dump to avoid it.
+AMD Navi GPUs require `rom_bar: true` so the guest `amdgpu` driver can read the VBIOS and initialize display CRTCs. Supplying an explicit `rom_file` is more reliable than relying on the ROM BAR alone.
 
-Download the correct ROM for your board from [TechPowerUp VGABIOS](https://www.techpowerup.com/vgabios/) and set `rom_file` in `vm.yaml`.
+Dump the VBIOS while the GPU is bound to `amdgpu` (not `vfio-pci`):
+
+```sh
+# 1. Bind to amdgpu temporarily (GPU must not be in use by a VM)
+sudo bash -c 'echo amdgpu > /sys/bus/pci/devices/0000:08:00.0/driver_override && echo 0000:08:00.0 > /sys/bus/pci/drivers_probe'
+
+# 2. Dump via debugfs
+sudo bash -c 'cat /sys/kernel/debug/dri/1/amdgpu_vbios > /home/user/.vee/gpu-vbios.rom'
+
+# 3. Rebind to vfio-pci
+sudo bash -c 'echo > /sys/bus/pci/devices/0000:08:00.0/driver_override && echo 0000:08:00.0 > /sys/bus/pci/drivers/amdgpu/unbind && echo 0000:08:00.0 > /sys/bus/pci/drivers/vfio-pci/bind'
+```
+
+Set `rom_file` in the VM config to the dump path.
+
+> **TechPowerUp VGABIOS:** Downloaded ROM files from TechPowerUp are often empty (0 bytes) and unusable. Always dump from the live device via debugfs.
 
 ---
 
-## ▸ GUEST SETUP
+## Driver rebind reset (Navi31 / RDNA3)
 
-### Force display connector on (headless operation)
+AMD Navi31 (RX 7900 series) has no working Function Level Reset (FLR) and is not supported by `vendor-reset`. After a VM shuts down, the GPU is stuck in a corrupted power state and cannot be reused without a host cold reboot.
 
-Without a physical monitor, the GPU display engine does not initialize and `amdgpu` reports no outputs. Force the connector on via kernel parameter.
+`rebind_reset: true` performs a `vfio-pci → amdgpu → vfio-pci` driver cycle before each VM start. The native `amdgpu` driver init acts as a soft reset. This is a best-effort workaround — success depends on hardware and BIOS version.
 
-Edit `/etc/default/grub` inside the VM:
+Requirements:
+- `sudo vee start <name>` — rebind writes are root-only sysfs operations
+- Cold reboot the host before the very first VM start after booting
 
-```
-GRUB_CMDLINE_LINUX_DEFAULT="... video=DP-1:2560x1440@60e"
-```
-
-The `e` suffix forces the connector enabled regardless of hotplug detect (HPD). Replace `DP-1` with your connector name (check `ls /sys/class/drm/`). Replace the resolution with your target streaming resolution.
-
-Apply:
-
-```sh
-sudo update-grub
-```
-
-Reboot. Verify:
-
-```sh
-DISPLAY=:0 xrandr | grep connected
-```
-
-The connector should appear as `connected` with your target resolution.
-
-> **First boot:** On the first boot after setting `video=`, plug a physical monitor into the GPU so `amdgpu` can initialize the display engine. Subsequent boots work headlessly.
+**One session per boot:** If the soft reset fails (GPU enters a bad state after an unclean shutdown), a host cold reboot is the only recovery. The error message will say `VFIO device(s) stuck in D3cold`.
 
 ---
 
-### Sunshine
+## Display output (HPD limitation)
 
-Install Sunshine for your distro — see the [Sunshine docs](https://docs.lizardbyte.dev/projects/sunshine/).
+VFIO does not relay Hot Plug Detect (HPD) signals from the host to the guest. The GPU's `amdgpu` driver starts without seeing any connected monitors — all connectors report `disconnected` and the display engine allocates no CRTCs.
 
-#### Configuration
+The `gaming-arch` template adds `video=DP-1:e video=HDMI-A-1:e` to the kernel command line, forcing those connectors enabled at boot regardless of HPD state. Sunshine KMS capture then has an active CRTC to capture from.
 
-Create `/home/<user>/.config/sunshine/sunshine.conf`:
-
-```ini
-encoder = vaapi          # GPU hardware encoding (AMD: vaapi, NVIDIA: nvenc)
-av1_mode = 0             # disable AV1 — session teardown deadlock on some AMD/vaapi builds
-hevc_mode = 0            # disable HEVC — same issue; H.264 is stable
-min_threads = 4
-output_name = 0          # capture primary display (the GPU output)
-qp = 28                  # encode quality (lower = better quality, higher bitrate)
-```
-
-> **`av1_mode` / `hevc_mode`:** Some Sunshine nightly builds (`2025.x`) have a deadlock in session teardown when AV1 or HEVC is used with vaapi on AMD GPUs — `Fatal: Hang detected! Session failed to terminate in 10 seconds` followed by a core dump on every disconnect. Force H.264 (`0`) until a fixed release ships.
-
-> **`vaapi_strict_rc_buffer`:** Can cause hangs on some AMD setups. Leave it out unless you have a specific reason.
-
-> **`bitrate`:** Not recognized by all Sunshine versions. Set bitrate cap from Moonlight's client settings or via the Sunshine web UI at `https://localhost:47990`.
-
-#### Systemd service override
-
-Sunshine must start after Xorg has initialized the display. The default `sleep 5` pre-start delay is unreliable. Override the service to poll `xrandr` until the connector is ready, then set the target resolution.
-
-Create `~/.config/systemd/user/sunshine.service`:
-
-```ini
-[Unit]
-Description=Self-hosted game stream host for Moonlight
-StartLimitIntervalSec=500
-StartLimitBurst=5
-
-[Service]
-Environment=DISPLAY=:0
-TimeoutStartSec=120
-ExecStartPre=/bin/sh -c 'until xrandr 2>/dev/null | grep -q "^DisplayPort-0 connected"; do sleep 2; done'
-ExecStartPre=/bin/sh -c 'xrandr --newmode "2560x1440_60.00" 312.25 2560 2752 3024 3488 1440 1443 1448 1493 -hsync +vsync 2>/dev/null; xrandr --addmode DisplayPort-0 "2560x1440_60.00" 2>/dev/null; xrandr --output DisplayPort-0 --mode "2560x1440_60.00"'
-ExecStart=/usr/bin/sunshine
-Restart=on-failure
-RestartSec=5s
-
-[Install]
-WantedBy=xdg-desktop-autostart.target
-```
-
-Replace `DisplayPort-0` and `2560x1440` with your connector name and resolution.
-
-Apply:
+To add or change forced connectors:
 
 ```sh
-systemctl --user daemon-reload
-systemctl --user enable --now sunshine
+# Inside the VM
+sudo sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT="/GRUB_CMDLINE_LINUX_DEFAULT="video=DP-2:e /' /etc/default/grub
+sudo grub-mkconfig -o /boot/grub/grub.cfg
+sudo reboot
 ```
 
-Sunshine web UI: `https://localhost:47990` — pairing and configuration.
-
-#### Disable the guest firewall
-
-Sunshine uses several UDP ports for the video/audio stream. On Ubuntu, UFW blocks these by default — causing `Initial Ping Timeout` and session crashes. This is a LAN-only gaming VM:
+Verify after reboot:
 
 ```sh
-sudo ufw disable
+cat /sys/class/drm/card1-DP-1/status   # should print: connected
 ```
 
 ---
 
-### qemu-guest-agent (recommended)
+## Post-install: fix Vulkan on Mesa 26
 
-Install the guest agent so `vee ssh` can resolve the VM's IP without ARP and `vee start` can probe readiness:
+Arch Linux's Mesa 26 is built with `-D amdgpu-virtio=true`. This causes `radv` to route GPU initialization through a virtio-specific code path (`vdrm_device_connect`) that fails on VFIO-passed amdgpu devices. Vulkan returns zero physical devices and `vkcube` fails with:
 
-```sh
-sudo apt install qemu-guest-agent
+```
+MESA: error: vdrm_device_connect failed
+radv/amdgpu: failed to initialize device
+vkEnumeratePhysicalDevices reported zero accessible devices
 ```
 
-The agent is socket-activated and starts automatically when the VM is launched with `guest_agent: true` in `vm.yaml`. No manual `systemctl enable` needed.
+There is no runtime workaround — Mesa must be rebuilt with `-D amdgpu-virtio=false`.
+
+### Rebuild Mesa in the guest
+
+```sh
+# 1. Get the Arch mesa PKGBUILD
+mkdir -p ~/mesa-vfio && cd ~/mesa-vfio
+git clone --depth=1 https://gitlab.archlinux.org/archlinux/packaging/packages/mesa.git .
+
+# 2. Disable amdgpu-virtio
+sed -i 's/-D amdgpu-virtio=true/-D amdgpu-virtio=false/' PKGBUILD
+
+# 3. Import the signing key
+gpg --recv-keys 8D8E31AFC32428A6
+
+# 4. Build and install (takes ~30 minutes)
+makepkg -si --noconfirm
+```
+
+After install, verify Vulkan sees the GPU:
+
+```sh
+vulkaninfo --summary 2>&1 | grep deviceName
+# Expected: AMD Radeon RX 7900 GRE (RADV NAVI31)
+```
+
+The patched mesa survives `pacman -Syu` until Arch updates the `mesa` package to a version that fixes the issue upstream. After any `mesa` upgrade, recheck with `vulkaninfo --summary` and rebuild if the error returns.
 
 ---
 
-## ▸ CONNECT WITH MOONLIGHT
+## Connect with Moonlight
 
 ```
-1 ── Open Moonlight on your client device
-2 ── Add the VM's IP address as a host
-3 ── Enter the pairing PIN shown in Moonlight into Sunshine's web UI
-     https://<vm-ip>:47990
-4 ── Select the desktop app and connect
+1. Open Moonlight on your client device
+2. Add the VM's IP: vee ip <name>
+3. Enter the PIN shown in Moonlight into Sunshine's web UI:
+   https://<vm-ip>:47991
+4. Select the desktop and connect
 ```
+
+Sunshine streams over the local network — no VPN or port forwarding required for LAN play.
 
 ---
 
-## ▸ TROUBLESHOOTING
+## Troubleshooting
+
+### VFIO device stuck in D3cold
 
 ```
-╔══════════════════════════════════════════════════════════════╗
-║  FAULT DIAGNOSIS :: READ THE LOGS, TRACE THE SIGNAL          ║
-╚══════════════════════════════════════════════════════════════╝
+Error: VFIO device(s) stuck in D3cold: 0000:08:00.0
 ```
 
-### GPU stuck in D3cold — QEMU crashes immediately
-
-**Symptom:** `pci_irq_handler: Assertion '0 <= irq_num && irq_num < PCI_NUM_PINS' failed` in QEMU output, or `VFIO device D3cold reset failed` in `vee start` output.
-
-**Cause:** The GPU has no power (D3cold state). This happens when a previous QEMU run crashed without releasing the device cleanly, or when the kernel's vfio-pci runtime PM autosuspended the device between runs.
-
-**Prevention (permanent fix):** Tell vfio-pci never to autosuspend to D3cold:
-
-```sh
-echo 'options vfio-pci enable_runtime_pm=0' | sudo tee /etc/modprobe.d/vee-vfio.conf
-# Arch:
-sudo mkinitcpio -P
-# Fedora/RHEL:
-sudo dracut --regenerate-all --force
-```
-
-`vee daemon install` writes this file automatically (requires sudo prompt).
-
-**Recovery (current session):** D3cold cannot be recovered without a full power cycle. If you see this error:
+GPU is in an unrecoverable power state. Cold reboot the host:
 
 ```sh
 sudo reboot
 ```
 
-After rebooting with `enable_runtime_pm=0` in place, the GPU will stay in D0 for the lifetime of the vfio-pci binding and the error will not recur.
+After rebooting, run `sudo vee start <name>` — the rebind reset cycle runs automatically.
 
 ---
 
-### All connectors disconnected / no display output
-
-GPU display engine did not initialize. Causes:
-
-- `video=` kernel param not set → add it and reboot
-- First boot after adding the param → plug a physical monitor in for the first boot; headless works after that
-- GPU in D3cold → see the D3cold section above
-
----
-
-### Sunshine crashes on every Moonlight disconnect
-
-**Symptom:** `Fatal: Hang detected! Session failed to terminate in 10 seconds` followed by core dump.
-
-**Cause:** Deadlock in session teardown when AV1 or HEVC is used with vaapi on some AMD GPU + Sunshine nightly combinations.
-
-**Fix:** Set `av1_mode = 0` and `hevc_mode = 0` in `sunshine.conf` to force H.264.
-
----
-
-### Moonlight: "Failed to initialize video capture/encoding" (Error 503)
-
-Sunshine started before Xorg was ready. The systemd service override (polling `xrandr`) prevents this. If it still occurs, restart Sunshine manually:
+### All connectors disconnected / no CRTCs
 
 ```sh
-systemctl --user restart sunshine
+sudo dmesg | grep "Cannot find any crtc"
 ```
+
+Causes and fixes:
+
+| Cause | Fix |
+|---|---|
+| `rom_bar: false` | Set `rom_bar: true` in config — guest amdgpu needs VBIOS to init CRTCs |
+| `video=` param missing | Add `video=DP-1:e` (or HDMI-A-1) to GRUB cmdline, reboot |
+| GPU not cold-booted | Cold reboot host, then `sudo vee start` |
 
 ---
 
-### Moonlight: "Starting RTSP handshake failed" (Error 110)
+### Sunshine fails to start — no encoder found
 
-Firewall blocking Sunshine's stream ports:
+```
+Fatal: Unable to find display or encoder during startup
+```
+
+Sunshine starts before the Wayland session is ready, or KMS has no active CRTC. Check:
 
 ```sh
-sudo ufw disable
+vee ssh <name> -- 'for c in /sys/class/drm/card1-*/status; do echo "$c: $(cat $c)"; done'
 ```
 
----
+If all connectors show `disconnected`, the display engine did not initialize — see the CRTCs section above.
 
-### Moonlight reports slow connection
-
-- Check client-side bitrate setting in Moonlight preferences
-- Set bitrate cap via Sunshine web UI at `https://<vm-ip>:47990`
-- Ensure both host and client are on wired ethernet
-
----
-
-### `vee ssh` cannot resolve IP
-
-ARP table may not have an IPv4 entry yet. Ping first:
+If connectors are connected, restart Sunshine:
 
 ```sh
-ping -c1 <vm-ip> && vee ssh <name>
+vee ssh <name> -- 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user restart sunshine'
 ```
-
-With `guest_agent: true` and `qemu-guest-agent` installed, `vee ssh` resolves the IP via QGA without ARP.
 
 ---
 
+### Vulkan: zero accessible devices
+
+Mesa 26 `amdgpu-virtio` bug — see the [Post-install: fix Vulkan](#post-install-fix-vulkan-on-mesa-26) section above.
+
+---
+
+### Host mouse lag / high CPU during VM session
+
+The guest `amdgpu` driver entered a GPU reset loop (`amdgpu-reset-dev` kworker). This is triggered by a GPU hang and burns ~25% host CPU per stuck worker.
+
+Stop the VM:
+
+```sh
+vee stop <name>
 ```
-[ STREAM ESTABLISHED ] :: SIGNAL STRONG :: LATENCY NOMINAL
-```
+
+Then cold reboot the host before restarting. This is a Navi31 hardware limitation — there is no in-session recovery.

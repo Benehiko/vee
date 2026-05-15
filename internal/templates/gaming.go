@@ -791,6 +791,21 @@ else
   checks+=("{\"name\":\"gpu-dri-nodes\",\"ok\":false,\"detail\":\"/dev/dri missing or empty\"}")
 fi
 
+# Vulkan: verify radv can enumerate the amdgpu device.
+# Arch Mesa 26 ships with -D amdgpu-virtio=true which breaks Vulkan on VFIO
+# passthrough GPUs — radv routes init through vdrm_device_connect which fails
+# on non-virtio fds. The fix is to rebuild mesa with -D amdgpu-virtio=false.
+# Run as the user so DISPLAY/Wayland env isn't needed — we just check enumeration.
+vulkan_out=$(vulkaninfo --summary 2>&1 || true)
+if echo "$vulkan_out" | grep -q "PHYSICAL_DEVICE_TYPE_DISCRETE_GPU"; then
+  gpu_name=$(echo "$vulkan_out" | grep "deviceName" | head -1 | awk -F'= ' '{print $2}' | xargs)
+  checks+=("{\"name\":\"vulkan-radv\",\"ok\":true,\"detail\":\"$gpu_name\"}")
+elif echo "$vulkan_out" | grep -q "vdrm_device_connect failed"; then
+  checks+=("{\"name\":\"vulkan-radv\",\"ok\":false,\"detail\":\"amdgpu-virtio Mesa bug — rebuild mesa with -D amdgpu-virtio=false (see docs/gpu-passthrough-gaming.md)\"}")
+else
+  checks+=("{\"name\":\"vulkan-radv\",\"ok\":false,\"detail\":\"no discrete GPU in Vulkan enumeration\"}")
+fi
+
 # SPICE vdagent: the virtio-serial port must be present as a chardev.
 # The kernel exposes it as /dev/virtio-ports/com.redhat.spice.0 (symlink to
 # the vportNpM device). Its presence proves QEMU wired up the SPICE vdagent
