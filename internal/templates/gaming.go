@@ -157,6 +157,7 @@ func NewGamingArchConfig(ctx context.Context, p provider.Provider, name string, 
 	cfg.SPICE = &vm.SPICEConfig{Port: 0, DisableTicketing: true}
 	cfg.Services = []vm.ServiceEntry{
 		{Name: "spice", Port: 0, Protocol: vm.ServiceSPICE}, // port filled by manager
+		{Name: "sunshine", Port: 47990, Protocol: vm.ServiceHTTPS},
 	}
 
 	if opts.Passthrough {
@@ -413,6 +414,7 @@ pacstrap /mnt base linux linux-firmware grub efibootmgr sudo \
   plasma sddm xdg-desktop-portal-kde \
   steam wine winetricks gamemode lib32-gamemode \
   pipewire pipewire-pulse pipewire-alsa wireplumber \
+  go git base-devel \
   %s
 
 echo "==> vee-install: stage=pacstrap-done"
@@ -471,6 +473,20 @@ chmod 700 /mnt/home/"$USER"/.ssh
 echo "%s" > /mnt/home/"$USER"/.ssh/authorized_keys
 chmod 600 /mnt/home/"$USER"/.ssh/authorized_keys
 arch-chroot /mnt chown -R "$USER":"$USER" /home/"$USER"/.ssh
+
+echo "==> vee-install: stage=yay"
+# Build and install yay (AUR helper) as the gamer user inside the chroot.
+# yay is a small Go binary — build is fast and does not require a GPU.
+# GOPATH is set to a temp dir so the cache lands on the real disk, not tmpfs.
+arch-chroot /mnt su - "$USER" -c '
+  set -euo pipefail
+  export GOPATH=/tmp/gopath
+  mkdir -p /tmp/yay-build
+  cd /tmp/yay-build
+  git clone https://aur.archlinux.org/yay.git .
+  makepkg -si --noconfirm
+'
+rm -rf /mnt/tmp/yay-build /mnt/tmp/gopath
 
 # Performance tuning
 cat > /mnt/etc/security/limits.d/99-gaming.conf <<'EOF'
@@ -533,6 +549,7 @@ EOF
 
 cat > /mnt/etc/vee-firstboot.sh <<'FBEOF'
 #!/bin/bash
+set -euo pipefail
 GW=$(ip route show default | awk '/default/{print $3; exit}')
 if [ -n "$GW" ]; then
   sed -i '/vee-host/d' /etc/hosts
@@ -540,6 +557,34 @@ if [ -n "$GW" ]; then
 fi
 systemctl enable --now systemd-journal-upload
 sysctl --system
+
+VEEUSER=$(id -nu 1000 2>/dev/null || echo gamer)
+
+echo "==> vee-firstboot: stage=sunshine-install"
+# Install sunshine from AUR using yay (installed at image build time).
+sudo -u "$VEEUSER" yay -S --noconfirm --answerdiff None --answerclean None sunshine
+
+echo "==> vee-firstboot: stage=sunshine-config"
+SUNSHINE_CONF_DIR="/home/$VEEUSER/.config/sunshine"
+mkdir -p "$SUNSHINE_CONF_DIR"
+
+# Sane defaults: KMS capture for amdgpu passthrough, VAAPI encoder,
+# no web-UI credential gate on first launch (pin-based pairing only).
+cat > "$SUNSHINE_CONF_DIR/sunshine.conf" <<'SEOF'
+# Sunshine configuration — managed by vee
+port = 47990
+capture = kms
+encoder = vaapi
+sunshine_name = vee-gaming
+min_log_level = info
+SEOF
+chown -R "$VEEUSER:$VEEUSER" "$SUNSHINE_CONF_DIR"
+
+echo "==> vee-firstboot: stage=sunshine-enable"
+loginctl enable-linger "$VEEUSER"
+VEEUID=$(id -u "$VEEUSER")
+sudo -u "$VEEUSER" systemctl --user enable sunshine
+sudo -u "$VEEUSER" XDG_RUNTIME_DIR="/run/user/$VEEUID" systemctl --user start sunshine || true
 FBEOF
 chmod +x /mnt/etc/vee-firstboot.sh
 
@@ -711,6 +756,19 @@ pkg_check plasma-desktop
 pkg_check pipewire
 pkg_check wireplumber
 pkg_check gamemode
+pkg_check yay
+pkg_check sunshine
+
+# Sunshine user service (runs under gamer user, enabled via linger)
+VEEUSER=$(id -nu 1000 2>/dev/null || echo gamer)
+VEEUID=$(id -u "$VEEUSER" 2>/dev/null || echo 1000)
+sunshine_enabled=$(sudo -u "$VEEUSER" XDG_RUNTIME_DIR="/run/user/$VEEUID" systemctl --user is-enabled sunshine 2>/dev/null || echo "not-found")
+if [[ "$sunshine_enabled" == "enabled" ]]; then
+  checks+=("{\"name\":\"svc-user:sunshine\",\"ok\":true,\"detail\":\"enabled\"}")
+else
+  checks+=("{\"name\":\"svc-user:sunshine\",\"ok\":false,\"detail\":\"enabled=$sunshine_enabled\"}")
+fi
+file_check sunshine-conf "/home/$VEEUSER/.config/sunshine/sunshine.conf"
 
 # --- Point 3: GPU/SPICE validation ------------------------------------------
 # /dev/dri must exist — virtio-gpu creates at least renderD128 at boot.
