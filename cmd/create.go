@@ -19,6 +19,7 @@ import (
 var (
 	createNoStart       bool
 	createNoAutoInstall bool
+	createReinstall     bool
 	createTemplate      string
 	createMemory        string
 	createCPUs          int
@@ -165,6 +166,20 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
 				Token:  strings.TrimSpace(string(tokenBytes)),
 				Labels: labels,
 			}
+		}
+
+		if createReinstall {
+			mgr := vm.NewManager(prov)
+			if state, serr := mgr.LoadState(name); serr == nil && state.Running {
+				fmt.Fprintf(os.Stderr, "Stopping %q before reinstall...\n", name)
+				if serr := mgr.Stop(cmd.Context(), name); serr != nil {
+					return fmt.Errorf("stop VM before reinstall: %w", serr)
+				}
+			}
+			if err := mgr.Delete(name); err != nil {
+				return fmt.Errorf("delete VM before reinstall: %w", err)
+			}
+			fmt.Fprintf(os.Stderr, "Deleted %q — reinstalling from scratch.\n", name)
 		}
 
 		cfg, err := build.Build(cmd.Context(), prov, opts)
@@ -321,6 +336,7 @@ func optsFromFlags(cmd *cobra.Command, name string) build.Opts {
 func init() {
 	createCmd.Flags().BoolVar(&createNoStart, "no-start", false, "Create VM config without starting it")
 	createCmd.Flags().BoolVar(&createNoAutoInstall, "no-auto-install", false, "Skip the auto-install pass; boot directly from the primary disk (use when the disk already has an OS)")
+	createCmd.Flags().BoolVar(&createReinstall, "reinstall", false, "Delete the existing VM (disk + config) and reinstall from scratch; stops the VM first if running")
 	createCmd.Flags().StringVar(&createTemplate, "template", "ubuntu-server", "VM template: ubuntu-server, gaming, torrent, devbox, server, windows")
 	createCmd.Flags().StringVar(&createMemory, "memory", "2G", "Memory size (overrides template default)")
 	createCmd.Flags().IntVar(&createCPUs, "cpus", 2, "Number of vCPUs (overrides template default)")
