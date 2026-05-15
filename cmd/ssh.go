@@ -1,9 +1,12 @@
 package cmd
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
+	"strings"
 	"syscall"
 
 	"github.com/Benehiko/vee/internal/vm"
@@ -97,12 +100,16 @@ Examples:
 			return fmt.Errorf("VM %q has no SSH port and is not on a bridge network; check --ssh-port or --nic-mode", name)
 		}
 
-		// Use a vee-managed known_hosts so that recreated VMs (same IP, new
-		// host key) don't break ~/.ssh/known_hosts. Accept new keys silently;
-		// changed keys still error so MITM is detected.
+		// Use a vee-managed known_hosts so that recreated VMs don't pollute
+		// ~/.ssh/known_hosts. Scrub any stale entry for this host before
+		// connecting — vee tracks VM identity, so a changed host key always
+		// means reinstall, never MITM.
 		veeKnownHosts := ""
 		if home, herr := os.UserHomeDir(); herr == nil {
 			veeKnownHosts = home + "/.vee/ssh/known_hosts"
+		}
+		if veeKnownHosts != "" {
+			scrubKnownHost(veeKnownHosts, host, port)
 		}
 
 		sshArgs := buildSSHArgs(user, host, port, sshIdentity, veeKnownHosts, extra, sshExtraFlags)
@@ -147,4 +154,43 @@ func init() {
 	sshCmd.Flags().StringVarP(&sshUser, "user", "u", "", "SSH username (default: cloud-init user)")
 	sshCmd.Flags().StringVarP(&sshIdentity, "identity", "i", "", "SSH identity file (private key)")
 	sshCmd.Flags().StringArrayVar(&sshExtraFlags, "ssh-flag", nil, "Extra flags passed to ssh(1) (repeatable)")
+}
+
+// scrubKnownHost removes all lines matching host (and [host]:port for non-22
+// ports) from the vee-managed known_hosts file. Called before every connect so
+// a reinstalled VM with the same IP never blocks with a host-key-changed error.
+func scrubKnownHost(knownHostsPath, host string, port int) {
+	data, err := os.ReadFile(knownHostsPath)
+	if err != nil {
+		return
+	}
+
+	// Build the key patterns we want to drop: bare host for port 22,
+	// bracketed [host]:port for any other port.
+	drop := host
+	if port != 22 {
+		drop = fmt.Sprintf("[%s]:%d", host, port)
+	}
+
+	var kept []string
+	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	for scanner.Scan() {
+		line := scanner.Text()
+		// Each known_hosts line starts with the host pattern (possibly
+		// comma-separated), then a space, then the key type and key.
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			kept = append(kept, line)
+			continue
+		}
+		if !slices.Contains(strings.Split(fields[0], ","), drop) {
+			kept = append(kept, line)
+		}
+	}
+
+	out := strings.Join(kept, "\n")
+	if len(kept) > 0 {
+		out += "\n"
+	}
+	_ = os.WriteFile(knownHostsPath, []byte(out), 0o600)
 }
