@@ -497,6 +497,8 @@ cat > /mnt/etc/security/limits.d/99-gaming.conf <<'EOF'
 * hard memlock unlimited
 * soft rtprio 99
 * hard rtprio 99
+* soft nice -11
+* hard nice -11
 EOF
 
 cat > /mnt/etc/sysctl.d/99-gaming.conf <<'EOF'
@@ -505,6 +507,38 @@ kernel.split_lock_mitigate=0
 vm.nr_hugepages=512
 net.core.rmem_max=26214400
 net.core.wmem_max=26214400
+EOF
+
+# PipeWire: raise quantum to 1024 frames to absorb VM CPU scheduling jitter.
+# The default 256-frame quantum causes xruns when QEMU vCPU delivery is
+# delayed by host preemption — manifests as crackling in Sunshine streams.
+mkdir -p /mnt/etc/pipewire/pipewire.conf.d
+cat > /mnt/etc/pipewire/pipewire.conf.d/99-vm-quantum.conf <<'EOF'
+context.properties = {
+    default.clock.rate          = 48000
+    default.clock.quantum       = 1024
+    default.clock.min-quantum   = 1024
+    default.clock.max-quantum   = 8192
+}
+EOF
+
+# WirePlumber: disable ALSA timer scheduling (tsched) and set a matching
+# headroom. tsched relies on the system clock staying smooth — inside a VM
+# the clock can stutter, causing the ALSA period to drift and produce xruns.
+mkdir -p /mnt/etc/wireplumber/wireplumber.conf.d
+cat > /mnt/etc/wireplumber/wireplumber.conf.d/99-vm-alsa.conf <<'EOF'
+monitor.alsa.rules = [
+    {
+        matches = [ { node.name = "~alsa_*" } ]
+        actions = {
+            update-props = {
+                api.alsa.period-size   = 1024
+                api.alsa.headroom      = 8192
+                api.alsa.disable-tsched = true
+            }
+        }
+    }
+]
 EOF
 
 # GRUB kernel params. console=ttyS0,115200 is critical for vee: vee's boot
@@ -590,6 +624,20 @@ Environment=LIBVA_DRM_DEVICE=/dev/dri/renderD129
 Environment=LIBVA_DRIVER_NAME=radeonsi
 SEOF
 
+# PipeWire RT priority drop-ins — rtkit grants elevated scheduling but only
+# after PipeWire's direct setpriority() attempt fails. The drop-ins ensure
+# the unit has sufficient RLIMIT_NICE/RLIMIT_RTPRIO for rtkit to act on.
+mkdir -p "/home/$VEEUSER/.config/systemd/user/pipewire.service.d"
+cat > "/home/$VEEUSER/.config/systemd/user/pipewire.service.d/99-limits.conf" <<'SEOF'
+[Service]
+LimitNICE=-11
+LimitRTPRIO=99
+LimitMEMLOCK=infinity
+SEOF
+mkdir -p "/home/$VEEUSER/.config/systemd/user/wireplumber.service.d"
+cp "/home/$VEEUSER/.config/systemd/user/pipewire.service.d/99-limits.conf" \
+   "/home/$VEEUSER/.config/systemd/user/wireplumber.service.d/99-limits.conf"
+
 chown -R "$VEEUSER:$VEEUSER" "$SUNSHINE_CONF_DIR" "/home/$VEEUSER/.config/systemd"
 
 echo "==> vee-firstboot: stage=sunshine-enable"
@@ -603,7 +651,7 @@ chmod +x /mnt/etc/vee-firstboot.sh
 %s
 
 echo "==> vee-install: stage=services"
-arch-chroot /mnt systemctl enable NetworkManager sshd sddm qemu-guest-agent vee-firstboot
+arch-chroot /mnt systemctl enable NetworkManager sshd sddm qemu-guest-agent vee-firstboot rtkit-daemon
 arch-chroot /mnt systemctl --global enable pipewire pipewire-pulse wireplumber
 %s
 
@@ -770,6 +818,10 @@ pkg_check wireplumber
 pkg_check gamemode
 pkg_check yay
 pkg_check sunshine
+
+# PipeWire VM audio tuning — verify config files are in place
+file_check pipewire-vm-quantum /etc/pipewire/pipewire.conf.d/99-vm-quantum.conf
+file_check wireplumber-vm-alsa /etc/wireplumber/wireplumber.conf.d/99-vm-alsa.conf
 
 # Sunshine user service (runs under gamer user, enabled via linger)
 VEEUSER=$(id -nu 1000 2>/dev/null || echo gamer)
