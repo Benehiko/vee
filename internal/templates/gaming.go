@@ -156,8 +156,8 @@ func NewGamingArchConfig(ctx context.Context, p provider.Provider, name string, 
 	// virtio GPU, or as the KasmVNC capture surface for passthrough GPU.
 	cfg.SPICE = &vm.SPICEConfig{Port: 0, DisableTicketing: true}
 	cfg.Services = []vm.ServiceEntry{
-		{Name: "spice", Port: 0, Protocol: vm.ServiceSPICE}, // port filled by manager
-		{Name: "sunshine", Port: 47990, Protocol: vm.ServiceHTTPS},
+		{Name: "spice", Port: 0, Protocol: vm.ServiceSPICE},        // port filled by manager
+		{Name: "sunshine", Port: 47991, Protocol: vm.ServiceHTTPS}, // web UI = streaming port + 1
 	}
 
 	if opts.Passthrough {
@@ -414,6 +414,7 @@ pacstrap /mnt base linux linux-firmware grub efibootmgr sudo \
   plasma sddm xdg-desktop-portal-kde \
   steam wine winetricks gamemode lib32-gamemode \
   pipewire pipewire-pulse pipewire-alsa wireplumber \
+  libva-mesa-driver libva-utils \
   go git base-devel \
   %s
 
@@ -520,7 +521,7 @@ mkdir -p /mnt/etc/sddm.conf.d
 cat > /mnt/etc/sddm.conf.d/autologin.conf <<EOF
 [Autologin]
 User=$USER
-Session=plasmawayland
+Session=plasma
 EOF
 
 # journal-upload to vee host (gateway resolved at runtime)
@@ -569,10 +570,10 @@ SUNSHINE_CONF_DIR="/home/$VEEUSER/.config/sunshine"
 mkdir -p "$SUNSHINE_CONF_DIR"
 
 # Sane defaults: KMS capture for amdgpu passthrough, VAAPI encoder.
-# Sunshine's web UI listens on port+1, so port=47989 → web UI on 47990.
+# Sunshine's web UI listens on port+1, so port=47990 → web UI on 47991.
 cat > "$SUNSHINE_CONF_DIR/sunshine.conf" <<'SEOF'
 # Sunshine configuration — managed by vee
-port = 47989
+port = 47990
 capture = kms
 encoder = vaapi
 sunshine_name = vee-gaming
