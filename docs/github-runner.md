@@ -39,6 +39,9 @@ plugins as a single reproducible artifact. The pinned version lives in
 - Subordinate UID/GID ranges are allocated for user namespaces.
 - `loginctl enable-linger` keeps the user services alive with no active login.
 - containerd and BuildKit run as `systemd --user` services and start on boot.
+- An AppArmor profile is installed for `/usr/local/bin/rootlesskit`, because
+  Ubuntu 24.04 sets `kernel.apparmor_restrict_unprivileged_userns=1` and would
+  otherwise block the unprivileged user namespaces RootlessKit needs.
 
 ### Using it in CI jobs
 

@@ -97,6 +97,20 @@ WantedBy=multi-user.target
 
 	vsockService := vsockSSHAgentService()
 
+	// Ubuntu 24.04 sets kernel.apparmor_restrict_unprivileged_userns=1, which
+	// blocks unprivileged user namespaces unless the binary creating them has a
+	// matching AppArmor profile. The nerdctl-full RootlessKit lives at
+	// /usr/local/bin/rootlesskit (the stock Ubuntu profile only covers
+	// /usr/bin/rootlesskit), so ship a profile for that path.
+	rootlesskitAppArmor := `abi <abi/4.0>,
+include <tunables/global>
+
+profile rootlesskit /usr/local/bin/rootlesskit flags=(unconfined) {
+  userns,
+  include if exists <local/rootlesskit>
+}
+`
+
 	writeFiles := []vm.CloudInitWriteFile{
 		{
 			Path:        "/etc/actions-runner/runner.env",
@@ -112,6 +126,11 @@ WantedBy=multi-user.target
 		{
 			Path:        "/etc/systemd/system/vee-ssh-agent.service",
 			Content:     vsockService,
+			Permissions: "0644",
+		},
+		{
+			Path:        "/etc/apparmor.d/usr.local.bin.rootlesskit",
+			Content:     rootlesskitAppArmor,
 			Permissions: "0644",
 		},
 	}
@@ -141,6 +160,9 @@ WantedBy=multi-user.target
 		// Kernel sysctl required for rootless ping and privileged-port mapping.
 		`printf 'net.ipv4.ping_group_range=0 2147483647\nnet.ipv4.ip_unprivileged_port_start=0\n' > /etc/sysctl.d/99-rootless.conf`,
 		"sysctl --system",
+		// Load the RootlessKit AppArmor profile written above so unprivileged
+		// user namespaces are permitted on Ubuntu 24.04.
+		"apparmor_parser -r /etc/apparmor.d/usr.local.bin.rootlesskit",
 		// Allow the runner's user systemd instance to keep containerd and
 		// BuildKit running without an active login session. Lingering also
 		// starts systemd --user now; wait for its D-Bus socket before using it.
@@ -149,8 +171,8 @@ WantedBy=multi-user.target
 		// Run the bundled setup tools as the runner user. `install` brings up
 		// user-scoped rootless containerd; `install-buildkit` adds the rootless
 		// BuildKit daemon. Both register and start systemd --user services.
-		`sudo -u runner XDG_RUNTIME_DIR=/run/user/1001 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus PATH=/usr/local/bin:/usr/bin:/bin /usr/local/bin/containerd-rootless-setup-tool.sh install`,
-		`sudo -u runner XDG_RUNTIME_DIR=/run/user/1001 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus PATH=/usr/local/bin:/usr/bin:/bin /usr/local/bin/containerd-rootless-setup-tool.sh install-buildkit`,
+		`sudo -u runner XDG_RUNTIME_DIR=/run/user/1001 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus PATH=/usr/local/bin:/usr/bin:/bin /usr/local/bin/containerd-rootless-setuptool.sh install`,
+		`sudo -u runner XDG_RUNTIME_DIR=/run/user/1001 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus PATH=/usr/local/bin:/usr/bin:/bin /usr/local/bin/containerd-rootless-setuptool.sh install-buildkit`,
 		// Enable the user services so containerd + BuildKit start on every boot
 		// (lingering, set above, keeps them running with no active session).
 		"sudo -u runner XDG_RUNTIME_DIR=/run/user/1001 systemctl --user enable containerd buildkit",
