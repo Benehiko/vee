@@ -40,6 +40,7 @@ vee stop myvm         # graceful shutdown
 ║ jellyfin          ║ Jellyfin · NFS/SMB/host-dir/block/USB media · mDNS   ║
 ║ windows           ║ Windows · UEFI secboot · TPM 2.0                     ║
 ║ docker            ║ Alpine Linux · Docker-over-TCP                       ║
+║ github-runner     ║ Self-hosted Actions runner · rootless containerd     ║
 ╚═══════════════════╩══════════════════════════════════════════════════════╝
 ```
 
