@@ -69,6 +69,22 @@ Relevant environment variables (set in `/etc/actions-runner/runner.env`):
 There is no Docker daemon and no `DOCKER_HOST`; use the `nerdctl` CLI, which is
 command-line compatible with `docker`.
 
+## Host build tools
+
+A host toolchain is installed alongside the container stack so CI jobs that
+compile directly on the runner (rather than inside a container) have what they
+need — in particular Go builds with `CGO_ENABLED=1`:
+
+- `build-essential` — `gcc`, `g++`, `make` and `libc6-dev` (C/C++ compilers,
+  Make, and the C standard library headers).
+- `pkg-config` — resolves `#cgo pkg-config:` directives in cgo packages
+  (sqlite3, image libraries, and other C-library wrappers).
+
+The runner itself does not ship a Go toolchain; CI workflows install Go with
+`actions/setup-go`, which picks up `gcc` from `PATH` for cgo.
+
+These are installed as cloud-init `Packages` in `internal/templates/runner.go`.
+
 ## Notes
 
 - The runner is also added to the `kvm` group so nested e2e tests can use KVM

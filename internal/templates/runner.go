@@ -233,10 +233,13 @@ profile rootlesskit /usr/local/bin/rootlesskit flags=(unconfined) {
 			SSHKeys:     sshKeys,
 			// uidmap (newuidmap/newgidmap) and dbus-user-session are mandatory for
 			// rootless containerd; iptables is needed by RootlessKit's network
-			// setup. The nerdctl-full tarball bundles the remaining binaries.
+			// setup. build-essential (gcc, g++, make, libc6-dev) plus pkg-config
+			// give CI jobs a host toolchain for Go cgo and native build steps.
+			// The nerdctl-full tarball bundles the remaining binaries.
 			Packages: []string{
 				"curl", "ca-certificates", "ufw", "qemu-guest-agent", "jq",
 				"libicu-dev", "socat", "uidmap", "dbus-user-session", "iptables",
+				"build-essential", "pkg-config",
 			},
 			RunCmds:    runCmds,
 			WriteFiles: writeFiles,
