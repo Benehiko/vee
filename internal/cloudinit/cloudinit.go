@@ -120,6 +120,13 @@ func renderUserData(cfg *Config) (string, error) {
 		fmt.Fprintf(&sb, "  - name: %s\n", cfg.User)
 		sb.WriteString("    sudo: ALL=(ALL) NOPASSWD:ALL\n")
 		sb.WriteString("    shell: /bin/bash\n")
+		// no_user_group makes useradd skip creating a per-user primary group
+		// (useradd -N). Without it, a User name that collides with an existing
+		// system group — e.g. "admin", which ships as a group in the Ubuntu
+		// cloud image — makes useradd fail with "group <name> exists", which
+		// aborts the whole users_groups module so the user is never created.
+		// With -N the account joins the default group (gid 100, "users").
+		sb.WriteString("    no_user_group: true\n")
 		if len(cfg.SSHKeys) > 0 {
 			sb.WriteString("    ssh_authorized_keys:\n")
 			for _, k := range cfg.SSHKeys {
