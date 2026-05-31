@@ -61,21 +61,86 @@ func NewGitHubRunnerConfig(
 
 	conf := p.Config()
 	vmDir := filepath.Join(conf.StoragePath, name)
+
+	writeFiles, runCmds := githubRunnerCloudInit(runnerURL, runnerToken, name, labels)
+
+	cfg := &vm.VMConfig{
+		Name:     name,
+		Template: "github-runner",
+		Memory:   "4G",
+		CPUs:     4,
+		Sockets:  1,
+		Cores:    4,
+		Threads:  1,
+		CPUModel: conf.DefaultCPUModel,
+		NIC: vm.NICConfig{
+			Mode:  "user",
+			Model: "virtio-net-pci",
+		},
+		GPU:        vm.GPUConfig{Mode: vm.GPUNone},
+		Headless:   true,
+		GuestAgent: true,
+		SSHPort:    deterministicSSHPort(name),
+		UEFI:       vm.UEFIConfig{Enabled: false},
+		Disks: []vm.DiskConfig{
+			{
+				Path:        filepath.Join(vmDir, "storage", "disk-os.img"),
+				Size:        conf.DefaultDiskSize,
+				Format:      "qcow2",
+				Interface:   "virtio",
+				Media:       "disk",
+				Cache:       "writeback",
+				BackingFile: img.AbsolutePath(),
+			},
+		},
+		CloudInit: &vm.CloudInitConfig{
+			Hostname:    name,
+			User:        "admin",
+			DefaultUser: images.DefaultUser(images.DistroUbuntu),
+			SSHKeys:     sshKeys,
+			// uidmap (newuidmap/newgidmap) and dbus-user-session are mandatory for
+			// rootless containerd; iptables is needed by RootlessKit's network
+			// setup. build-essential (gcc, g++, make, libc6-dev) plus pkg-config
+			// give CI jobs a host toolchain for Go cgo and native build steps.
+			// The nerdctl-full tarball bundles the remaining binaries.
+			Packages: []string{
+				"curl", "ca-certificates", "ufw", "qemu-guest-agent", "jq",
+				"libicu-dev", "socat", "uidmap", "dbus-user-session", "iptables",
+				"build-essential", "pkg-config",
+			},
+			RunCmds:    runCmds,
+			WriteFiles: writeFiles,
+		},
+		CreatedAt: time.Now(),
+	}
+
+	return cfg, nil
+}
+
+// githubRunnerCloudInit builds the write_files and runcmd entries for a
+// self-hosted GitHub Actions runner. It is split out from NewGitHubRunnerConfig
+// (which also downloads the base image and needs a provider) so the cloud-init
+// payload can be rendered and asserted in unit tests with no network or
+// filesystem dependencies.
+//
+// Critically, the runner user's UID is NOT hardcoded. cloud-init creates the
+// distro default user (ubuntu, UID 1000) and the custom admin user (UID 1001),
+// so a pinned 1001 collides and `useradd` aborts — leaving no runner user, so
+// registration never runs and the runner never appears on GitHub. Instead the
+// runner takes the next free UID at boot, and the UID-dependent rootless paths
+// (XDG_RUNTIME_DIR plus the containerd/BuildKit sockets) are appended to
+// runner.env from $(id -u runner) before any rootless setup runs.
+func githubRunnerCloudInit(runnerURL, runnerToken, name string, labels []string) ([]vm.CloudInitWriteFile, []string) {
+	if len(labels) == 0 {
+		labels = []string{"self-hosted", "linux", "kvm"}
+	}
 	labelStr := strings.Join(labels, ",")
 
-	// The runner user's UID is fixed at 1001 below (admin/default user takes 1000),
-	// so its rootless XDG_RUNTIME_DIR and socket paths are known ahead of boot.
-	// Exporting them into the runner environment lets CI jobs invoke nerdctl and
-	// BuildKit against the rootless stack with no extra setup. nerdctl talks to
-	// the user containerd socket; `nerdctl build` talks to the user BuildKit.
-	const runnerUID = 1001
-	runnerEnv := fmt.Sprintf("RUNNER_URL=%s\nRUNNER_TOKEN=%s\nRUNNER_LABELS=%s\nRUNNER_NAME=%s\n"+
-		"XDG_RUNTIME_DIR=/run/user/%d\n"+
-		"CONTAINERD_ADDRESS=/run/user/%d/containerd/containerd.sock\n"+
-		"BUILDKIT_HOST=unix:///run/user/%d/buildkit/buildkitd.sock\n"+
-		"CONTAINERD_NAMESPACE=default\n",
-		runnerURL, runnerToken, labelStr, name,
-		runnerUID, runnerUID, runnerUID)
+	// runner.env ships only the static vars; the runcmds derive RUNNER_UID and
+	// append the XDG_RUNTIME_DIR / CONTAINERD_ADDRESS / BUILDKIT_HOST /
+	// CONTAINERD_NAMESPACE lines once the runner user exists.
+	runnerEnv := fmt.Sprintf("RUNNER_URL=%s\nRUNNER_TOKEN=%s\nRUNNER_LABELS=%s\nRUNNER_NAME=%s\n",
+		runnerURL, runnerToken, labelStr, name)
 
 	actionsRunnerService := `[Unit]
 Description=GitHub Actions Runner
@@ -142,11 +207,22 @@ profile rootlesskit /usr/local/bin/rootlesskit flags=(unconfined) {
 	runCmds := []string{
 		// Create the runner user. Rootless containerd requires a real login user
 		// with a home directory and a user systemd instance, so this is a normal
-		// (UID 1001) account, not a --system/nologin one. The runner software
-		// still lives in /opt/actions-runner.
-		"useradd --create-home --uid 1001 --shell /bin/bash runner",
+		// account, not a --system/nologin one. The UID is NOT pinned: cloud-init
+		// already consumed 1000 (ubuntu) and 1001 (admin), so let useradd pick
+		// the next free UID. The runner software still lives in /opt/actions-runner.
+		"useradd --create-home --shell /bin/bash runner",
+		// Resolve the runner's actual UID and append the UID-dependent rootless
+		// paths to runner.env. Everything downstream reads RUNNER_UID from this
+		// file rather than assuming a fixed value.
+		`RUNNER_UID=$(id -u runner); { ` +
+			`echo "RUNNER_UID=${RUNNER_UID}"; ` +
+			`echo "XDG_RUNTIME_DIR=/run/user/${RUNNER_UID}"; ` +
+			`echo "CONTAINERD_ADDRESS=/run/user/${RUNNER_UID}/containerd/containerd.sock"; ` +
+			`echo "BUILDKIT_HOST=unix:///run/user/${RUNNER_UID}/buildkit/buildkitd.sock"; ` +
+			`echo "CONTAINERD_NAMESPACE=default"; ` +
+			`} >> /etc/actions-runner/runner.env`,
 		"mkdir -p /opt/actions-runner /etc/actions-runner",
-		"chown runner:runner /etc/actions-runner /opt/actions-runner",
+		"chown runner:runner /etc/actions-runner /opt/actions-runner /etc/actions-runner/runner.env",
 		// Add runner to kvm group so e2e tests can use KVM acceleration.
 		"usermod -aG kvm runner",
 		// Allocate subordinate UID/GID ranges for rootless user namespaces.
@@ -167,15 +243,15 @@ profile rootlesskit /usr/local/bin/rootlesskit flags=(unconfined) {
 		// BuildKit running without an active login session. Lingering also
 		// starts systemd --user now; wait for its D-Bus socket before using it.
 		"loginctl enable-linger runner",
-		`for i in $(seq 1 30); do [ -S /run/user/1001/bus ] && break; sleep 1; done`,
+		`RUNNER_UID=$(id -u runner); for i in $(seq 1 30); do [ -S /run/user/${RUNNER_UID}/bus ] && break; sleep 1; done`,
 		// Run the bundled setup tools as the runner user. `install` brings up
 		// user-scoped rootless containerd; `install-buildkit` adds the rootless
 		// BuildKit daemon. Both register and start systemd --user services.
-		`sudo -u runner XDG_RUNTIME_DIR=/run/user/1001 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus PATH=/usr/local/bin:/usr/bin:/bin /usr/local/bin/containerd-rootless-setuptool.sh install`,
-		`sudo -u runner XDG_RUNTIME_DIR=/run/user/1001 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus PATH=/usr/local/bin:/usr/bin:/bin /usr/local/bin/containerd-rootless-setuptool.sh install-buildkit`,
+		`RUNNER_UID=$(id -u runner); sudo -u runner XDG_RUNTIME_DIR=/run/user/${RUNNER_UID} DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${RUNNER_UID}/bus PATH=/usr/local/bin:/usr/bin:/bin /usr/local/bin/containerd-rootless-setuptool.sh install`,
+		`RUNNER_UID=$(id -u runner); sudo -u runner XDG_RUNTIME_DIR=/run/user/${RUNNER_UID} DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${RUNNER_UID}/bus PATH=/usr/local/bin:/usr/bin:/bin /usr/local/bin/containerd-rootless-setuptool.sh install-buildkit`,
 		// Enable the user services so containerd + BuildKit start on every boot
 		// (lingering, set above, keeps them running with no active session).
-		"sudo -u runner XDG_RUNTIME_DIR=/run/user/1001 systemctl --user enable containerd buildkit",
+		`RUNNER_UID=$(id -u runner); sudo -u runner XDG_RUNTIME_DIR=/run/user/${RUNNER_UID} systemctl --user enable containerd buildkit`,
 		// Download and extract the latest runner release.
 		`RUNNER_VERSION=$(curl -fsSL -o /dev/null -w '%{url_effective}' https://github.com/actions/runner/releases/latest | sed 's|.*/v||')`,
 		`curl -fsSL "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz" -o /tmp/actions-runner.tar.gz`,
@@ -197,55 +273,5 @@ profile rootlesskit /usr/local/bin/rootlesskit flags=(unconfined) {
 		"systemctl enable --now qemu-guest-agent",
 	}
 
-	cfg := &vm.VMConfig{
-		Name:     name,
-		Template: "github-runner",
-		Memory:   "4G",
-		CPUs:     4,
-		Sockets:  1,
-		Cores:    4,
-		Threads:  1,
-		CPUModel: conf.DefaultCPUModel,
-		NIC: vm.NICConfig{
-			Mode:  "user",
-			Model: "virtio-net-pci",
-		},
-		GPU:        vm.GPUConfig{Mode: vm.GPUNone},
-		Headless:   true,
-		GuestAgent: true,
-		SSHPort:    deterministicSSHPort(name),
-		UEFI:       vm.UEFIConfig{Enabled: false},
-		Disks: []vm.DiskConfig{
-			{
-				Path:        filepath.Join(vmDir, "storage", "disk-os.img"),
-				Size:        conf.DefaultDiskSize,
-				Format:      "qcow2",
-				Interface:   "virtio",
-				Media:       "disk",
-				Cache:       "writeback",
-				BackingFile: img.AbsolutePath(),
-			},
-		},
-		CloudInit: &vm.CloudInitConfig{
-			Hostname:    name,
-			User:        "admin",
-			DefaultUser: images.DefaultUser(images.DistroUbuntu),
-			SSHKeys:     sshKeys,
-			// uidmap (newuidmap/newgidmap) and dbus-user-session are mandatory for
-			// rootless containerd; iptables is needed by RootlessKit's network
-			// setup. build-essential (gcc, g++, make, libc6-dev) plus pkg-config
-			// give CI jobs a host toolchain for Go cgo and native build steps.
-			// The nerdctl-full tarball bundles the remaining binaries.
-			Packages: []string{
-				"curl", "ca-certificates", "ufw", "qemu-guest-agent", "jq",
-				"libicu-dev", "socat", "uidmap", "dbus-user-session", "iptables",
-				"build-essential", "pkg-config",
-			},
-			RunCmds:    runCmds,
-			WriteFiles: writeFiles,
-		},
-		CreatedAt: time.Now(),
-	}
-
-	return cfg, nil
+	return writeFiles, runCmds
 }
