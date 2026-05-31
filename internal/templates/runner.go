@@ -271,10 +271,16 @@ WantedBy=timers.target
 
 	writeFiles := []vm.CloudInitWriteFile{
 		{
+			// No Owner here. cloud-init's write_files module runs in the config
+			// stage, BEFORE runcmd creates the runner user — setting
+			// Owner: "runner:runner" makes the whole write_files module abort with
+			// getpwnam("runner") "name not found", so none of the unit files below
+			// get written and the runner never starts. runcmd chowns this file to
+			// runner once the user exists (see "chown runner:runner ...
+			// /etc/actions-runner/runner.env" below), so root:root here is fine.
 			Path:        "/etc/actions-runner/runner.env",
 			Content:     runnerEnv,
 			Permissions: "0600",
-			Owner:       "runner:runner",
 		},
 		{
 			Path:        "/etc/systemd/system/actions-runner.service",
