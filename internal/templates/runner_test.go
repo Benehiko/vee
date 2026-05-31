@@ -227,3 +227,37 @@ func TestGitHubRunnerSSHKey(t *testing.T) {
 		t.Error("ssh setup ran without an injected key")
 	}
 }
+
+// TestGitHubRunnerNoWriteFileOwnsAsRunner guards a cloud-init ordering bug:
+// write_files runs in the config stage, BEFORE runcmd creates the "runner" user.
+// Any write_file with Owner "runner:..." makes the whole write_files module abort
+// (getpwnam: name not found), so the unit files never land and the runner never
+// starts. Ownership of /etc/actions-runner/runner.env must instead be fixed up by
+// a runcmd chown after useradd. This test fails if any write_file regresses to a
+// runner owner. It checks fresh, restore and no-key paths.
+func TestGitHubRunnerNoWriteFileOwnsAsRunner(t *testing.T) {
+	priv := []byte("-----BEGIN OPENSSH PRIVATE KEY-----\nFAKE\n-----END OPENSSH PRIVATE KEY-----\n")
+	for _, tc := range []struct {
+		name     string
+		restored []RunnerCredFile
+		key      []byte
+	}{
+		{"fresh", nil, priv},
+		{"restore", []RunnerCredFile{{RelPath: ".credentials", Content: []byte("x"), Mode: 0o600}}, priv},
+		{"nokey", nil, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			files, runs := githubRunnerCloudInit("https://github.com/o/r", "tok", "ci-1", nil, tc.restored, tc.key)
+			for _, f := range files {
+				if f.Owner == "runner" || strings.HasPrefix(f.Owner, "runner:") {
+					t.Fatalf("write_file %q sets Owner %q, but the runner user does not exist at write_files time; chown it in runcmd instead", f.Path, f.Owner)
+				}
+			}
+			// runner.env must still end up runner-owned, via a runcmd chown.
+			joined := strings.Join(runs, "\n")
+			if !strings.Contains(joined, "chown runner:runner") || !strings.Contains(joined, "/etc/actions-runner/runner.env") {
+				t.Fatalf("expected a runcmd chown of runner.env to runner, got:\n%s", joined)
+			}
+		})
+	}
+}
