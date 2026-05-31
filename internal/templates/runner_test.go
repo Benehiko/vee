@@ -18,6 +18,7 @@ func TestGitHubRunnerCloudInit(t *testing.T) {
 		"ares-ci",
 		nil,
 		nil,
+		nil,
 	)
 
 	if len(files) == 0 {
@@ -149,6 +150,7 @@ func TestGitHubRunnerRestore(t *testing.T) {
 		"ares-ci",
 		nil,
 		restored,
+		nil,
 	)
 	joined := strings.Join(runs, "\n")
 
@@ -166,5 +168,62 @@ func TestGitHubRunnerRestore(t *testing.T) {
 	// Restored creds must be re-owned and locked down.
 	if !strings.Contains(joined, "chown -R runner:runner /opt/actions-runner") {
 		t.Error("restore path missing chown to runner")
+	}
+}
+
+// TestGitHubRunnerSSHKey verifies that injecting an SSH private key makes the
+// template provision /home/runner/.ssh with the key, GitHub's host keys, and an
+// ssh config pinning the identity — all owned by the runner user — and that no
+// such provisioning happens when no key is supplied.
+func TestGitHubRunnerSSHKey(t *testing.T) {
+	priv := []byte("-----BEGIN OPENSSH PRIVATE KEY-----\nFAKEKEYBYTES\n-----END OPENSSH PRIVATE KEY-----\n")
+	_, runs := githubRunnerCloudInit(
+		"https://github.com/Benehiko/ares",
+		"TESTTOKEN",
+		"ares-ci",
+		nil,
+		nil,
+		priv,
+	)
+	joined := strings.Join(runs, "\n")
+
+	// SSH dir created 0700 owned by runner before any file is dropped.
+	if !strings.Contains(joined, "install -d -m 700 -o runner -g runner /home/runner/.ssh") {
+		t.Error("missing 0700 runner-owned /home/runner/.ssh creation")
+	}
+	// Private key, known_hosts and config decoded into place.
+	for _, want := range []string{
+		"base64 -d > /home/runner/.ssh/id_ed25519",
+		"base64 -d > /home/runner/.ssh/known_hosts",
+		"base64 -d > /home/runner/.ssh/config",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("ssh setup missing %q", want)
+		}
+	}
+	// Perms + ownership locked down.
+	if !strings.Contains(joined, "chmod 600 /home/runner/.ssh/id_ed25519") {
+		t.Error("private key not chmod 600")
+	}
+	if !strings.Contains(joined, "chown -R runner:runner /home/runner/.ssh") {
+		t.Error("ssh dir not chowned to runner")
+	}
+	// known_hosts content must be the GitHub host keys, decodable from the
+	// base64 embedded in the runcmd.
+	if !strings.Contains(GitHubKnownHosts, "github.com ssh-ed25519 ") {
+		t.Error("GitHubKnownHosts missing ed25519 host key")
+	}
+
+	// No key supplied -> no /home/runner/.ssh provisioning at all.
+	_, noKeyRuns := githubRunnerCloudInit(
+		"https://github.com/Benehiko/ares",
+		"TESTTOKEN",
+		"ares-ci",
+		nil,
+		nil,
+		nil,
+	)
+	if strings.Contains(strings.Join(noKeyRuns, "\n"), "/home/runner/.ssh") {
+		t.Error("ssh setup ran without an injected key")
 	}
 }

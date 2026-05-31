@@ -12,6 +12,7 @@ import (
 	"github.com/Benehiko/vee/internal/gpu"
 	"github.com/Benehiko/vee/internal/images"
 	"github.com/Benehiko/vee/internal/runnercreds"
+	"github.com/Benehiko/vee/internal/runnerssh"
 	"github.com/Benehiko/vee/internal/templates"
 	"github.com/Benehiko/vee/internal/tui"
 	"github.com/Benehiko/vee/internal/vm"
@@ -53,6 +54,7 @@ var (
 	createMedia         []string
 	createRunnerURL     string
 	createRunnerLabels  []string
+	createRunnerSSHKey  bool
 	createPassword      string
 	createBootDisk      string
 )
@@ -198,6 +200,44 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
 				Token:         token,
 				Labels:        labels,
 				RestoredCreds: restored,
+			}
+
+			// SSH key for GitHub access. By default every runner gets the shared
+			// global key; --runner-ssh-key gives this runner its own per-instance
+			// key instead (scope it to one repo via a read-only deploy key). The
+			// key is generated on the host if absent and injected via cloud-init;
+			// the public key is surfaced for adding to GitHub.
+			keyName := "" // global
+			if createRunnerSSHKey {
+				keyName = name
+			}
+			id, idErr := runnercreds.LoadOrCreateIdentity()
+			if idErr != nil {
+				return fmt.Errorf("load age identity: %w", idErr)
+			}
+			pub, createdKey, keyErr := runnerssh.EnsureKey(id, keyName)
+			if keyErr != nil {
+				return fmt.Errorf("ensure runner ssh key: %w", keyErr)
+			}
+			priv, privErr := runnerssh.LoadPrivateKey(id, keyName)
+			if privErr != nil {
+				return fmt.Errorf("load runner ssh key: %w", privErr)
+			}
+			opts.RunnerExtras.SSHPrivKey = priv
+
+			// Show the public key + GitHub instructions when the key was newly
+			// generated (per-instance keys are always new here). Re-fetch anytime
+			// with `vee runner key`.
+			if createdKey {
+				label := "global runner SSH key"
+				fetch := "vee runner key"
+				if keyName != "" {
+					label = fmt.Sprintf("per-instance SSH key for %q", name)
+					fetch = "vee runner key " + name
+				}
+				fmt.Fprintf(os.Stderr,
+					"Generated %s. Add this public key to GitHub (account SSH key, or a per-repo read-only Deploy key):\n  %s\nRe-print anytime with: %s\n",
+					label, pub, fetch)
 			}
 		}
 
@@ -456,6 +496,7 @@ func init() {
 	createCmd.Flags().StringArrayVar(&createMedia, "media", nil, "Media source for jellyfin template (repeatable). Forms: hostdir:/host@/guest[:ro], nfs://server/export@/guest[:ro], smb://[user@]server/share@/guest[:ro], block:/dev/disk/by-id/...@/guest[:fstype], usb:VENDOR:PRODUCT@/guest[:fstype]")
 	createCmd.Flags().StringVar(&createRunnerURL, "runner-url", "", "GitHub repo or org URL for runner registration (github-runner template)")
 	createCmd.Flags().StringArrayVar(&createRunnerLabels, "runner-labels", nil, "Runner labels (github-runner template; default: self-hosted,linux,kvm)")
+	createCmd.Flags().BoolVar(&createRunnerSSHKey, "runner-ssh-key", false, "Generate a per-instance GitHub SSH key for this runner instead of the shared global key (github-runner template)")
 
 	_ = createCmd.RegisterFlagCompletionFunc("template", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 		return []string{

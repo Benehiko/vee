@@ -50,6 +50,7 @@ func NewGitHubRunnerConfig(
 	runnerToken string,
 	labels []string,
 	restored []RunnerCredFile,
+	sshPrivKey []byte,
 ) (*vm.VMConfig, error) {
 	if runnerURL == "" {
 		return nil, fmt.Errorf("github-runner: runnerURL is required")
@@ -75,7 +76,7 @@ func NewGitHubRunnerConfig(
 	conf := p.Config()
 	vmDir := filepath.Join(conf.StoragePath, name)
 
-	writeFiles, runCmds := githubRunnerCloudInit(runnerURL, runnerToken, name, labels, restored)
+	writeFiles, runCmds := githubRunnerCloudInit(runnerURL, runnerToken, name, labels, restored, sshPrivKey)
 
 	cfg := &vm.VMConfig{
 		Name:     name,
@@ -143,7 +144,7 @@ func NewGitHubRunnerConfig(
 // runner takes the next free UID at boot, and the UID-dependent rootless paths
 // (XDG_RUNTIME_DIR plus the containerd/BuildKit sockets) are appended to
 // runner.env from $(id -u runner) before any rootless setup runs.
-func githubRunnerCloudInit(runnerURL, runnerToken, name string, labels []string, restored []RunnerCredFile) ([]vm.CloudInitWriteFile, []string) {
+func githubRunnerCloudInit(runnerURL, runnerToken, name string, labels []string, restored []RunnerCredFile, sshPrivKey []byte) ([]vm.CloudInitWriteFile, []string) {
 	if len(labels) == 0 {
 		labels = []string{"self-hosted", "linux", "kvm"}
 	}
@@ -392,6 +393,15 @@ WantedBy=timers.target
 		"/opt/actions-runner/bin/installdependencies.sh",
 	}
 
+	// Provision the runner user's SSH key for GitHub access (cloning other
+	// private repos / private submodules whose access the scoped GITHUB_TOKEN
+	// does not cover). write_files cannot target /home/runner because the runner
+	// user is created here in runcmd, not in the cloud-init users: block — so the
+	// key, known_hosts and ssh config are base64-decoded in as root and chowned
+	// to runner, mirroring the restored-creds drop below. Only runs when a key
+	// was injected (global or per-instance).
+	runCmds = append(runCmds, githubRunnerSSHSetup(sshPrivKey)...)
+
 	// Splice in either the config.sh registration or the restored-cred drop.
 	runCmds = append(runCmds, registerCmds...)
 
@@ -411,4 +421,42 @@ WantedBy=timers.target
 	)
 
 	return writeFiles, runCmds
+}
+
+// runnerSSHDir is the runner user's SSH directory inside the guest.
+const runnerSSHDir = "/home/runner/.ssh"
+
+// runnerSSHConfig pins the runner's identity for github.com so the first clone
+// uses the injected key without agent forwarding or interactive host-key
+// confirmation. IdentitiesOnly stops ssh from offering any other key.
+const runnerSSHConfig = `Host github.com
+  HostName github.com
+  User git
+  IdentityFile /home/runner/.ssh/id_ed25519
+  IdentitiesOnly yes
+`
+
+// githubRunnerSSHSetup returns the runcmd steps that install the runner user's
+// GitHub SSH key, GitHub's host keys, and an ssh config pinning the identity.
+// It returns nil when no key was injected, so a runner created without
+// --runner-ssh-key (and with no global key) is unchanged. Secrets are written
+// via base64 -d so binary-safe content survives the cloud-init YAML and the
+// runner's home is locked down to 0700/0600 owned by runner.
+func githubRunnerSSHSetup(sshPrivKey []byte) []string {
+	if len(sshPrivKey) == 0 {
+		return nil
+	}
+	privB64 := base64.StdEncoding.EncodeToString(sshPrivKey)
+	knownHostsB64 := base64.StdEncoding.EncodeToString([]byte(GitHubKnownHosts))
+	configB64 := base64.StdEncoding.EncodeToString([]byte(runnerSSHConfig))
+
+	return []string{
+		fmt.Sprintf("install -d -m 700 -o runner -g runner %s", runnerSSHDir),
+		fmt.Sprintf("printf %%s %q | base64 -d > %s/id_ed25519", privB64, runnerSSHDir),
+		fmt.Sprintf("printf %%s %q | base64 -d > %s/known_hosts", knownHostsB64, runnerSSHDir),
+		fmt.Sprintf("printf %%s %q | base64 -d > %s/config", configB64, runnerSSHDir),
+		fmt.Sprintf("chmod 600 %s/id_ed25519 %s/config", runnerSSHDir, runnerSSHDir),
+		fmt.Sprintf("chmod 644 %s/known_hosts", runnerSSHDir),
+		fmt.Sprintf("chown -R runner:runner %s", runnerSSHDir),
+	}
 }

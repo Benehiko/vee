@@ -213,7 +213,7 @@ as `go.mod`.
 - [docs/gpu-passthrough-gaming.md](docs/gpu-passthrough-gaming.md) — Sunshine + Moonlight streaming over GPU passthrough
 - [docs/pacman-mirror.md](docs/pacman-mirror.md) — host-side pacman caching proxy for Arch VMs
 - [docs/host-shutdown.md](docs/host-shutdown.md) — how the daemon blocks host poweroff while VMs are running, and the KDE bypass
-- [docs/github-runner.md](docs/github-runner.md) — self-hosted GitHub Actions runner: cred persistence, disk GC
+- [docs/github-runner.md](docs/github-runner.md) — self-hosted GitHub Actions runner: cred persistence, GitHub SSH keys, disk GC
 
 ---
 

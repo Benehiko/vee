@@ -131,6 +131,10 @@ type RunnerExtras struct {
 	// from a host snapshot. The template injects them and skips config.sh
 	// registration, so a recreated runner rejoins GitHub without a new token.
 	RestoredCreds []templates.RunnerCredFile
+	// SSHPrivKey, when non-empty, is the OpenSSH private key (global or
+	// per-instance) injected into the runner user so CI jobs can reach GitHub
+	// over SSH. nil means no SSH key is provisioned.
+	SSHPrivKey []byte
 }
 
 // Build returns a fully-populated *vm.VMConfig for the given Opts. It does not
@@ -312,7 +316,7 @@ func configFromTemplate(ctx context.Context, prov provider.Provider, opts Opts, 
 		}
 		return templates.NewGitHubRunnerConfig(ctx, prov, opts.Name, sshKeys,
 			opts.RunnerExtras.URL, opts.RunnerExtras.Token, opts.RunnerExtras.Labels,
-			opts.RunnerExtras.RestoredCreds)
+			opts.RunnerExtras.RestoredCreds, opts.RunnerExtras.SSHPrivKey)
 	default:
 		return defaultConfig(prov, opts), nil
 	}
