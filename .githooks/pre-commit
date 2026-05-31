@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# vee pre-commit hook — runs the same lint + build the CI lint job runs, so the
+# version/lint/compile failures CI catches surface locally before push.
+#
+# Enable once per clone:  git config core.hooksPath .githooks
+# (or run: make hooks)
+#
+# Bypass for a single commit with: git commit --no-verify
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+# Only run Go checks when Go files are staged — docs/CI-only commits skip it.
+if ! git diff --cached --name-only --diff-filter=ACM | grep -q '\.go$'; then
+  exit 0
+fi
+
+echo "pre-commit: golangci-lint run"
+if command -v golangci-lint >/dev/null 2>&1; then
+  golangci-lint run --timeout=5m ./...
+else
+  echo "pre-commit: golangci-lint not found on PATH — skipping lint (CI will still enforce it)" >&2
+fi
+
+echo "pre-commit: go build -mod=vendor ./..."
+go build -mod=vendor ./...
+
+echo "pre-commit: OK"
