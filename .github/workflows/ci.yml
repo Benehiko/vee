@@ -13,7 +13,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: "1.24"
+          go-version: "1.26"
           cache: false
       # golangci-lint v2 (the .golangci.yml is version: "2"). The action must be
       # v7+ to install a v2 linter; v6 shipped v1.64.x, which cannot read a v2
@@ -29,7 +29,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: "1.24"
+          go-version: "1.26"
           cache: true
       - name: Build
         run: go build -mod=vendor ./...
