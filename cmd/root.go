@@ -62,4 +62,5 @@ func init() {
 	rootCmd.AddCommand(autostartCmd)
 	rootCmd.AddCommand(daemonCmd)
 	rootCmd.AddCommand(mirrorCmd)
+	rootCmd.AddCommand(runnerCmd)
 }

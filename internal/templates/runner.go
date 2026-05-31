@@ -2,6 +2,7 @@ package templates
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -32,6 +33,14 @@ const nerdctlFullVersion = "2.2.2"
 // it through CONTAINERD_ADDRESS / BUILDKIT_HOST exported in the runner
 // environment, so `nerdctl` and `nerdctl build` (BuildKit) work with no root and
 // no daemon socket shared from the host.
+// RunnerCredFile is a runner credential file restored from a host snapshot.
+// RelPath is relative to /opt/actions-runner; Content is the raw file bytes.
+type RunnerCredFile struct {
+	RelPath string
+	Content []byte
+	Mode    int64
+}
+
 func NewGitHubRunnerConfig(
 	ctx context.Context,
 	p provider.Provider,
@@ -40,11 +49,15 @@ func NewGitHubRunnerConfig(
 	runnerURL string,
 	runnerToken string,
 	labels []string,
+	restored []RunnerCredFile,
 ) (*vm.VMConfig, error) {
 	if runnerURL == "" {
 		return nil, fmt.Errorf("github-runner: runnerURL is required")
 	}
-	if runnerToken == "" {
+	// A registration token is only required for a fresh registration. When
+	// restoring persisted credentials the runner re-authenticates with the
+	// existing .credentials, so no token is needed.
+	if runnerToken == "" && len(restored) == 0 {
 		return nil, fmt.Errorf("github-runner: runnerToken is required")
 	}
 	if len(labels) == 0 {
@@ -62,7 +75,7 @@ func NewGitHubRunnerConfig(
 	conf := p.Config()
 	vmDir := filepath.Join(conf.StoragePath, name)
 
-	writeFiles, runCmds := githubRunnerCloudInit(runnerURL, runnerToken, name, labels)
+	writeFiles, runCmds := githubRunnerCloudInit(runnerURL, runnerToken, name, labels, restored)
 
 	cfg := &vm.VMConfig{
 		Name:     name,
@@ -130,7 +143,7 @@ func NewGitHubRunnerConfig(
 // runner takes the next free UID at boot, and the UID-dependent rootless paths
 // (XDG_RUNTIME_DIR plus the containerd/BuildKit sockets) are appended to
 // runner.env from $(id -u runner) before any rootless setup runs.
-func githubRunnerCloudInit(runnerURL, runnerToken, name string, labels []string) ([]vm.CloudInitWriteFile, []string) {
+func githubRunnerCloudInit(runnerURL, runnerToken, name string, labels []string, restored []RunnerCredFile) ([]vm.CloudInitWriteFile, []string) {
 	if len(labels) == 0 {
 		labels = []string{"self-hosted", "linux", "kvm"}
 	}
@@ -176,6 +189,85 @@ profile rootlesskit /usr/local/bin/rootlesskit flags=(unconfined) {
 }
 `
 
+	// CI jobs that build images and spin up compose stacks leave behind
+	// containers, images, volumes and BuildKit cache that nothing prunes —
+	// the runner disk fills to 100% and the actions-runner service crash-loops
+	// (it cannot even copy run-helper.sh), so GitHub marks the runner offline.
+	// vee-runner-gc.sh reclaims that space. It runs as the runner user with the
+	// rootless socket env sourced from runner.env, so it talks to the same
+	// containerd/BuildKit the jobs use.
+	//
+	// It is gated on no job being in progress: the actions-runner worker writes
+	// .runner files under _diag and holds a Runner.Worker process while a job
+	// executes, so GC checks for a live Runner.Worker and skips if one is found.
+	// That keeps GC from deleting an in-flight job's images mid-build.
+	runnerGC := `#!/usr/bin/env bash
+set -uo pipefail
+
+# Skip if a job is currently running, so we never prune an in-flight build.
+if pgrep -u runner -f 'Runner.Worker' >/dev/null 2>&1; then
+  echo "vee-runner-gc: job in progress, skipping"
+  exit 0
+fi
+
+# Derive the rootless socket env from the runner's own UID rather than reading
+# /etc/actions-runner/runner.env: that file is root-owned 0600 and unreadable by
+# the runner user this script runs as. The UID-keyed paths are deterministic.
+RUNNER_UID=$(id -u)
+export XDG_RUNTIME_DIR="/run/user/${RUNNER_UID}"
+export CONTAINERD_ADDRESS="/run/user/${RUNNER_UID}/containerd/containerd.sock"
+export BUILDKIT_HOST="unix:///run/user/${RUNNER_UID}/buildkit/buildkitd.sock"
+export CONTAINERD_NAMESPACE=default
+export PATH=/usr/local/bin:/usr/bin:/bin
+
+echo "vee-runner-gc: pruning containerd/nerdctl"
+nerdctl system prune -af  || true
+nerdctl volume prune -af  || true
+nerdctl builder prune -af || true
+
+# Cap BuildKit's local cache instead of dropping it entirely, so warm layers
+# survive while runaway growth is bounded.
+echo "vee-runner-gc: pruning BuildKit cache to 2GB ceiling"
+buildctl prune --keep-storage 2048 || true
+
+# Trim a runaway Go build cache (cgo/native CI builds), bounded not cleared.
+GOCACHE_DIR="$HOME/.cache/go-build"
+if [ -d "$GOCACHE_DIR" ]; then
+  GOCACHE=$GOCACHE_DIR go clean -cache 2>/dev/null || rm -rf "${GOCACHE_DIR:?}/"* || true
+fi
+
+# Old runner diagnostics and stale per-job temp dirs.
+find /opt/actions-runner/_diag -type f -name '*.log' -mtime +3 -delete 2>/dev/null || true
+rm -rf /opt/actions-runner/_work/_temp/* 2>/dev/null || true
+
+echo "vee-runner-gc: done"
+df -h / | tail -1
+`
+
+	runnerGCService := `[Unit]
+Description=vee runner disk garbage collection
+After=actions-runner.service
+
+[Service]
+Type=oneshot
+User=runner
+ExecStart=/usr/local/bin/vee-runner-gc.sh
+`
+
+	// Persistent=true so a GC missed while the VM was powered off runs at the
+	// next boot rather than silently skipping a day.
+	runnerGCTimer := `[Unit]
+Description=Run vee runner disk garbage collection daily
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target
+`
+
 	writeFiles := []vm.CloudInitWriteFile{
 		{
 			Path:        "/etc/actions-runner/runner.env",
@@ -198,11 +290,49 @@ profile rootlesskit /usr/local/bin/rootlesskit flags=(unconfined) {
 			Content:     rootlesskitAppArmor,
 			Permissions: "0644",
 		},
+		{
+			Path:        "/usr/local/bin/vee-runner-gc.sh",
+			Content:     runnerGC,
+			Permissions: "0755",
+		},
+		{
+			Path:        "/etc/systemd/system/vee-runner-gc.service",
+			Content:     runnerGCService,
+			Permissions: "0644",
+		},
+		{
+			Path:        "/etc/systemd/system/vee-runner-gc.timer",
+			Content:     runnerGCTimer,
+			Permissions: "0644",
+		},
 	}
 
 	nerdctlFullURL := fmt.Sprintf(
 		"https://github.com/containerd/nerdctl/releases/download/v%s/nerdctl-full-%s-linux-amd64.tar.gz",
 		nerdctlFullVersion, nerdctlFullVersion)
+
+	// Registration vs restore. A fresh runner registers with config.sh and the
+	// short-lived token. A recreated runner instead restores its persisted
+	// .credentials/.runner files (base64-decoded into /opt/actions-runner after
+	// the runner tarball is extracted) and skips config.sh entirely — the
+	// existing identity re-authenticates with GitHub on service start. Each
+	// restore command must run before the final chown so the files end up
+	// owner=runner.
+	var registerCmds []string
+	if len(restored) > 0 {
+		for _, rc := range restored {
+			b64 := base64.StdEncoding.EncodeToString(rc.Content)
+			registerCmds = append(registerCmds, fmt.Sprintf(
+				"printf %%s %q | base64 -d > /opt/actions-runner/%s", b64, rc.RelPath))
+		}
+		registerCmds = append(registerCmds,
+			"chown -R runner:runner /opt/actions-runner",
+			"chmod 600 /opt/actions-runner/.credentials /opt/actions-runner/.runner")
+	} else {
+		registerCmds = append(registerCmds,
+			// Register the runner with GitHub (uses env vars from runner.env).
+			`. /etc/actions-runner/runner.env && sudo -u runner /opt/actions-runner/config.sh --unattended --url "$RUNNER_URL" --token "$RUNNER_TOKEN" --labels "$RUNNER_LABELS" --name "$RUNNER_NAME"`)
+	}
 
 	runCmds := []string{
 		// Create the runner user. Rootless containerd requires a real login user
@@ -260,8 +390,12 @@ profile rootlesskit /usr/local/bin/rootlesskit flags=(unconfined) {
 		"chown -R runner:runner /opt/actions-runner",
 		// Install runner dependencies.
 		"/opt/actions-runner/bin/installdependencies.sh",
-		// Register the runner with GitHub (uses env vars from runner.env).
-		`. /etc/actions-runner/runner.env && sudo -u runner /opt/actions-runner/config.sh --unattended --url "$RUNNER_URL" --token "$RUNNER_TOKEN" --labels "$RUNNER_LABELS" --name "$RUNNER_NAME"`,
+	}
+
+	// Splice in either the config.sh registration or the restored-cred drop.
+	runCmds = append(runCmds, registerCmds...)
+
+	runCmds = append(runCmds,
 		// Enable and start the runner service.
 		"systemctl enable --now actions-runner",
 		// SSH: Ubuntu cloud images need explicit enable; required for vee ssh.
@@ -271,7 +405,10 @@ profile rootlesskit /usr/local/bin/rootlesskit flags=(unconfined) {
 		"ufw --force enable",
 		"systemctl enable --now vee-ssh-agent",
 		"systemctl enable --now qemu-guest-agent",
-	}
+		// Daily disk GC so CI build leftovers can't fill the disk and knock the
+		// runner offline (see vee-runner-gc.sh above).
+		"systemctl enable --now vee-runner-gc.timer",
+	)
 
 	return writeFiles, runCmds
 }

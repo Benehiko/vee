@@ -15,6 +15,64 @@ vee create ci-runner-1 --template github-runner \
 registration token is collected interactively and injected via cloud-init; it is
 never written to the on-disk VM config.
 
+## Credential persistence (reinstall without a new token)
+
+A registered runner stores long-lived credentials inside the VM at
+`/opt/actions-runner/.credentials`, `.credentials_rsaparams` and `.runner`.
+These survive a VM restart but are lost when the disk is destroyed — for example
+by `vee create --reinstall <name>`.
+
+vee persists an encrypted copy on the host so a recreated runner can rejoin
+GitHub as the same runner, with no new registration token and no orphaned runner
+entry:
+
+- After a fresh `vee create` of a runner, vee waits for registration to finish,
+  pulls the three credential files over SSH, encrypts them with
+  [age](https://age-encryption.org), and writes the archive to
+  `~/.vee/runner-creds/<name>.age`.
+- The age identity lives at `~/.vee/age/identity.txt` (generated on first use,
+  `0600`). It is the only key that can decrypt the snapshots; back it up if you
+  want runner credentials to survive a host rebuild.
+- On `vee create --reinstall <name>` (or any `vee create` reusing the name), if a
+  snapshot exists vee decrypts it, injects the files into the new VM, and skips
+  `config.sh` registration entirely — so it never prompts for a token.
+
+If the automatic post-create snapshot does not complete (registration can take a
+few minutes via cloud-init), capture it manually once the runner is online:
+
+```sh
+vee runner snapshot <name>
+```
+
+The snapshot lives outside the VM storage directory, so `vee create --reinstall`
+(which clears the VM dir) does not delete it.
+
+## Automatic disk garbage collection
+
+CI jobs that build images and run compose stacks accumulate containers, images,
+volumes and BuildKit cache. Left unchecked these fill the runner disk to 100%,
+at which point the `actions-runner` service can no longer write its working
+files, crash-loops, and GitHub marks the runner **offline**.
+
+Every runner ships `vee-runner-gc.sh` driven by a `vee-runner-gc.timer`
+(`OnCalendar=daily`, `Persistent=true`). On each run it:
+
+- skips entirely if a job is in progress (checks for a live `Runner.Worker`), so
+  it never prunes an in-flight build;
+- runs `nerdctl system/volume/builder prune -af`;
+- prunes the BuildKit cache down to a 2 GB ceiling (keeping warm layers);
+- trims the Go build cache and stale `_diag` logs / `_work/_temp` leftovers.
+
+It derives the rootless socket env (`XDG_RUNTIME_DIR`, `CONTAINERD_ADDRESS`,
+`BUILDKIT_HOST`) from its own UID rather than reading the root-owned
+`runner.env`, since it runs as the unprivileged `runner` user.
+
+Trigger a prune immediately with:
+
+```sh
+vee ssh <name> -- sudo systemctl start vee-runner-gc.service
+```
+
 ## Rootless container stack
 
 Every runner ships a fully rootless container stack so CI jobs can build and run

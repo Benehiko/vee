@@ -172,7 +172,9 @@ func (m *Manager) Create(ctx context.Context, cfg *VMConfig) error {
 				Path:        wf.Path,
 				Content:     wf.Content,
 				Permissions: wf.Permissions,
+				Owner:       wf.Owner,
 				Defer:       wf.Defer,
+				Encoding:    wf.Encoding,
 			}
 		}
 		ci := &cloudinit.Config{

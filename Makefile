@@ -20,12 +20,24 @@ LDFLAGS     := -s -w \
 CONTAINER_RUNTIME := $(shell command -v nerdctl 2>/dev/null || command -v docker 2>/dev/null)
 HUGO_IMAGE        := hugomods/hugo:go-git-0.147.0
 
-.PHONY: all build install clean e2e site
+.PHONY: all build install clean e2e site lint test hooks
 
 all: build
 
 build:
 	$(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BINARY) .
+
+# Mirror the CI lint job locally.
+lint:
+	golangci-lint run --timeout=5m ./...
+
+test:
+	$(GO) test $(GOFLAGS) -race ./...
+
+# Enable the tracked git hooks (pre-commit lint + build) for this clone.
+hooks:
+	git config core.hooksPath .githooks
+	@echo "git hooks enabled (core.hooksPath=.githooks)"
 
 install: build
 	mkdir -p $(INSTALL_DIR)

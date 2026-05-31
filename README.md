@@ -193,12 +193,27 @@ vee completion fish | source
 
 ---
 
+## ▸ DEVELOPMENT
+
+```
+make hooks   # enable the pre-commit hook (golangci-lint + go build) for this clone
+make lint    # run golangci-lint (mirrors CI)
+make build   # build the vee binary
+make test    # go test -race ./...
+```
+
+The pre-commit hook lives in `.githooks/` (tracked) and only runs when Go files
+are staged. Enable it once per clone with `make hooks`; bypass a single commit
+with `git commit --no-verify`. CI (lint + build + test) pins the same Go version
+as `go.mod`.
+
 ## ▸ DOCS
 
 - [docs/prerequisites.md](docs/prerequisites.md) — system setup, groups, bridge networking, OVMF
 - [docs/gpu-passthrough-gaming.md](docs/gpu-passthrough-gaming.md) — Sunshine + Moonlight streaming over GPU passthrough
 - [docs/pacman-mirror.md](docs/pacman-mirror.md) — host-side pacman caching proxy for Arch VMs
 - [docs/host-shutdown.md](docs/host-shutdown.md) — how the daemon blocks host poweroff while VMs are running, and the KDE bypass
+- [docs/github-runner.md](docs/github-runner.md) — self-hosted GitHub Actions runner: cred persistence, disk GC
 
 ---
 

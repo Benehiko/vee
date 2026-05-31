@@ -2,13 +2,17 @@ package cmd
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/Benehiko/vee/internal/blockdev"
 	"github.com/Benehiko/vee/internal/gpu"
 	"github.com/Benehiko/vee/internal/images"
+	"github.com/Benehiko/vee/internal/runnercreds"
+	"github.com/Benehiko/vee/internal/templates"
 	"github.com/Benehiko/vee/internal/tui"
 	"github.com/Benehiko/vee/internal/vm"
 	"github.com/Benehiko/vee/internal/vm/build"
@@ -151,20 +155,49 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
 			if createRunnerURL == "" {
 				return fmt.Errorf("--runner-url is required for the github-runner template")
 			}
-			fmt.Fprint(os.Stderr, "GitHub runner registration token: ")
-			tokenBytes, readErr := term.ReadPassword(int(os.Stdin.Fd()))
-			fmt.Fprintln(os.Stderr)
-			if readErr != nil {
-				return fmt.Errorf("read runner token: %w", readErr)
-			}
 			labels := createRunnerLabels
 			if len(labels) == 0 {
 				labels = []string{"self-hosted", "linux", "kvm"}
 			}
+
+			// If a host has an encrypted credential snapshot for this name,
+			// restore it instead of fetching a fresh registration token. This
+			// lets `vee create --reinstall <name>` rejoin GitHub as the same
+			// runner with no token prompt and no duplicate runner entry.
+			var restored []templates.RunnerCredFile
+			if runnercreds.Has(name) {
+				id, idErr := runnercreds.LoadOrCreateIdentity()
+				if idErr != nil {
+					return fmt.Errorf("load age identity: %w", idErr)
+				}
+				files, rErr := runnercreds.Restore(id, name)
+				if rErr != nil {
+					return fmt.Errorf("restore runner creds for %q: %w", name, rErr)
+				}
+				for _, f := range files {
+					restored = append(restored, templates.RunnerCredFile{
+						RelPath: f.RelPath, Content: f.Content, Mode: f.Mode,
+					})
+				}
+				fmt.Fprintf(os.Stderr, "Restoring %d persisted runner credential file(s) for %q — skipping token registration.\n", len(restored), name)
+			}
+
+			var token string
+			if len(restored) == 0 {
+				fmt.Fprint(os.Stderr, "GitHub runner registration token: ")
+				tokenBytes, readErr := term.ReadPassword(int(os.Stdin.Fd()))
+				fmt.Fprintln(os.Stderr)
+				if readErr != nil {
+					return fmt.Errorf("read runner token: %w", readErr)
+				}
+				token = strings.TrimSpace(string(tokenBytes))
+			}
+
 			opts.RunnerExtras = &build.RunnerExtras{
-				URL:    createRunnerURL,
-				Token:  strings.TrimSpace(string(tokenBytes)),
-				Labels: labels,
+				URL:           createRunnerURL,
+				Token:         token,
+				Labels:        labels,
+				RestoredCreds: restored,
 			}
 		}
 
@@ -224,10 +257,65 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
 				fmt.Printf("Install complete. Run 'vee start %s' to boot.\n", name)
 				return nil
 			}
-			return runStartSpinner(cmd, mgr, name)
+			if err := runStartSpinner(cmd, mgr, name); err != nil {
+				return err
+			}
+			// For a freshly-registered runner, capture its credentials to the
+			// host so a later `vee create --reinstall` can restore them. A
+			// restore run already has the creds, so skip. Best-effort: a
+			// failure here never fails the create.
+			if cfg.Template == "github-runner" && opts.RunnerExtras != nil && len(opts.RunnerExtras.RestoredCreds) == 0 {
+				snapshotRunnerCreds(cmd, mgr, name)
+			}
+			return nil
 		}
 		return nil
 	},
+}
+
+// snapshotRunnerCreds polls the freshly-started runner until config.sh has
+// written its credentials, then persists an age-encrypted copy to the host so a
+// future `vee create --reinstall <name>` can restore the same runner identity.
+// It is best-effort: registration happens asynchronously via cloud-init and can
+// take a few minutes (image pulls, installdependencies.sh), so it polls within
+// a bounded window and only warns on failure — the VM itself is already up.
+func snapshotRunnerCreds(cmd *cobra.Command, mgr *vm.Manager, name string) {
+	cfg, err := mgr.LoadConfig(name)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: cannot snapshot runner creds (load config): %v\n", err)
+		return
+	}
+	state, err := mgr.LoadState(name)
+	if err != nil || state.SSHPort == 0 {
+		fmt.Fprintf(os.Stderr, "Warning: cannot snapshot runner creds (no SSH port yet)\n")
+		return
+	}
+
+	user := cfg.SSHUser
+	if user == "" && cfg.CloudInit != nil {
+		user = cfg.CloudInit.User
+	}
+
+	id, err := runnercreds.LoadOrCreateIdentity()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: cannot snapshot runner creds (age identity): %v\n", err)
+		return
+	}
+
+	ssh := runnercreds.NewSSHRunner(user, "127.0.0.1", state.SSHPort, veeIdentityPath())
+
+	// Bound the wait: ~4 minutes (24 attempts × 10s) covers cloud-init
+	// registration without hanging the CLI indefinitely.
+	ctx, cancel := context.WithTimeout(cmd.Context(), 5*time.Minute)
+	defer cancel()
+
+	fmt.Fprintf(os.Stderr, "Waiting for runner registration to persist credentials to the host...\n")
+	if err := runnercreds.SnapshotWithRetry(ctx, ssh, id, name, 24, 10*time.Second); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: runner credential snapshot not captured: %v\n"+
+			"  Re-run 'vee runner snapshot %s' once the runner is online to enable reinstall-without-token.\n", err, name)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "Runner credentials persisted (encrypted) — 'vee create --reinstall %s' will rejoin GitHub without a new token.\n", name)
 }
 
 // optsFromFlags collects every cobra flag into a build.Opts. Cobra's "Changed"
