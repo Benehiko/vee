@@ -47,6 +47,77 @@ vee runner snapshot <name>
 The snapshot lives outside the VM storage directory, so `vee create --reinstall`
 (which clears the VM dir) does not delete it.
 
+## GitHub SSH access (clone other private repos and submodules)
+
+A workflow's built-in `GITHUB_TOKEN` is scoped to the repository the workflow
+runs in. CI steps that clone a *different* private repository, or that
+initialise a private submodule over SSH (`git@github.com:owner/other.git`),
+fail because the runner host has no GitHub credentials of its own.
+
+vee provisions an SSH key inside the runner so these clones work. Each runner
+gets an SSH key at `/home/runner/.ssh/id_ed25519` plus GitHub's host keys in
+`known_hosts` (so the first clone never stalls on a host-key prompt) and an
+`~/.ssh/config` entry pinning that key for `github.com`.
+
+There are two tiers of key:
+
+- **Global key** — one shared keypair injected into *every* fresh runner. You
+  add its public key to GitHub **once**. This is the default; no flag needed.
+- **Per-instance key** — a unique keypair for a single runner, created with
+  `--runner-ssh-key`. It is used instead of the global key for that runner, so
+  you can scope one runner to a single repository with a read-only deploy key.
+
+Private keys are generated on the host and stored age-encrypted under
+`~/.vee/runner-ssh/` (`global.age`, or `<name>.age` for a per-instance key),
+using the same `~/.vee/age/identity.txt` identity as the credential snapshots.
+The matching public key is stored alongside in plaintext (`*.pub`). The keys
+survive `vee create --reinstall`, so a recreated runner keeps the same identity
+and you never have to re-add a key to GitHub.
+
+### Getting the public key
+
+```sh
+# Shared global key (generated on first use):
+vee runner key
+
+# A specific runner's per-instance key:
+vee runner key ci-runner-1
+```
+
+The public key is printed to stdout (so it pipes cleanly); the "add to GitHub"
+guidance is printed to stderr. You can run `vee runner key` before ever creating
+a runner to generate the global key and add it to GitHub up front.
+
+When `vee create` generates a key for the first time it also prints the public
+key with the same guidance.
+
+### Adding the key to GitHub
+
+vee never calls the GitHub API — adding the key is a one-time manual step (least
+privilege: vee needs no token with key-admin scope). Choose one:
+
+- **Account SSH key** — *Settings → SSH and GPG keys → New SSH key*. Grants the
+  runner access to every repository your account can reach. Simplest; broadest
+  scope. Best for the global key when your runners are trusted with all your
+  repos.
+- **Per-repo read-only deploy key** — *Repo → Settings → Deploy keys → Add deploy
+  key*, with **Allow write access** left unchecked. Scopes access to that one
+  repository. Best for least privilege.
+
+> GitHub allows a given public key to be a deploy key on **only one** repository.
+> If you need read-only deploy-key access to several repos, generate a separate
+> per-instance key per runner (`--runner-ssh-key`) and add each to its repo.
+
+### Verifying
+
+```sh
+vee ssh ci-runner-1 -- sudo -u runner ssh -T git@github.com
+```
+
+A successful auth greets `Hi <owner>! You've successfully authenticated...`
+(deploy keys greet with the repository name instead). Note GitHub never grants
+shell access, so the command still exits non-zero — the greeting is the signal.
+
 ## Automatic disk garbage collection
 
 CI jobs that build images and run compose stacks accumulate containers, images,

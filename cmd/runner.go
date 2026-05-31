@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Benehiko/vee/internal/runnercreds"
+	"github.com/Benehiko/vee/internal/runnerssh"
 	"github.com/Benehiko/vee/internal/vm"
 	"github.com/spf13/cobra"
 )
@@ -71,6 +72,61 @@ var runnerSnapshotCmd = &cobra.Command{
 	},
 }
 
+var runnerKeyCmd = &cobra.Command{
+	Use:   "key [name]",
+	Short: "Print a runner's GitHub SSH public key (to add to GitHub)",
+	Long: `Prints the SSH public key a runner uses to reach GitHub, for adding to the
+GitHub dashboard.
+
+With no argument, prints the shared GLOBAL key injected into every fresh runner,
+generating it on first use. Add it once as an account SSH key, or as a per-repo
+read-only Deploy key.
+
+With a runner name, prints that runner's PER-INSTANCE key (created with
+'vee create <name> --template github-runner --runner-ssh-key'). A per-instance
+key lets you scope one runner to a single repo via a read-only Deploy key.
+
+The public key is written to stdout (pipeable); guidance goes to stderr.
+
+Examples:
+  vee runner key
+  vee runner key ci-1`,
+	Args:              cobra.MaximumNArgs(1),
+	ValidArgsFunction: completeVMNames,
+	RunE: func(_ *cobra.Command, args []string) error {
+		// Global key: generate on demand so the user can bootstrap and add it to
+		// GitHub before ever creating a runner.
+		if len(args) == 0 {
+			id, err := runnercreds.LoadOrCreateIdentity()
+			if err != nil {
+				return fmt.Errorf("load age identity: %w", err)
+			}
+			pub, _, err := runnerssh.EnsureKey(id, "")
+			if err != nil {
+				return fmt.Errorf("ensure global runner ssh key: %w", err)
+			}
+			fmt.Fprintln(os.Stderr, "Global runner SSH public key — add to GitHub (account SSH key, or a per-repo read-only Deploy key):")
+			fmt.Println(pub)
+			return nil
+		}
+
+		// Per-instance key: report only, never generate (it is created at
+		// 'vee create --runner-ssh-key' time and tied to that runner).
+		name := args[0]
+		pub, ok, err := runnerssh.PublicKey(name)
+		if err != nil {
+			return fmt.Errorf("read runner ssh key for %q: %w", name, err)
+		}
+		if !ok {
+			return fmt.Errorf("no per-instance SSH key for %q — create one with: vee create %s --template github-runner --runner-ssh-key (or use 'vee runner key' for the shared global key)", name, name)
+		}
+		fmt.Fprintf(os.Stderr, "Per-instance runner SSH public key for %q — add to GitHub (per-repo read-only Deploy key recommended):\n", name)
+		fmt.Println(pub)
+		return nil
+	},
+}
+
 func init() {
 	runnerCmd.AddCommand(runnerSnapshotCmd)
+	runnerCmd.AddCommand(runnerKeyCmd)
 }
