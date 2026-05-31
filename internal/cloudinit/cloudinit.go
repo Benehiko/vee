@@ -17,6 +17,9 @@ type WriteFile struct {
 	// Defer defers write_files to the final modules stage so the target user
 	// already exists (e.g. when injecting into a user created by cloud-init).
 	Defer bool
+	// Encoding maps to cloud-init's `encoding:` key (e.g. "b64") so Content may
+	// carry base64-encoded binary data. Empty writes Content literally.
+	Encoding string
 }
 
 // Config defines the cloud-init user-data for first-boot configuration.
@@ -172,6 +175,9 @@ func renderUserData(cfg *Config) (string, error) {
 			}
 			if wf.Defer {
 				sb.WriteString("    defer: true\n")
+			}
+			if wf.Encoding != "" {
+				fmt.Fprintf(&sb, "    encoding: %s\n", wf.Encoding)
 			}
 			sb.WriteString("    content: |\n")
 			for line := range strings.SplitSeq(wf.Content, "\n") {

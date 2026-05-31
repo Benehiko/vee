@@ -96,6 +96,10 @@ type CloudInitWriteFile struct {
 	Permissions string `yaml:"permissions,omitempty" json:"permissions,omitempty"`
 	Owner       string `yaml:"owner,omitempty"       json:"owner,omitempty"`
 	Defer       bool   `yaml:"defer,omitempty"       json:"defer,omitempty"`
+	// Encoding, when set (e.g. "b64"), is emitted as cloud-init's `encoding:`
+	// key so Content can carry base64-encoded binary data verbatim. Empty means
+	// the content is written literally.
+	Encoding string `yaml:"encoding,omitempty"    json:"encoding,omitempty"`
 }
 
 // CloudInitConfig carries first-boot configuration rendered into a cidata ISO.

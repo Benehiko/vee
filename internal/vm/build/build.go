@@ -127,6 +127,10 @@ type RunnerExtras struct {
 	URL    string   // repo or org URL, e.g. https://github.com/owner/repo
 	Token  string   // short-lived registration token from the GitHub API
 	Labels []string // runner labels; defaults to [self-hosted, linux, kvm] when empty
+	// RestoredCreds, when non-empty, carries runner credential files decrypted
+	// from a host snapshot. The template injects them and skips config.sh
+	// registration, so a recreated runner rejoins GitHub without a new token.
+	RestoredCreds []templates.RunnerCredFile
 }
 
 // Build returns a fully-populated *vm.VMConfig for the given Opts. It does not
@@ -307,7 +311,8 @@ func configFromTemplate(ctx context.Context, prov provider.Provider, opts Opts, 
 			return nil, fmt.Errorf("github-runner template requires interactive prompts; collect them and pass via Opts.RunnerExtras")
 		}
 		return templates.NewGitHubRunnerConfig(ctx, prov, opts.Name, sshKeys,
-			opts.RunnerExtras.URL, opts.RunnerExtras.Token, opts.RunnerExtras.Labels)
+			opts.RunnerExtras.URL, opts.RunnerExtras.Token, opts.RunnerExtras.Labels,
+			opts.RunnerExtras.RestoredCreds)
 	default:
 		return defaultConfig(prov, opts), nil
 	}
