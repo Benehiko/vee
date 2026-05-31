@@ -13,11 +13,14 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: "1.26"
+          go-version: "1.24"
           cache: false
-      - uses: golangci/golangci-lint-action@55c2c1448f86e01eaae002a5a3a9624417608d84 # v6
+      # golangci-lint v2 (the .golangci.yml is version: "2"). The action must be
+      # v7+ to install a v2 linter; v6 shipped v1.64.x, which cannot read a v2
+      # config and is built against an older Go than the module targets.
+      - uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee # v9.2.1
         with:
-          version: latest
+          version: v2.12.2
           args: --timeout=5m
 
   build-and-test:
@@ -26,7 +29,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: "1.26"
+          go-version: "1.24"
           cache: true
       - name: Build
         run: go build -mod=vendor ./...
