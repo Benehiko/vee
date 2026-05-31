@@ -65,26 +65,35 @@ func TestDeterministicMAC(t *testing.T) {
 }
 
 func TestNICArgsUser(t *testing.T) {
+	// User-mode NICs use the -netdev/-device split form (not the -nic
+	// shorthand) so the device can set rombar=0, which suppresses the PXE ROM
+	// and stops OVMF from wasting time network-booting before the disk.
 	nic := qemu.NewNIC(qemu.NICUser, "", "52:54:ab:cd:ef:01")
 	args := nic.Args()
-	if len(args) != 2 || args[0] != "-nic" {
+	if len(args) != 4 || args[0] != "-netdev" || args[2] != "-device" {
 		t.Fatalf("unexpected args: %v", args)
 	}
-	val := args[1]
-	if !strings.HasPrefix(val, "user,") {
-		t.Errorf("user NIC should start with 'user,': %q", val)
+	if !strings.HasPrefix(args[1], "user,") {
+		t.Errorf("user netdev should start with 'user,': %q", args[1])
 	}
-	if !strings.Contains(val, "mac=52:54:ab:cd:ef:01") {
-		t.Errorf("MAC missing from NIC arg: %q", val)
+	device := args[3]
+	if !strings.Contains(device, "mac=52:54:ab:cd:ef:01") {
+		t.Errorf("MAC missing from device arg: %q", device)
+	}
+	if !strings.Contains(device, "rombar=0") {
+		t.Errorf("device arg should disable PXE ROM (rombar=0): %q", device)
 	}
 }
 
 func TestNICArgsUserHostfwd(t *testing.T) {
 	nic := qemu.NewNIC(qemu.NICUser, "", "52:54:00:00:00:01", "tcp:127.0.0.1:2222-:22")
 	args := nic.Args()
-	val := args[1]
-	if !strings.Contains(val, "hostfwd=tcp:127.0.0.1:2222-:22") {
-		t.Errorf("hostfwd missing from NIC arg: %q", val)
+	if len(args) != 4 || args[0] != "-netdev" {
+		t.Fatalf("unexpected args: %v", args)
+	}
+	// hostfwd is appended to the -netdev value, not the -device value.
+	if !strings.Contains(args[1], "hostfwd=tcp:127.0.0.1:2222-:22") {
+		t.Errorf("hostfwd missing from netdev arg: %q", args[1])
 	}
 }
 
