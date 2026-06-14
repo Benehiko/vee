@@ -4,11 +4,54 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/Benehiko/vee/internal/platform"
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/providers/structs"
 	"github.com/knadh/koanf/v2"
 )
+
+// firstExisting returns the first path in candidates that exists on disk, or
+// fallback if none do.
+func firstExisting(fallback string, candidates ...string) string {
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err == nil {
+			return c
+		}
+	}
+	return fallback
+}
+
+// defaultFirmware returns the UEFI code/vars/secboot firmware paths appropriate
+// for the host's native guest architecture. x86_64 guests use OVMF; aarch64
+// guests use the edk2 ARM firmware (AAVMF), which on macOS ships with Homebrew
+// QEMU, UTM, or the vee-managed bundle. Paths are best-effort defaults; the
+// firmware is resolved/installed for real in the qemubin layer.
+func defaultFirmware(home string) (code, vars, secboot string) {
+	if platform.DefaultGuestArch() == "aarch64" {
+		veeCode := filepath.Join(home, ".vee", "share", "qemu", "edk2-aarch64-code.fd")
+		veeVars := filepath.Join(home, ".vee", "share", "qemu", "edk2-arm-vars.fd")
+		code = firstExisting(veeCode,
+			veeCode,
+			"/opt/homebrew/share/qemu/edk2-aarch64-code.fd",
+			"/usr/local/share/qemu/edk2-aarch64-code.fd",
+			"/Applications/UTM.app/Contents/Resources/qemu/edk2-aarch64-code.fd",
+			"/usr/share/AAVMF/AAVMF_CODE.fd",
+		)
+		vars = firstExisting(veeVars,
+			veeVars,
+			"/opt/homebrew/share/qemu/edk2-arm-vars.fd",
+			"/usr/local/share/qemu/edk2-arm-vars.fd",
+			"/Applications/UTM.app/Contents/Resources/qemu/edk2-arm-vars.fd",
+			"/usr/share/AAVMF/AAVMF_VARS.fd",
+		)
+		// aarch64 edk2 has no separate Secure Boot code variant; reuse code.
+		return code, vars, code
+	}
+	return "/usr/share/OVMF/x64/OVMF_CODE.4m.fd",
+		"/usr/share/OVMF/x64/OVMF_VARS.4m.fd",
+		"/usr/share/OVMF/x64/OVMF_CODE.secboot.4m.fd"
+}
 
 type Config struct {
 	StoragePath         string `koanf:"storage_path"`
@@ -52,25 +95,29 @@ func newDefaultConfig() (*Config, error) {
 		virtiofsdPath = "/usr/bin/virtiofsd"
 	}
 
-	// Use the vee-managed QEMU binary when present; fall back to system one.
-	qemuBinPath := "qemu-system-x86_64"
-	veeManagedQemu := filepath.Join(home, ".vee", "bin", "qemu-system-x86_64")
+	// Use the vee-managed QEMU binary when present; fall back to the system one.
+	// The binary name is host-arch specific (qemu-system-aarch64 on Apple
+	// Silicon, qemu-system-x86_64 on amd64).
+	qemuBinName := platform.DefaultQemuBinaryName()
+	qemuBinPath := qemuBinName
+	veeManagedQemu := filepath.Join(home, ".vee", "bin", qemuBinName)
 	if _, err := os.Stat(veeManagedQemu); err == nil {
 		qemuBinPath = veeManagedQemu
 	}
 
-	// Probe common qemu-bridge-helper locations.
-	bridgeHelper := "/usr/lib/qemu/qemu-bridge-helper"
-	for _, candidate := range []string{
-		"/usr/lib/qemu/qemu-bridge-helper",
-		"/usr/lib/qemu-kvm/qemu-bridge-helper",
-		"/usr/libexec/qemu-bridge-helper",
-	} {
-		if _, err := os.Stat(candidate); err == nil {
-			bridgeHelper = candidate
-			break
-		}
+	// QEMU bridge networking via the setuid qemu-bridge-helper is Linux-only;
+	// macOS uses user-mode NAT. Probe common locations on Linux, leave empty
+	// elsewhere.
+	bridgeHelper := ""
+	if platform.SupportsBridgeNetworking() {
+		bridgeHelper = firstExisting("/usr/lib/qemu/qemu-bridge-helper",
+			"/usr/lib/qemu/qemu-bridge-helper",
+			"/usr/lib/qemu-kvm/qemu-bridge-helper",
+			"/usr/libexec/qemu-bridge-helper",
+		)
 	}
+
+	ovmfCode, ovmfVars, ovmfSecboot := defaultFirmware(home)
 
 	return &Config{
 		StoragePath:         filepath.Join(home, ".vee/vms"),
@@ -78,11 +125,11 @@ func newDefaultConfig() (*Config, error) {
 		VirtiofsdPath:       virtiofsdPath,
 		QemuBinaryPath:      qemuBinPath,
 		BridgeHelperPath:    bridgeHelper,
-		OVMFCodePath:        "/usr/share/OVMF/x64/OVMF_CODE.4m.fd",
-		OVMFVarsPath:        "/usr/share/OVMF/x64/OVMF_VARS.4m.fd",
-		OVMFSecbootCodePath: "/usr/share/OVMF/x64/OVMF_CODE.secboot.4m.fd",
+		OVMFCodePath:        ovmfCode,
+		OVMFVarsPath:        ovmfVars,
+		OVMFSecbootCodePath: ovmfSecboot,
 		LogPath:             filepath.Join(home, ".vee", "logs"),
-		DefaultMachineType:  "q35",
+		DefaultMachineType:  platform.DefaultMachineType(),
 		DefaultCPUs:         2,
 		DefaultMemory:       "2G",
 		DefaultDiskSize:     "20G",
