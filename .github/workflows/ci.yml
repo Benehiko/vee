@@ -40,3 +40,18 @@ jobs:
         run: go build -mod=vendor ./...
       - name: Test
         run: go test -mod=vendor -race ./...
+
+  build-and-test-macos:
+    # Apple Silicon: guards the macOS (HVF/aarch64/cocoa) port so the build-tag
+    # split and host-aware defaults keep compiling and passing on darwin.
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.26"
+          cache: true
+      - name: Build
+        run: go build -mod=vendor ./...
+      - name: Test
+        run: go test -mod=vendor -race ./...

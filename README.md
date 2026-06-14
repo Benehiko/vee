@@ -20,6 +20,8 @@ vee stop myvm      # graceful shutdown
 ```
 
 > **Prerequisites:** KVM access, bridge networking, disk group membership, and OVMF firmware. See [docs/prerequisites.md](docs/prerequisites.md).
+>
+> **macOS (Apple Silicon):** vee also runs on Apple Silicon Macs via Hypervisor.framework (HVF) with aarch64 guests and accelerated virtio-gpu. See [docs/macos.md](docs/macos.md) for setup, the per-guest GPU matrix, and limitations.
 
 ## Templates
 
