@@ -20,9 +20,6 @@ func TestCPUArgsHostModel(t *testing.T) {
 	if !strings.Contains(joined, "host") {
 		t.Errorf("expected 'host' model in args: %s", joined)
 	}
-	if !slices.Contains(args, "-enable-kvm") {
-		t.Errorf("KVM should be enabled by default: %v", args)
-	}
 }
 
 func TestCPUArgsModelVariants(t *testing.T) {
@@ -71,13 +68,19 @@ func TestCPUSMPArgs(t *testing.T) {
 	}
 }
 
-func TestCPUKVMDisabled(t *testing.T) {
+// TestCPUEmitsNoAccelerator verifies that acceleration is no longer selected at
+// the CPU level — it moved to the machine level (-accel). The CPU builder must
+// only contribute -cpu/-smp.
+func TestCPUEmitsNoAccelerator(t *testing.T) {
 	p := newTestProvider(t)
-	cpu := qemu.NewCPU(p, qemu.WithEnableKVM(false))
+	cpu := qemu.NewCPU(p, qemu.WithCPUModel(qemu.CPUHost))
 	args := cpu.Args()
 
 	if slices.Contains(args, "-enable-kvm") {
-		t.Errorf("expected no -enable-kvm when KVM disabled: %v", args)
+		t.Errorf("CPU should not emit -enable-kvm (accel is machine-level): %v", args)
+	}
+	if slices.Contains(args, "-accel") {
+		t.Errorf("CPU should not emit -accel (accel is machine-level): %v", args)
 	}
 }
 

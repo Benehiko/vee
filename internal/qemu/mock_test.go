@@ -3,8 +3,23 @@ package qemu_test
 import (
 	"context"
 	"net"
+	"os"
 	"testing"
 )
+
+// shortSockDir returns a short-lived temporary directory suitable for AF_UNIX
+// socket paths. On macOS the per-test t.TempDir() path under /var/folders can
+// exceed the 104-byte sun_path limit (bind: invalid argument), so prefer a
+// short /tmp-based directory and fall back to t.TempDir() if /tmp is unavailable.
+func shortSockDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "vee")
+	if err != nil {
+		return t.TempDir()
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
 
 // mockSocketServer starts a Unix socket server at sockPath that accepts one
 // connection and runs handler in a goroutine. Returns a cleanup function.
