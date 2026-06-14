@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Required for the HVF accelerator (-accel hvf). -->
+	<key>com.apple.security.hypervisor</key>
+	<true/>
+	<!-- Required for the vmapple machine / apple-gfx (ParavirtualizedGraphics)
+	     path used by macOS guests. -->
+	<key>com.apple.security.virtualization</key>
+	<true/>
+</dict>
+</plist>
