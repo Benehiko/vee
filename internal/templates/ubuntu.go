@@ -2,10 +2,12 @@ package templates
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"time"
 
 	"github.com/Benehiko/vee/internal/images"
+	"github.com/Benehiko/vee/internal/platform"
 	"github.com/Benehiko/vee/internal/utils"
 	"github.com/Benehiko/vee/internal/vm"
 	"github.com/Benehiko/vee/provider"
@@ -16,6 +18,13 @@ import (
 func NewUbuntuServerConfig(ctx context.Context, p provider.Provider, version images.UbuntuVersion, name string) (*vm.VMConfig, error) {
 	if name == "" {
 		name = utils.GeneratePetname()
+	}
+
+	// The Ubuntu live-server ISO (subiquity autoinstall) is x86_64-only on
+	// releases.ubuntu.com. On aarch64 hosts use the arm64 cloud image instead.
+	if platform.HostArch() == "arm64" {
+		return nil, fmt.Errorf("the ISO-based ubuntu-server template is x86_64-only; " +
+			"on Apple Silicon use a cloud-image Ubuntu guest (e.g. `vee create <name> --template server --distro ubuntu`)")
 	}
 
 	img := images.NewUbuntuImage(p, images.UbuntuServer, version, "amd64")

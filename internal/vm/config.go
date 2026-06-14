@@ -51,6 +51,9 @@ const (
 	GPUNone        GPUMode = "none"
 	GPUVirtio      GPUMode = "virtio"
 	GPUPassthrough GPUMode = "passthrough"
+	// GPUAppleGFX uses Apple's ParavirtualizedGraphics.framework (QEMU >= 10.0,
+	// macOS host). It accelerates macOS guests only.
+	GPUAppleGFX GPUMode = "apple-gfx"
 )
 
 type GPUConfig struct {
@@ -77,6 +80,18 @@ type GPUConfig struct {
 	RebindReset       bool   `yaml:"rebind_reset,omitempty"        json:"rebind_reset,omitempty"`
 	RebindResetDriver string `yaml:"rebind_reset_driver,omitempty" json:"rebind_reset_driver,omitempty"`
 	AntiDetect        bool   `yaml:"anti_detect,omitempty"         json:"anti_detect,omitempty"`
+	// GLBackend selects the host OpenGL backend for the -display gl= suboption
+	// when Mode is virtio. On macOS use "es" (ANGLE/Metal, stable) or "core"
+	// (native, unstable); on Linux "on". Empty picks the host default.
+	GLBackend string `yaml:"gl_backend,omitempty" json:"gl_backend,omitempty"`
+	// Venus enables the Vulkan-over-virtio (Venus) path on the virtio-gpu-gl
+	// device. Requires a virglrenderer/QEMU built with Venus and a host Vulkan
+	// driver (MoltenVK on macOS). Experimental — desktop Vulkan compositing is
+	// not reliable yet; prefer virgl OpenGL for the desktop.
+	Venus bool `yaml:"venus,omitempty" json:"venus,omitempty"`
+	// HostMem sizes the host memory window for blob resources used by Venus
+	// (e.g. "8G"). Only relevant when Venus is true.
+	HostMem string `yaml:"host_mem,omitempty" json:"host_mem,omitempty"`
 }
 
 type UEFIConfig struct {

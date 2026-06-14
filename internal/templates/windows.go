@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Benehiko/vee/internal/images"
+	"github.com/Benehiko/vee/internal/platform"
 	"github.com/Benehiko/vee/internal/vm"
 	"github.com/Benehiko/vee/provider"
 )
@@ -30,6 +31,15 @@ import (
 // in vm.yaml.
 func NewWindowsConfig(ctx context.Context, p provider.Provider, version images.WindowsVersion, name, virtiofsTag string, spicePort int) (*vm.VMConfig, error) {
 	conf := p.Config()
+
+	// The Windows image pipeline (UUP dump) and x86 Secure Boot OVMF are
+	// x86_64-only. Windows-on-ARM has no vee image pipeline, and even when run,
+	// Windows guests get no virtio-gpu 3D acceleration (no guest driver) and
+	// VFIO passthrough is unavailable on macOS. Refuse clearly on aarch64.
+	if platform.HostArch() == "arm64" {
+		return nil, fmt.Errorf("the windows template is x86_64-only; Windows-on-ARM has no vee image pipeline, " +
+			"and Windows guests get no GPU 3D acceleration on a macOS host (no virtio-gpu driver, no VFIO)")
+	}
 
 	img := images.NewWindowsImage(p, version)
 	if err := img.Download(ctx); err != nil {

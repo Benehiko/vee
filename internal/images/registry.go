@@ -3,6 +3,7 @@ package images
 import (
 	"fmt"
 
+	"github.com/Benehiko/vee/internal/platform"
 	"github.com/Benehiko/vee/provider"
 )
 
@@ -98,10 +99,21 @@ func NewImage(p provider.Provider, distro, version string) (Image, error) {
 		version = versions[0]
 	}
 
+	// On aarch64 hosts (Apple Silicon), only Ubuntu currently has a wired-up
+	// arm64 cloud image. The other distros' images here are x86_64-only
+	// (Arch/Bazzite/TrueNAS official media, the Fedora/Alpine x86 URLs), and
+	// would not boot under HVF, so refuse clearly rather than fetch an
+	// unbootable image.
+	hostArch := platform.HostArch()
+	if hostArch == "arm64" && distro != DistroUbuntu {
+		return nil, fmt.Errorf("distro %q is not yet available for arm64 (aarch64) guests; "+
+			"Ubuntu is the supported arm64 guest on Apple Silicon — use --distro ubuntu", distro)
+	}
+
 	switch distro {
 	case DistroUbuntu:
 		// Cloud image: pre-installed, cloud-init-ready. Used by devbox/server templates.
-		return NewUbuntuCloudImage(p, UbuntuVersion(version)), nil
+		return NewUbuntuCloudImage(p, UbuntuVersion(version), hostArch), nil
 	case DistroArch:
 		return NewArchImage(p, ArchVersion(version)), nil
 	case DistroFedora:

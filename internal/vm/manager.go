@@ -23,6 +23,7 @@ import (
 	"github.com/Benehiko/vee/internal/cloudinit"
 	cputil "github.com/Benehiko/vee/internal/cpu"
 	"github.com/Benehiko/vee/internal/gpu"
+	"github.com/Benehiko/vee/internal/platform"
 	"github.com/Benehiko/vee/internal/qemu"
 	"github.com/Benehiko/vee/internal/virtiofs"
 	"github.com/Benehiko/vee/internal/virtiofsdinstall"
@@ -152,7 +153,14 @@ func (m *Manager) Create(ctx context.Context, cfg *VMConfig) error {
 		}
 	}
 
-	// Copy OVMF_VARS.fd per-VM if UEFI is requested.
+	// The aarch64 "virt" board has no legacy BIOS/CSM, so UEFI is mandatory —
+	// auto-enable it regardless of the template default.
+	if platform.DefaultGuestArch() == "aarch64" {
+		cfg.UEFI.Enabled = true
+	}
+
+	// Copy the UEFI vars template per-VM if UEFI is requested. The provider
+	// default is arch-correct (OVMF on x86_64, AAVMF/edk2-arm on aarch64).
 	if cfg.UEFI.Enabled {
 		src := cfg.UEFI.VarsPath
 		if src == "" {
@@ -160,7 +168,7 @@ func (m *Manager) Create(ctx context.Context, cfg *VMConfig) error {
 		}
 		dst := filepath.Join(dir, "OVMF_VARS.fd")
 		if err := copyFile(src, dst); err != nil {
-			return fmt.Errorf("copy OVMF_VARS: %w", err)
+			return fmt.Errorf("copy UEFI vars (%s): %w — ensure aarch64 firmware is available (install the vee-qemu bundle or QEMU via Homebrew)", src, err)
 		}
 		cfg.UEFI.VarsPath = dst
 	}
@@ -1157,13 +1165,29 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 	}
 
 	// CPU — gaming passthrough merges GamingCPUFlags before building.
+	guestArch := platform.DefaultGuestArch()
+	cpuModel := cfg.CPUModel
 	cpuFlags := cfg.CPUFlags
 	if cfg.GPU.Mode == GPUPassthrough && cfg.GPU.AntiDetect {
 		cpuFlags = append(cpuFlags, qemu.GamingCPUFlags...)
 	}
+	if guestArch == "aarch64" {
+		// The x86 CPU model catalogue and hyperv/anti-detect flags are invalid
+		// on aarch64; HVF only supports host passthrough. Force -cpu host and
+		// drop x86-specific flags.
+		if cpuModel != "host" && cpuModel != "max" {
+			cpuModel = "host"
+		}
+		if len(cpuFlags) > 0 {
+			m.provider.Logger().Warn("dropping x86-specific CPU flags on aarch64 guest",
+				zap.String("vm", cfg.Name),
+				zap.Strings("flags", cpuFlags))
+			cpuFlags = nil
+		}
+	}
 	sockets, cores, threads := cputil.AdjustSMP(cfg.CPUs, cfg.Sockets, cfg.Cores, cfg.Threads)
 	cpu := qemu.NewCPU(m.provider,
-		qemu.WithCPUModel(qemu.CPUModel(cfg.CPUModel)),
+		qemu.WithCPUModel(qemu.CPUModel(cpuModel)),
 		qemu.WithSMP(cfg.CPUs, sockets, threads, cores),
 		qemu.WithCPUFlags(cpuFlags),
 	)
@@ -1195,8 +1219,15 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 		cfg.SSHPort = port
 		nicHostFwds = append(nicHostFwds, fmt.Sprintf("tcp:127.0.0.1:%d-:22", port))
 	}
-	nic := qemu.NewNIC(qemu.NICMode(cfg.NIC.Mode), cfg.NIC.Bridge, cfg.NIC.MAC, nicHostFwds...)
-	if cfg.NIC.Mode == "bridge" && cfg.CPUs > 1 {
+	nicMode := cfg.NIC.Mode
+	if nicMode == "bridge" && !platform.SupportsBridgeNetworking() {
+		m.provider.Logger().Warn("bridge networking is unsupported on this host (Linux only) — falling back to user-mode NAT",
+			zap.String("vm", cfg.Name),
+			zap.String("host_os", platform.HostOS()))
+		nicMode = "user"
+	}
+	nic := qemu.NewNIC(qemu.NICMode(nicMode), cfg.NIC.Bridge, cfg.NIC.MAC, nicHostFwds...)
+	if nicMode == "bridge" && cfg.CPUs > 1 {
 		helperPath := m.provider.Config().BridgeHelperPath
 		if helperPath != "" {
 			if _, statErr := os.Stat(helperPath); statErr == nil {
@@ -1252,6 +1283,12 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 	memfdAdded := false
 	switch cfg.GPU.Mode {
 	case GPUPassthrough:
+		// VFIO PCI passthrough is a Linux kernel feature with no macOS
+		// equivalent; refuse rather than emit a vfio-pci device that cannot bind.
+		if !platform.SupportsVFIO() {
+			return nil, nil, fmt.Errorf("GPU passthrough (gpu.mode=passthrough) is only supported on Linux hosts; "+
+				"on %s use gpu.mode=virtio for accelerated virtio-gpu instead", platform.HostOS())
+		}
 		if cfg.GPU.PCIAddr != "" {
 			pf := gpu.PreflightCheck(cfg.GPU.PCIAddr, cfg.Memory)
 			fields := []zap.Field{
@@ -1395,15 +1432,41 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 		memfdAdded = true
 	case GPUVirtio:
 		opts = append(opts, qemu.WithVGA("none"))
+		arch := platform.DefaultGuestArch()
 		if cfg.Headless || cfg.SPICE != nil {
-			// virtio-vga-gl requires an OpenGL display context; headless VMs
-			// and SPICE VMs use -display none which provides no GL backend.
-			// Fall back to virtio-gpu-pci which works without a display server.
-			opts = append(opts, qemu.WithDevice("virtio-gpu-pci"))
+			// The GL-capable virtio-gpu device requires a windowed display with
+			// a host GL context; headless and SPICE VMs use -display none which
+			// provides none. Fall back to a plain (2D) virtio-gpu adapter.
+			opts = append(opts, qemu.WithDevice(qemu.VirtioGPUDevice(arch, false, false, "")))
 		} else {
-			opts = append(opts, qemu.WithDevice("virtio-vga-gl"))
-			opts = append(opts, qemu.WithDisplay("gtk,gl=on"))
+			// Host- and arch-aware GL adapter + display. On macOS this is
+			// virtio-gpu-gl-pci + "-display cocoa,gl=es" (ANGLE/Metal); on Linux
+			// virtio-vga-gl + "-display gtk,gl=on". Hardware acceleration only
+			// materializes when the resolved QEMU was built with virglrenderer.
+			dev := qemu.VirtioGPUDevice(arch, true, cfg.GPU.Venus, cfg.GPU.HostMem)
+			opts = append(opts, qemu.WithDevice(dev))
+			opts = append(opts, qemu.WithDisplay(qemu.DisplayArg(platform.HostOS(), true, qemu.GLBackend(cfg.GPU.GLBackend))))
+			if platform.IsMacOS() {
+				m.provider.Logger().Info("virtio-gpu GL enabled — accelerated only with a virglrenderer-capable QEMU (vee-qemu, UTM, or a qemu-virgl tap); stock/Homebrew QEMU renders in software",
+					zap.String("vm", cfg.Name),
+					zap.String("device", dev))
+			}
+			if cfg.GPU.Venus {
+				m.provider.Logger().Warn("Venus (Vulkan-over-virtio) is experimental; desktop Vulkan compositing is unreliable — prefer virgl OpenGL for the desktop",
+					zap.String("vm", cfg.Name))
+			}
 		}
+	case GPUAppleGFX:
+		// apple-gfx (ParavirtualizedGraphics.framework) accelerates macOS guests
+		// only and needs the vmapple machine, AVPBooter firmware, and a
+		// code-signed binary. The device/machine building blocks exist
+		// (qemu.AppleGFXDevice / qemu.VMAppleMachineType); full template wiring
+		// is pending, so refuse clearly rather than emit a half-configured VM.
+		if !platform.IsMacOS() {
+			return nil, nil, fmt.Errorf("GPU mode apple-gfx requires a macOS host (got %s)", platform.HostOS())
+		}
+		return nil, nil, fmt.Errorf("GPU mode apple-gfx is not yet wired end-to-end (requires vmapple machine + AVPBooter); " +
+			"use gpu.mode=virtio for Linux guests in the meantime")
 	}
 
 	// Explicit VGA override (e.g. "none" for passthrough VMs using virtio-gpu-pci via ExtraDevices).
@@ -1441,8 +1504,18 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 	}
 
 	// Virtiofsd mounts — ensure the binary exists before starting any daemon.
+	// virtiofsd is Linux only; on other hosts skip mounts with a warning rather
+	// than emitting a vhost-user-fs device that cannot be backed.
 	var virtiofsdPIDs []int
-	if len(cfg.VirtiofsMounts) > 0 {
+	virtiofsMounts := cfg.VirtiofsMounts
+	if len(virtiofsMounts) > 0 && !platform.SupportsVirtiofsd() {
+		m.provider.Logger().Warn("virtiofs shares are unsupported on this host (virtiofsd is Linux only) — skipping",
+			zap.String("vm", cfg.Name),
+			zap.Int("mounts", len(virtiofsMounts)),
+			zap.String("host_os", platform.HostOS()))
+		virtiofsMounts = nil
+	}
+	if len(virtiofsMounts) > 0 {
 		// virtiofs uses vhost-user, which needs guest RAM in a shareable
 		// backing. Passthrough already added the memfd backend; add it here for
 		// non-passthrough VMs (e.g. the windows template) so the share works.
@@ -1459,7 +1532,7 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 			}
 		}
 	}
-	for _, mount := range cfg.VirtiofsMounts {
+	for _, mount := range virtiofsMounts {
 		sockPath := mount.SocketPath
 		if sockPath == "" {
 			sockPath = filepath.Join(m.vmDir(cfg.Name), mount.Tag+".sock")
@@ -1488,8 +1561,13 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 		opts = append(opts, qemu.WithVirtiofsd(sockPath, mount.Tag))
 	}
 
-	// TPM — start swtpm daemon before QEMU.
-	if cfg.TPM != nil && cfg.TPM.Enabled {
+	// TPM — start swtpm daemon before QEMU. swtpm wiring is Linux-only in vee;
+	// on other hosts warn and continue without a TPM rather than aborting.
+	if cfg.TPM != nil && cfg.TPM.Enabled && !platform.SupportsSwTPM() {
+		m.provider.Logger().Warn("software TPM (swtpm) is unsupported on this host — continuing without a TPM",
+			zap.String("vm", cfg.Name),
+			zap.String("host_os", platform.HostOS()))
+	} else if cfg.TPM != nil && cfg.TPM.Enabled {
 		tpmDir := filepath.Join(m.vmDir(cfg.Name), "tpm")
 		tpmSock := filepath.Join(m.vmDir(cfg.Name), "tpm.sock")
 		if err := startSwtpm(tpmDir, tpmSock); err != nil {
@@ -1498,8 +1576,13 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 		opts = append(opts, qemu.WithTPM(qemu.NewTPM(tpmSock)))
 	}
 
-	// VSock — add vhost-vsock-pci device when SSH sharing is enabled.
-	if cfg.SSHShare {
+	// VSock — add vhost-vsock-pci device when SSH sharing is enabled. vhost is
+	// Linux-only; on other hosts SSH sharing relies on user-mode port forwarding.
+	if cfg.SSHShare && !platform.SupportsVsock() {
+		m.provider.Logger().Warn("vsock (vhost-vsock-pci) is unsupported on this host — SSH share falls back to user-mode port forwarding",
+			zap.String("vm", cfg.Name),
+			zap.String("host_os", platform.HostOS()))
+	} else if cfg.SSHShare {
 		cid := cfg.VsockCID
 		if cid == 0 {
 			cid = deterministicCID(cfg.Name)

@@ -20,7 +20,8 @@ const (
 	UbuntuDownloadChecksumURL = "https://releases.ubuntu.com/%s/SHA256SUMS"
 
 	// UbuntuCloudImageURL is the base URL for pre-installed cloud images.
-	UbuntuCloudImageURL         = "https://cloud-images.ubuntu.com/releases/%s/release/ubuntu-%s-server-cloudimg-amd64.img"
+	// Args: version, version, arch ("amd64" or "arm64").
+	UbuntuCloudImageURL         = "https://cloud-images.ubuntu.com/releases/%s/release/ubuntu-%s-server-cloudimg-%s.img"
 	UbuntuCloudImageChecksumURL = "https://cloud-images.ubuntu.com/releases/%s/release/SHA256SUMS"
 )
 
@@ -226,12 +227,19 @@ func (u *UbuntuImage) AbsolutePath() string {
 type UbuntuCloudImage struct {
 	*BaseImage
 	version UbuntuVersion
+	// arch is the Ubuntu image arch slug ("amd64" or "arm64"), matching the Go
+	// GOARCH naming so platform.HostArch() can be passed through directly.
+	arch string
 }
 
-func NewUbuntuCloudImage(p provider.Provider, version UbuntuVersion) *UbuntuCloudImage {
+func NewUbuntuCloudImage(p provider.Provider, version UbuntuVersion, arch string) *UbuntuCloudImage {
+	if arch == "" {
+		arch = "amd64"
+	}
 	return &UbuntuCloudImage{
 		BaseImage: NewBaseImage(p),
 		version:   version,
+		arch:      arch,
 	}
 }
 
@@ -239,7 +247,7 @@ func (u *UbuntuCloudImage) Distro() string  { return "ubuntu" }
 func (u *UbuntuCloudImage) Version() string { return string(u.version) }
 
 func (u *UbuntuCloudImage) Name() string {
-	return fmt.Sprintf("ubuntu-%s-server-cloudimg-amd64.img", u.version)
+	return fmt.Sprintf("ubuntu-%s-server-cloudimg-%s.img", u.version, u.arch)
 }
 
 func (u *UbuntuCloudImage) AbsolutePath() string {
@@ -321,7 +329,7 @@ func (u *UbuntuCloudImage) Download(ctx context.Context) error {
 		}
 	}
 
-	imgURL := fmt.Sprintf(UbuntuCloudImageURL, u.version, u.version)
+	imgURL := fmt.Sprintf(UbuntuCloudImageURL, u.version, u.version, u.arch)
 	req, err = http.NewRequestWithContext(ctx, "GET", imgURL, nil)
 	if err != nil {
 		return err
