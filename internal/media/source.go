@@ -235,10 +235,15 @@ Options=%s
 WantedBy=multi-user.target
 `, s.GuestPath, s.NFS.Server, s.NFS.Export, s.GuestPath, mountOptions)
 
+	// The automount point itself must NOT order after network-online.target.
+	// Automount units are implicitly Before=local-fs.target, while
+	// network-online.target is ordered After=local-fs.target. Ordering the
+	// automount after network-online.target therefore forms a cycle, which
+	// systemd breaks at boot by deleting the automount's start job — leaving
+	// the share silently unmounted with no failed unit. The network dependency
+	// belongs on the .mount unit (above), which is pulled in on first access.
 	automountContent := fmt.Sprintf(`[Unit]
 Description=Automount for %s
-After=network-online.target
-Wants=network-online.target
 
 [Automount]
 Where=%s
@@ -338,10 +343,11 @@ Options=%s
 WantedBy=multi-user.target
 `, s.GuestPath, s.SMB.Server, s.SMB.Share, s.GuestPath, mountOptions)
 
+	// See planNFS: the automount point must not order after
+	// network-online.target or systemd breaks the resulting cycle by dropping
+	// the automount at boot. The network dependency stays on the .mount unit.
 	automountContent := fmt.Sprintf(`[Unit]
 Description=Automount for %s
-After=network-online.target
-Wants=network-online.target
 
 [Automount]
 Where=%s

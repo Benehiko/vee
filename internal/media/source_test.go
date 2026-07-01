@@ -90,9 +90,21 @@ func TestPlan_NFS(t *testing.T) {
 					if !strings.Contains(wf.Content, "vers=4.2") {
 						t.Errorf("mount unit missing default vers=4.2: %s", wf.Content)
 					}
+					// The network dependency belongs on the .mount unit.
+					if !strings.Contains(wf.Content, "network-online.target") {
+						t.Errorf("mount unit missing network-online dependency: %s", wf.Content)
+					}
 				}
 				if strings.HasSuffix(wf.Path, "media-movies.automount") {
 					hasAutomount = true
+					// Regression: the automount point must NOT order after
+					// network-online.target — automounts are Before=local-fs.target
+					// while network-online.target is After=local-fs.target, so this
+					// forms a cycle that systemd breaks by dropping the automount at
+					// boot, leaving the share silently unmounted.
+					if strings.Contains(wf.Content, "network-online.target") {
+						t.Errorf("automount unit must not depend on network-online.target (ordering cycle): %s", wf.Content)
+					}
 				}
 			}
 			if !hasMount || !hasAutomount {
