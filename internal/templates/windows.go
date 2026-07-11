@@ -95,6 +95,16 @@ func NewWindowsConfig(ctx context.Context, p provider.Provider, version images.W
 		TPM: &vm.TPMConfig{
 			Enabled: true,
 		},
+		// USB HID: a USB keyboard + tablet (absolute pointer) on an xHCI
+		// controller. Windows guests expect USB input under SPICE, and — unlike
+		// the bare PS/2 keyboard — the USB keyboard is the input device OVMF and
+		// the Windows boot manager read during early boot, so QMP send-key
+		// events reach prompts like "Press any key to boot from CD".
+		ExtraDevices: []string{
+			"qemu-xhci,id=xhci",
+			"usb-kbd,bus=xhci.0",
+			"usb-tablet,bus=xhci.0",
+		},
 		// SPICE so the (mostly hands-free) install can still be watched and, if
 		// the answer file ever needs a nudge, driven interactively.
 		SPICE: &vm.SPICEConfig{
