@@ -1207,6 +1207,12 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 	}
 
 	// GPU
+	// Tracks whether a shared-memory backend (memory-backend-memfd,share=on)
+	// has been added. Both VFIO passthrough and virtiofs use the vhost-user
+	// protocol, which requires guest RAM to live in a shareable backing so the
+	// helper process can map it. Passthrough adds it below; virtiofs mounts on
+	// non-passthrough VMs (e.g. the windows template) must add it themselves.
+	memfdAdded := false
 	switch cfg.GPU.Mode {
 	case GPUPassthrough:
 		if cfg.GPU.PCIAddr != "" {
@@ -1348,6 +1354,7 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 		}
 		// Passthrough VMs need shared memory for the vhost-user protocol.
 		opts = append(opts, qemu.WithMemfd(qemu.NewMemfdBackend(cfg.Memory)))
+		memfdAdded = true
 	case GPUVirtio:
 		opts = append(opts, qemu.WithVGA("none"))
 		if cfg.Headless || cfg.SPICE != nil {
@@ -1398,6 +1405,12 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 	// Virtiofsd mounts — ensure the binary exists before starting any daemon.
 	var virtiofsdPIDs []int
 	if len(cfg.VirtiofsMounts) > 0 {
+		// virtiofs uses vhost-user, which needs guest RAM in a shareable
+		// backing. Passthrough already added the memfd backend; add it here for
+		// non-passthrough VMs (e.g. the windows template) so the share works.
+		if !memfdAdded {
+			opts = append(opts, qemu.WithMemfd(qemu.NewMemfdBackend(cfg.Memory)))
+		}
 		home, homeErr := os.UserHomeDir()
 		if homeErr == nil {
 			if path, ensureErr := virtiofsdinstall.EnsureVirtiofsd(home); ensureErr == nil {
