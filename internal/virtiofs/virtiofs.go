@@ -67,7 +67,16 @@ func NewVirtiofsd(p provider.Provider, opts ...VirtiofsdOption) *Virtiofsd {
 func (v *Virtiofsd) args() []string {
 	var args []string
 	args = append(args, "--socket-path", v.SocketPath)
-	args = append(args, "--share-dir", v.SharedDir)
+	// The Rust virtiofsd (v1.13.x, what EnsureVirtiofsd builds) spells this
+	// --shared-dir; the old C daemon used --share-dir.
+	args = append(args, "--shared-dir", v.SharedDir)
+	// --sandbox none: the default sandbox tries to drop into a new user
+	// namespace and setuid(0), which fails ("Couldn't set the process uid as
+	// root") and aborts virtiofsd when vee runs it as an unprivileged user, so
+	// the socket is never created and QEMU crashes trying to connect. Access to
+	// the share is already bounded by the invoking user's filesystem
+	// permissions, so no sandbox is needed here.
+	args = append(args, "--sandbox", "none")
 	if v.AnnounceSubmounts {
 		args = append(args, "--announce-submounts")
 	}

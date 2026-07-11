@@ -290,7 +290,15 @@ func configFromTemplate(ctx context.Context, prov provider.Provider, opts Opts, 
 		if opts.DistroVersion != "" && opts.DistroVersion != "latest" {
 			winVersion = images.WindowsVersion(opts.DistroVersion)
 		}
-		return templates.NewWindowsConfig(ctx, prov, winVersion, opts.Name)
+		virtiofsTag := opts.VirtiofsTag
+		if opts.VirtiofsDir != "" && virtiofsTag == "" {
+			virtiofsTag = "share"
+		}
+		spicePort := 0
+		if opts.SPICEPort != nil {
+			spicePort = *opts.SPICEPort
+		}
+		return templates.NewWindowsConfig(ctx, prov, winVersion, opts.Name, virtiofsTag, spicePort)
 	case "docker":
 		return templates.NewDockerConfig(ctx, prov, opts.Name, sshKeys, opts.DistroVersion)
 	case "jellyfin":

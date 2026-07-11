@@ -54,12 +54,23 @@ var windowsVersionParams = map[WindowsVersion]windowsParams{
 
 // UUP Dump API response types.
 
+// uupdumpBuild is one entry in the listid response. The API returns builds for
+// every architecture (amd64, arm64) mixed together, newest first-ish, so Arch
+// and Created are needed to pick the right one deterministically.
+type uupdumpBuild struct {
+	UUID    string `json:"uuid"`
+	Title   string `json:"title"`
+	Arch    string `json:"arch"`
+	Created int64  `json:"created"`
+}
+
+// uupdumpListResponse models the listid.php response. `builds` used to be a
+// JSON array but is now an object keyed by an opaque index
+// (`{"768": {...}, "769": {...}}`), so it is decoded as a map and the values
+// are collected.
 type uupdumpListResponse struct {
 	Response struct {
-		Builds []struct {
-			UUID  string `json:"uuid"`
-			Title string `json:"title"`
-		} `json:"builds"`
+		Builds map[string]uupdumpBuild `json:"builds"`
 	} `json:"response"`
 }
 
@@ -169,13 +180,29 @@ func (w *WindowsImage) fetchBuildUUID(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("decode UUP dump list response: %w", err)
 	}
 
-	builds := result.Response.Builds
-	if len(builds) == 0 {
+	if len(result.Response.Builds) == 0 {
 		return "", fmt.Errorf("no builds found for %q / %s", w.params.search, w.params.edition)
 	}
 
-	w.provider.Logger().Info("found UUP dump build", zap.String("title", builds[0].Title), zap.String("uuid", builds[0].UUID))
-	return builds[0].UUID, nil
+	// The API mixes architectures; pick the newest amd64 build. Selecting by
+	// Created (not map order, which is unspecified) keeps this deterministic.
+	var best uupdumpBuild
+	found := false
+	for _, b := range result.Response.Builds {
+		if b.Arch != "" && b.Arch != "amd64" {
+			continue
+		}
+		if !found || b.Created > best.Created {
+			best = b
+			found = true
+		}
+	}
+	if !found {
+		return "", fmt.Errorf("no amd64 build found for %q / %s", w.params.search, w.params.edition)
+	}
+
+	w.provider.Logger().Info("found UUP dump build", zap.String("title", best.Title), zap.String("uuid", best.UUID))
+	return best.UUID, nil
 }
 
 func (w *WindowsImage) fetchESDURLs(ctx context.Context, uuid string) (map[string]string, error) {
