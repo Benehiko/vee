@@ -47,6 +47,55 @@ vee create mynas --template truenas \
   --data-disk /dev/disk/by-id/ata-ST22000NM000C_ZXA0WD9J:EXOS22TB-B
 ```
 
+## Base images
+
+`vee create` downloads the base image it needs automatically. You can also pre-fetch
+images into the local cache (`~/.vee/iso/`) with `vee pull`, so later VMs reuse the
+cached copy instead of re-downloading. A pull for an already-cached image is a no-op.
+
+```sh
+vee pull ubuntu            # newest known Ubuntu cloud image
+vee pull ubuntu 22.04.4    # a specific version
+vee pull ubuntu-24.04      # same, as a single token
+vee pull windows win10     # build the Windows 10 ISO (see below)
+vee pull --list            # list every supported distro and version
+```
+
+Both the distro and `distro-version` forms shell-complete from the built-in list.
+
+| Distro | Notes |
+|--------|-------|
+| `ubuntu` | Cloud image (cloud-init ready) — 24.04, 22.04.4, 20.04.6 |
+| `arch` | Bootstrap image |
+| `fedora` | Cloud image — 42, 41, 40 |
+| `alpine` | Cloud image |
+| `bazzite` | Fedora Atomic gaming ISO |
+| `truenas` | TrueNAS SCALE installer ISO |
+| `windows` | Built on demand — `win11`, `win10`, `server2025`, `server2022` |
+
+### Windows ISOs
+
+vee builds Windows install ISOs on demand — no manual ISO download required. It
+resolves the latest build via the [UUP dump](https://uupdump.net/) API, downloads
+the ESD packages directly from Microsoft's servers, and assembles a bootable UEFI
+ISO inside a throwaway container (`wimlib` + `xorriso`).
+
+```sh
+vee pull windows win11             # Windows 11 24H2
+vee pull windows win10             # Windows 10 22H2
+vee pull windows server2025        # Windows Server 2025
+vee create winvm --template windows   # pulls automatically if not cached
+```
+
+**Requirements:** `nerdctl` or `docker` on `PATH` (the ISO is assembled in a
+container; no host tooling is installed). The `windows` template additionally
+pulls the VirtIO driver ISO and WinFSP so the guest gets paravirtualized disk,
+network, and virtiofs support out of the box.
+
+> **Licensing:** vee downloads Windows bits from Microsoft's own servers and
+> assembles the ISO locally — it never redistributes Windows. You still need a
+> valid Windows license key to activate the guest.
+
 ## GPU passthrough
 
 The `gaming`, `gaming-arch`, and `passthrough` templates use VFIO to wire a PCIe GPU directly into the VM — zero emulation, full metal.
@@ -130,6 +179,7 @@ See [docs/gpu-passthrough-gaming.md](docs/gpu-passthrough-gaming.md) for Sunshin
 | Command | Description |
 |---------|-------------|
 | `vee create <name>` | Provision a new VM |
+| `vee pull <distro> [version]` | Download or build a base image into the cache |
 | `vee start <name>` | Boot a VM (detached by default) |
 | `vee stop <name>` | Graceful shutdown |
 | `vee list` | List all VMs and status |
