@@ -104,22 +104,33 @@ func autounattendXML(version images.WindowsVersion, driverDir, tag string) strin
 	// runSetup invokes the guest setup script from whichever drive the
 	// unattend ISO mounted as. cmd searches drives at first logon.
 	const tmpl = `<?xml version="1.0" encoding="utf-8"?>
-<unattend xmlns="urn:schemas-microsoft-com:unattend">
+<unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
   <settings pass="windowsPE">
+    <!-- Locale for WinPE so Setup does not stop on the language/keyboard page. -->
+    <component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <SetupUILanguage>
+        <UILanguage>en-US</UILanguage>
+      </SetupUILanguage>
+      <InputLocale>0409:00000409</InputLocale>
+      <SystemLocale>en-US</SystemLocale>
+      <UILanguage>en-US</UILanguage>
+      <UserLocale>en-US</UserLocale>
+    </component>
     <component name="Microsoft-Windows-PnpCustomizationsWinPE" processorArchitecture="amd64"
                publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <DriverPaths>
         <PathAndCredentials wcm:action="add" wcm:keyValue="1">
-          <Path>E:\viostor\{{DRIVERDIR}}\amd64</Path>
-        </PathAndCredentials>
-        <PathAndCredentials wcm:action="add" wcm:keyValue="2">
-          <Path>E:\NetKVM\{{DRIVERDIR}}\amd64</Path>
-        </PathAndCredentials>
-        <PathAndCredentials wcm:action="add" wcm:keyValue="3">
           <Path>D:\viostor\{{DRIVERDIR}}\amd64</Path>
         </PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="2">
+          <Path>E:\viostor\{{DRIVERDIR}}\amd64</Path>
+        </PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="3">
+          <Path>D:\NetKVM\{{DRIVERDIR}}\amd64</Path>
+        </PathAndCredentials>
         <PathAndCredentials wcm:action="add" wcm:keyValue="4">
-          <Path>F:\viostor\{{DRIVERDIR}}\amd64</Path>
+          <Path>E:\NetKVM\{{DRIVERDIR}}\amd64</Path>
         </PathAndCredentials>
       </DriverPaths>
     </component>
@@ -127,22 +138,23 @@ func autounattendXML(version images.WindowsVersion, driverDir, tag string) strin
                publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <RunSynchronous>
         <!-- Bypass Windows 11 hardware checks (Secure Boot keys are not
-             enrolled in the OVMF vars this VM boots with; TPM 2.0 is real). -->
+             enrolled in the OVMF vars this VM boots with; TPM 2.0 is real).
+             Harmless on Windows 10. cmd /c so WinPE resolves the executable. -->
         <RunSynchronousCommand wcm:action="add">
           <Order>1</Order>
-          <Path>reg add HKLM\SYSTEM\Setup\LabConfig /v BypassTPMCheck /t REG_DWORD /d 1 /f</Path>
+          <Path>cmd /c reg add HKLM\SYSTEM\Setup\LabConfig /v BypassTPMCheck /t REG_DWORD /d 1 /f</Path>
         </RunSynchronousCommand>
         <RunSynchronousCommand wcm:action="add">
           <Order>2</Order>
-          <Path>reg add HKLM\SYSTEM\Setup\LabConfig /v BypassSecureBootCheck /t REG_DWORD /d 1 /f</Path>
+          <Path>cmd /c reg add HKLM\SYSTEM\Setup\LabConfig /v BypassSecureBootCheck /t REG_DWORD /d 1 /f</Path>
         </RunSynchronousCommand>
         <RunSynchronousCommand wcm:action="add">
           <Order>3</Order>
-          <Path>reg add HKLM\SYSTEM\Setup\LabConfig /v BypassRAMCheck /t REG_DWORD /d 1 /f</Path>
+          <Path>cmd /c reg add HKLM\SYSTEM\Setup\LabConfig /v BypassRAMCheck /t REG_DWORD /d 1 /f</Path>
         </RunSynchronousCommand>
         <RunSynchronousCommand wcm:action="add">
           <Order>4</Order>
-          <Path>reg add HKLM\SYSTEM\Setup\LabConfig /v BypassCPUCheck /t REG_DWORD /d 1 /f</Path>
+          <Path>cmd /c reg add HKLM\SYSTEM\Setup\LabConfig /v BypassCPUCheck /t REG_DWORD /d 1 /f</Path>
         </RunSynchronousCommand>
       </RunSynchronous>
       <DiskConfiguration>
@@ -189,11 +201,18 @@ func autounattendXML(version images.WindowsVersion, driverDir, tag string) strin
             <DiskID>0</DiskID>
             <PartitionID>3</PartitionID>
           </InstallTo>
+          <InstallFrom>
+            <MetaData wcm:action="add">
+              <Key>/IMAGE/INDEX</Key>
+              <Value>{{IMAGEINDEX}}</Value>
+            </MetaData>
+          </InstallFrom>
         </OSImage>
       </ImageInstall>
       <UserData>
         <ProductKey>
-          <Key></Key>
+          <Key>{{PRODUCTKEY}}</Key>
+          <WillShowUI>OnError</WillShowUI>
         </ProductKey>
         <AcceptEula>true</AcceptEula>
       </UserData>
@@ -208,6 +227,14 @@ func autounattendXML(version images.WindowsVersion, driverDir, tag string) strin
   </settings>
 
   <settings pass="oobeSystem">
+    <!-- Locale for OOBE so the region/keyboard pages auto-skip. -->
+    <component name="Microsoft-Windows-International-Core" processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <InputLocale>0409:00000409</InputLocale>
+      <SystemLocale>en-US</SystemLocale>
+      <UILanguage>en-US</UILanguage>
+      <UserLocale>en-US</UserLocale>
+    </component>
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64"
                publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <OOBE>
@@ -251,14 +278,35 @@ func autounattendXML(version images.WindowsVersion, driverDir, tag string) strin
   </settings>
 </unattend>
 `
+	// Image index + a generic (KMS client / default) product key so Setup does
+	// not stop to ask which edition to install. Index 1 is Home on the retail
+	// consumer media for both Windows 10 and 11.
+	imageIndex := "1"
+	productKey := winProductKey[version]
+	if productKey == "" {
+		productKey = winProductKey[images.Windows10]
+	}
 	r := strings.NewReplacer(
 		"{{DRIVERDIR}}", driverDir,
 		"{{USER}}", winAdminUser,
 		"{{PASS}}", winAdminPass,
 		"{{VOLID}}", winUnattendVolID,
+		"{{IMAGEINDEX}}", imageIndex,
+		"{{PRODUCTKEY}}", productKey,
 	)
 	_ = tag
 	return r.Replace(tmpl)
+}
+
+// winProductKey maps a Windows version to a generic edition key so Setup
+// installs unattended without prompting for a key. These are Microsoft's
+// public KMS client setup keys — they select the edition, they do not
+// activate.
+var winProductKey = map[images.WindowsVersion]string{
+	images.Windows10:         "YTMG3-N6DKC-DKB77-7M9GH-8HVX7", // Win10 Home
+	images.Windows11:         "YTMG3-N6DKC-DKB77-7M9GH-8HVX7", // Win11 Home
+	images.WindowsServer2025: "TX9XD-98N7V-6WMQ6-BX7FG-H8Q99",
+	images.WindowsServer2022: "VDYBN-27WPP-V4HQT-9VMD4-VMK7H",
 }
 
 // guestSetupPS1 renders the first-logon PowerShell script. It installs WinFsp
@@ -332,13 +380,28 @@ Restart-Computer -Force
 	return r.Replace(tmpl)
 }
 
-// buildUnattendISO writes Autounattend.xml, setup-guest.ps1 and the WinFsp MSI
-// into a small ISO labelled WIN_UNATTEND at outPath. winfspMSIPath is the
-// cached WinFsp installer to embed.
-func buildUnattendISO(outPath, autounattend, setupScript, winfspMSIPath string) error {
-	stage, err := os.MkdirTemp("", "vee-unattend-")
+// buildExtrasISO builds the single "extras" ISO that carries everything Setup
+// and first-logon need beyond the Windows install media: the whole virtio-win
+// driver tree (so WinPE loads viostor and the guest tools installer is present)
+// plus Autounattend.xml, setup-guest.ps1 and the WinFsp MSI at the root.
+//
+// It is ONE ISO on purpose. Windows' boot manager reboot-loops on q35 when more
+// than two optical drives are attached, so the drivers and the answer file
+// cannot be two separate CDROMs alongside the install media — they are merged
+// here. The volume is labelled winUnattendVolID so Setup finds Autounattend.xml
+// and the first-logon command locates setup-guest.ps1 by label.
+//
+// The merge runs in a container (mounting the virtio-win ISO read-only and
+// running genisoimage) so the host needs no loopback-mount privileges.
+func buildExtrasISO(ctx context.Context, p provider.Provider, outPath, virtioISOPath, autounattend, setupScript, winfspMSIPath string) error {
+	runtime, err := findWindowsContainerRuntime()
 	if err != nil {
-		return fmt.Errorf("create unattend staging dir: %w", err)
+		return err
+	}
+
+	stage, err := os.MkdirTemp("", "vee-extras-")
+	if err != nil {
+		return fmt.Errorf("create extras staging dir: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(stage) }()
 
@@ -359,31 +422,38 @@ func buildUnattendISO(outPath, autounattend, setupScript, winfspMSIPath string) 
 	}
 
 	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
-		return fmt.Errorf("create unattend iso dir: %w", err)
+		return fmt.Errorf("create extras iso dir: %w", err)
 	}
 
-	tool, args := unattendISOTool(outPath, stage)
-	cmd := exec.Command(tool, args...)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("%s: %w\n%s", tool, err, out)
+	outDir := filepath.Dir(outPath)
+	outName := filepath.Base(outPath)
+	buildScript := `set -e
+apk add --no-cache cdrkit 7zip >/dev/null 2>&1
+mkdir -p /iso
+# Unpack the virtio-win ISO (read-only bind) into the staging tree.
+7z x -y -o/iso /virtio.iso >/dev/null
+# Overlay the unattend files at the ISO root.
+cp -a /extra/. /iso/
+genisoimage -J -joliet-long -r -V ` + winUnattendVolID + ` -o /out/` + outName + ` /iso >/dev/null 2>&1
+`
+
+	args := []string{
+		"run", "--rm",
+		"-v", virtioISOPath + ":/virtio.iso:ro",
+		"-v", stage + ":/extra:ro",
+		"-v", outDir + ":/out",
+		"alpine:latest",
+		"sh", "-c", buildScript,
 	}
+	cmd := exec.CommandContext(ctx, runtime, args...)
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("build extras ISO: %w", err)
+	}
+	if _, err := os.Stat(outPath); err != nil {
+		return fmt.Errorf("extras ISO not produced at %s", outPath)
+	}
+	p.Logger().Info("built windows extras ISO", zap.String("path", outPath))
 	return nil
-}
-
-func unattendISOTool(outPath, srcDir string) (string, []string) {
-	if _, err := exec.LookPath("xorriso"); err == nil {
-		return "xorriso", []string{
-			"-as", "mkisofs",
-			"-output", outPath,
-			"-volid", winUnattendVolID,
-			"-joliet", "-rock",
-			srcDir,
-		}
-	}
-	return "genisoimage", []string{
-		"-output", outPath,
-		"-volid", winUnattendVolID,
-		"-joliet", "-rock",
-		srcDir,
-	}
 }

@@ -58,13 +58,23 @@ func NewWindowsConfig(ctx context.Context, p provider.Provider, version images.W
 	autounattend := autounattendXML(version, driverDir, virtiofsTag)
 	setupScript := guestSetupPS1(virtiofsTag)
 
-	// The unattend ISO lives in the VM's dir so it is regenerated per-VM and
-	// removed with the VM. vmDir is <ISOCache>/../vms/<name> — but templates do
-	// not know the vm dir, so stage it under the ISO cache keyed by VM name and
-	// let the manager treat it as a one-shot install ISO (stripped post-install).
-	unattendISO := filepath.Join(conf.ISOCachePath, "unattend-"+name+".iso")
-	if err := buildUnattendISO(unattendISO, autounattend, setupScript, winfspPath); err != nil {
-		return nil, fmt.Errorf("build unattend ISO: %w", err)
+	// The install media must not show "Press any key to boot from CD" — that
+	// prompt times out on an unattended boot and the firmware falls through to a
+	// PXE loop, and QMP key injection does not reach it. Rebuild the media with
+	// the prompt-free EFI boot image. Falls back to the original ISO if the tool
+	// (oscdimg) is unavailable.
+	installISOPath, err := ensureNoPromptISO(ctx, p, img.AbsolutePath())
+	if err != nil {
+		return nil, fmt.Errorf("prepare no-prompt install media: %w", err)
+	}
+
+	// One "extras" ISO: virtio-win drivers + Autounattend.xml + WinFsp + the
+	// first-logon setup script. A single ISO (not three) because q35 reboot-
+	// loops WinPE with more than two optical drives. Staged per-VM under the ISO
+	// cache and treated as a one-shot install ISO (stripped post-install).
+	extrasISO := filepath.Join(conf.ISOCachePath, "win-extras-"+name+".iso")
+	if err := buildExtrasISO(ctx, p, extrasISO, virtioISO, autounattend, setupScript, winfspPath); err != nil {
+		return nil, fmt.Errorf("build extras ISO: %w", err)
 	}
 
 	// Secboot OVMF for Windows 11 Secure Boot requirement.
@@ -128,29 +138,22 @@ func NewWindowsConfig(ctx context.Context, p provider.Provider, version images.W
 			DisableTicketing: true,
 		},
 		Disks: []vm.DiskConfig{
-			// Windows install media. IDE/SATA (not virtio) so WinPE can boot it
-			// with no extra driver; the virtio system disk is handled by the
-			// injected viostor driver.
+			// Windows install media (no-prompt). IDE (not virtio) so WinPE can
+			// boot it with no extra driver; the virtio system disk is handled by
+			// the injected viostor driver. Exactly two optical drives — q35
+			// reboot-loops WinPE with three or more.
 			{
-				Path:       img.AbsolutePath(),
+				Path:       installISOPath,
 				Interface:  "ide",
 				Media:      "cdrom",
 				Cache:      "none",
 				Readonly:   true,
 				InstallISO: true,
 			},
-			// virtio-win driver ISO (WinPE storage driver + guest tools).
+			// Extras ISO: virtio-win drivers + Autounattend.xml + WinFsp + setup
+			// script, all on one volume.
 			{
-				Path:       virtioISO,
-				Interface:  "ide",
-				Media:      "cdrom",
-				Cache:      "none",
-				Readonly:   true,
-				InstallISO: true,
-			},
-			// Unattend ISO (Autounattend.xml + WinFsp MSI + setup script).
-			{
-				Path:       unattendISO,
+				Path:       extrasISO,
 				Interface:  "ide",
 				Media:      "cdrom",
 				Cache:      "none",
