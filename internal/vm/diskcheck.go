@@ -27,7 +27,7 @@ type DiskWarning struct {
 func CheckDisksForData(cfg *VMConfig) ([]DiskWarning, error) {
 	var warnings []DiskWarning
 	for _, d := range cfg.Disks {
-		if d.Media == "cdrom" || d.InstallISO {
+		if d.IsInstallISO() {
 			continue
 		}
 		// Passthrough disks are expected to contain data when SkipInstall is

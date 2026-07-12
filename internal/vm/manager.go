@@ -253,7 +253,7 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 	if cfg.SkipInstall && state.InstallState == "" {
 		filtered := cfg.Disks[:0]
 		for _, d := range cfg.Disks {
-			if !d.InstallISO {
+			if !d.IsInstallISO() {
 				filtered = append(filtered, d)
 			}
 		}
@@ -269,10 +269,10 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 		}
 	}
 
-	// Detect any one-shot installer ISO disks (InstallISO=true).
+	// Detect any one-shot installer ISO disks (InstallISO=true or media=cdrom).
 	hasInstallISO := false
 	for _, d := range cfg.Disks {
-		if d.InstallISO {
+		if d.IsInstallISO() {
 			hasInstallISO = true
 			break
 		}
@@ -288,19 +288,26 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 			}
 		}
 	case InstallStateReady:
-		// Strip InstallISO disks — they are one-shot and must not be
+		// Strip installer ISO disks — they are one-shot and must not be
 		// re-attached after installation completes. Persist the stripped config
-		// so future starts don't see the ISOs at all.
+		// so future starts don't see the ISOs at all. IsInstallISO also matches
+		// media=cdrom disks so legacy configs (written before the install_iso
+		// flag) get their now-dead installer cdrom removed here too — otherwise a
+		// deleted backing ISO makes every subsequent boot fail on the missing file.
 		filtered := cfg.Disks[:0]
+		stripped := false
 		for _, d := range cfg.Disks {
-			if d.InstallISO {
+			if d.IsInstallISO() {
+				stripped = true
 				continue
 			}
 			filtered = append(filtered, d)
 		}
 		cfg.Disks = filtered
-		if err := m.saveConfig(cfg); err != nil {
-			return fmt.Errorf("save config after stripping install ISOs: %w", err)
+		if stripped {
+			if err := m.saveConfig(cfg); err != nil {
+				return fmt.Errorf("save config after stripping install ISOs: %w", err)
+			}
 		}
 	}
 
@@ -1205,6 +1212,20 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 
 	// Disks
 	for i, d := range cfg.Disks {
+		// A cdrom installer whose backing ISO no longer exists must not be
+		// attached: QEMU hard-fails at open() and the VM can never boot. This is
+		// the last line of defence — the install-state machine strips such disks
+		// once install completes — but a stale config (e.g. a manually-restored
+		// vm.yaml, or a still-pending install with a deleted ISO) can slip a
+		// missing cdrom through to here. Skip it with a warning rather than
+		// aborting the boot of an already-installed guest.
+		if d.Media == "cdrom" && d.Path != "" {
+			if _, statErr := os.Stat(d.Path); os.IsNotExist(statErr) {
+				m.provider.Logger().Warn("skipping cdrom disk: backing file is missing",
+					zap.String("vm", cfg.Name), zap.String("path", d.Path))
+				continue
+			}
+		}
 		disk := qemu.NewDisk(m.provider, machine,
 			qemu.WithCustomPath(d.Path),
 			qemu.WithSize(d.Size),

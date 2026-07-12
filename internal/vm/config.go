@@ -26,6 +26,17 @@ type DiskConfig struct {
 	InstallISO bool `yaml:"install_iso,omitempty" json:"install_iso,omitempty"`
 }
 
+// IsInstallISO reports whether this disk is a one-shot installer image that must
+// be stripped once installation completes. It returns true for disks explicitly
+// flagged with InstallISO, and also for any cdrom-media disk. The cdrom fallback
+// keeps legacy configs written before the InstallISO field existed working: their
+// installer disks carry media=cdrom but no install_iso flag, so keying strip
+// logic on InstallISO alone would leave a dead cdrom attached forever once its
+// backing ISO is removed.
+func (d DiskConfig) IsInstallISO() bool {
+	return d.InstallISO || d.Media == "cdrom"
+}
+
 type NICConfig struct {
 	Mode     string   `yaml:"mode"              json:"mode"`
 	Bridge   string   `yaml:"bridge,omitempty"  json:"bridge,omitempty"`
