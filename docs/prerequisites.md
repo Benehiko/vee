@@ -1,27 +1,17 @@
-# ▸ PREREQUISITES
+# Prerequisites
 
-```
-╔══════════════════════════════════════════════════════════════╗
-║  SYSTEM REQUIREMENTS :: BEFORE YOU JACK IN                   ║
-╚══════════════════════════════════════════════════════════════╝
-```
+System requirements to set up before creating your first VM.
 
----
+## Required packages
 
-## ▸ REQUIRED PACKAGES
-
-```
-╔═══════════════╦══════════════════════════════════════════════════════╗
-║ PACKAGE       ║ PURPOSE                                              ║
-╠═══════════════╬══════════════════════════════════════════════════════╣
-║ qemu-system   ║ VM execution engine                                  ║
-║ qemu-img      ║ Disk image creation                                  ║
-║ ovmf          ║ UEFI firmware (OVMF_CODE / OVMF_VARS)                ║
-║ openssh       ║ vee ssh and vee tunnel                               ║
-║ virtiofsd     ║ Host directory sharing into VMs (--virtiofs-dir)     ║
-║ swtpm         ║ TPM 2.0 emulation (Windows template)                 ║
-╚═══════════════╩══════════════════════════════════════════════════════╝
-```
+| Package | Purpose |
+|---------|---------|
+| `qemu-system` | VM execution engine |
+| `qemu-img` | Disk image creation |
+| `ovmf` | UEFI firmware (OVMF_CODE / OVMF_VARS) |
+| `openssh` | `vee ssh` and `vee tunnel` |
+| `virtiofsd` | Host directory sharing into VMs (`--virtiofs-dir`) |
+| `swtpm` | TPM 2.0 emulation (Windows template) |
 
 ### Arch Linux
 
@@ -41,9 +31,7 @@ sudo apt install qemu-system-x86 ovmf openssh-client virtiofsd swtpm
 sudo dnf install qemu-kvm edk2-ovmf openssh-clients virtiofsd swtpm
 ```
 
----
-
-## ▸ KVM ACCESS
+## KVM access
 
 Your user must be in the `kvm` group for hardware-accelerated VMs:
 
@@ -53,9 +41,7 @@ sudo usermod -aG kvm $USER
 
 Re-login (or `newgrp kvm`) for the change to take effect.
 
----
-
-## ▸ DISK PASSTHROUGH
+## Disk passthrough
 
 To pass raw block devices into a VM (e.g. TrueNAS ZFS data drives), your user must be in the `disk` group:
 
@@ -67,9 +53,7 @@ Re-login (or `newgrp disk`) for the change to take effect.
 
 Without this, QEMU fails with `Permission denied` when opening devices under `/dev/disk/by-id/`.
 
----
-
-## ▸ BRIDGE NETWORKING
+## Bridge networking
 
 Bridge-mode VMs (TrueNAS, gaming) require a host bridge interface. Default bridge name: `br0`.
 
@@ -124,9 +108,7 @@ Ensure `/usr/lib/qemu/qemu-bridge-helper` is setuid:
 sudo chmod u+s /usr/lib/qemu/qemu-bridge-helper
 ```
 
----
-
-## ▸ GPU PASSTHROUGH (VFIO)
+## GPU passthrough (VFIO)
 
 Two system-level changes are required to pass a GPU through to a VM.
 
@@ -219,9 +201,7 @@ gpu:
 
 If a passthrough VM exits uncleanly (crash, force-kill), the GPU may be left in the `D3cold` power state. `vee` automatically attempts a PCI function-level reset before each start and logs the outcome. If the device cannot be reset via sysfs, a cold reboot of the host is required.
 
----
-
-## ▸ SHELL COMPLETION
+## Shell completion
 
 ```sh
 # bash — add to ~/.bashrc

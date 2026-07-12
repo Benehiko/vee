@@ -1,48 +1,45 @@
-# ▸ vee
+# vee
 
-```
-╔══════════════════════════════════════════════════════════════╗
-║  VEE :: QEMU/KVM VM MANAGER                    v0.x.0       ║
-║  jack in. spin up. jack out.                                 ║
-╚══════════════════════════════════════════════════════════════╝
-```
-
-Bare-metal VM control from the terminal. QEMU/KVM backend, GPU passthrough, virtiofs sharing, SPICE display, SSH tunnelling — wired together into a single command.
-
----
-
-## ▸ JACK IN — QUICK START
+A command-line VM manager built on QEMU/KVM. Create, start, SSH into, and monitor virtual machines from a single lightweight tool — with GPU passthrough, virtiofs sharing, SPICE display, and SSH tunnelling wired in.
 
 ```sh
-make install          # flash binary to ~/.vee/bin/vee
-vee create myvm       # spin up an Ubuntu 24.04 server VM
-vee start myvm        # boot — detached by default
-vee ssh myvm          # open a shell
-vee stop myvm         # graceful shutdown
+vee create myvm    # create an Ubuntu 24.04 server VM
+vee start myvm     # boot it (detached by default)
+vee ssh myvm       # open a shell
+vee stop myvm      # graceful shutdown
 ```
 
-> **Prerequisites:** See [docs/prerequisites.md](docs/prerequisites.md) — KVM access, bridge networking, disk group membership, OVMF firmware.
+## Quick start
 
----
-
-## ▸ TEMPLATES
-
+```sh
+make install       # build and install to ~/.vee/bin/vee
+vee create myvm    # create an Ubuntu 24.04 server VM
+vee start myvm     # boot — detached by default
+vee ssh myvm       # open a shell
+vee stop myvm      # graceful shutdown
 ```
-╔═══════════════════╦══════════════════════════════════════════════════════╗
-║ TEMPLATE          ║ DESCRIPTION                                          ║
-╠═══════════════════╬══════════════════════════════════════════════════════╣
-║ ubuntu-server     ║ Ubuntu 24.04 LTS · UEFI · user-mode NIC (default)   ║
-║ devbox            ║ Docker + zsh via cloud-init · --distro flag          ║
-║ server            ║ openssh + ufw + fail2ban · --distro flag             ║
-║ truenas           ║ TrueNAS SCALE · AHCI OS disk · bridge NIC · SPICE   ║
-║ gaming            ║ GPU passthrough · 16G RAM · 6 CPUs · anti-detect     ║
-║ torrent           ║ Lightweight · qbittorrent-nox via cloud-init         ║
-║ jellyfin          ║ Jellyfin · NFS/SMB/host-dir/block/USB media · mDNS   ║
-║ windows           ║ Windows · UEFI secboot · TPM 2.0                     ║
-║ docker            ║ Alpine Linux · Docker-over-TCP                       ║
-║ github-runner     ║ Self-hosted Actions runner · rootless containerd     ║
-╚═══════════════════╩══════════════════════════════════════════════════════╝
-```
+
+> **Prerequisites:** KVM access, bridge networking, disk group membership, and OVMF firmware. See [docs/prerequisites.md](docs/prerequisites.md).
+
+## Templates
+
+Templates apply sane defaults (memory, CPUs, disks, networking, cloud-init) automatically.
+
+| Template | Description |
+|----------|-------------|
+| `ubuntu-server` | Ubuntu 24.04 LTS · UEFI · user-mode NIC (default) |
+| `devbox` | Docker + zsh via cloud-init · `--distro` flag (ubuntu/arch/fedora) |
+| `server` | openssh + ufw + fail2ban via cloud-init · `--distro` flag |
+| `gaming-arch` | Arch Linux + KDE Plasma + Steam · 16G / 8 CPUs · virgl or GPU passthrough |
+| `gaming-bazzite` | Bazzite (Fedora Atomic) gaming ISO · 16G / 8 CPUs · KDE Plasma |
+| `gaming` | Legacy alias for `gaming-arch` with passthrough |
+| `passthrough` | Raw NVMe boot + GPU passthrough · 16G / 6 CPUs · SPICE · virtiofs |
+| `truenas` | TrueNAS SCALE · AHCI OS disk · bridge NIC · SPICE |
+| `torrent` | Lightweight 4G / 2 CPUs · qbittorrent-nox via cloud-init |
+| `jellyfin` | Jellyfin · NFS/SMB/host-dir/block/USB media · mDNS |
+| `windows` | Windows · UEFI secure boot · TPM 2.0 |
+| `docker` | Alpine Linux · Docker daemon on `tcp://localhost:2375` |
+| `github-runner` | Self-hosted Actions runner · outbound HTTPS long-polling |
 
 ```sh
 vee create mynas --template truenas \
@@ -50,40 +47,34 @@ vee create mynas --template truenas \
   --data-disk /dev/disk/by-id/ata-ST22000NM000C_ZXA0WD9J:EXOS22TB-B
 ```
 
----
+## GPU passthrough
 
-## ▸ GPU PASSTHROUGH
+The `gaming`, `gaming-arch`, and `passthrough` templates use VFIO to wire a PCIe GPU directly into the VM — zero emulation, full metal.
 
-`gaming` and `passthrough` templates use VFIO to wire a PCIe GPU directly into the VM — zero emulation, full metal.
+### Host requirements
 
-### HOST REQUIREMENTS
-
-**1 · IOMMU — enable in kernel parameters**
+**1 · IOMMU** — enable in kernel parameters:
 
 ```
-# Intel
-intel_iommu=on iommu=pt
-
-# AMD
-amd_iommu=on iommu=pt
+intel_iommu=on iommu=pt   # Intel
+amd_iommu=on iommu=pt     # AMD
 ```
 
-**2 · vfio-pci kernel modules**
+**2 · vfio-pci kernel modules** — `/etc/modules-load.d/vfio.conf`:
 
-```sh
-# /etc/modules-load.d/vfio.conf
+```
 vfio
 vfio_iommu_type1
 vfio_pci
 ```
 
-**3 · vfio group membership**
+**3 · vfio group membership:**
 
 ```sh
 sudo usermod -aG vfio $USER
 ```
 
-**4 · Unlimited locked memory** — VFIO DMA-maps all guest RAM
+**4 · Unlimited locked memory** — VFIO DMA-maps all guest RAM:
 
 ```sh
 sudo tee /etc/security/limits.d/vee-vfio.conf <<'EOF'
@@ -91,24 +82,19 @@ sudo tee /etc/security/limits.d/vee-vfio.conf <<'EOF'
 EOF
 ```
 
-Re-login. Verify: `ulimit -l` → `unlimited`
+Re-login, then verify with `ulimit -l` → `unlimited`.
 
-### BIND THE GPU
+### Bind the GPU
 
 ```sh
-# Scan the grid — list PCI addresses and IOMMU groups
-vee gpu list
-
-# Jack it in (requires root)
-sudo vee gpu bind 08:00.0
-
-# Pre-flight — verify all checks pass before boot
-vee gpu status 08:00.0 --memory 16G
+vee gpu list              # list PCI addresses and IOMMU groups
+sudo vee gpu bind 08:00.0 # bind to vfio-pci (requires root)
+vee gpu status 08:00.0 --memory 16G  # pre-flight check before boot
 ```
 
 All devices in the same IOMMU group must be bound together. `vee gpu status` reports peer devices and their current drivers.
 
-### CREATE A GAMING VM
+### Create a gaming VM
 
 ```sh
 # Passthrough VM booting from an existing NVMe (Windows or Linux)
@@ -117,85 +103,75 @@ vee create linux-gaming --template passthrough \
   --ovmf-vars /path/to/OVMF_VARS.fd \
   --gpu-pci 08:00.0
 
-# Fresh Windows gaming VM
-vee create win-gaming --template gaming --gpu-pci 08:00.0
+# Fresh Arch gaming VM with passthrough
+vee create arch-gaming --template gaming-arch \
+  --gpu-mode passthrough --gpu-pci 08:00.0
 ```
 
-### DEBUG PASSTHROUGH
+### Debug passthrough
 
 ```sh
-# Pre-flight check
-vee gpu status 08:00.0 --memory 16G
-
-# QEMU log — scan for vfio errors post-boot
-vee logs linux-gaming
-
-# Structured debug log (VFIO decisions logged at start time)
-tail -f ~/.float/state/logs/vee.log
+vee gpu status 08:00.0 --memory 16G   # pre-flight check
+vee logs linux-gaming                 # QEMU log — scan for vfio errors
+tail -f ~/.vee/logs/vee.log           # structured debug log (VFIO decisions)
 ```
 
-```
-╔═══════════════════════════════════════════╦══════════════════════════════════════════╦═════════════════════════════════════════╗
-║ ERROR                                     ║ CAUSE                                    ║ FIX                                     ║
-╠═══════════════════════════════════════════╬══════════════════════════════════════════╬═════════════════════════════════════════╣
-║ Permission denied /dev/vfio/N             ║ User not in vfio group                   ║ sudo usermod -aG vfio $USER + re-login  ║
-║ vfio_container_dma_map = -12 (ENOMEM)    ║ memlock limit too low                    ║ Set memlock unlimited in limits.d/      ║
-║ QEMU process exited immediately           ║ Driver not bound / IOMMU isolation       ║ vee gpu status to diagnose              ║
-║ GPU not used in guest                     ║ PCIAddr wrong in vm.yaml                 ║ Check gpu.pci_addr in vm.yaml           ║
-╚═══════════════════════════════════════════╩══════════════════════════════════════════╩═════════════════════════════════════════╝
-```
+| Error | Cause | Fix |
+|-------|-------|-----|
+| `Permission denied /dev/vfio/N` | User not in vfio group | `sudo usermod -aG vfio $USER` + re-login |
+| `vfio_container_dma_map = -12 (ENOMEM)` | memlock limit too low | Set `memlock unlimited` in `limits.d/` |
+| QEMU process exits immediately | Driver not bound / IOMMU isolation | `vee gpu status` to diagnose |
+| GPU not used in guest | Wrong `pci_addr` in `vm.yaml` | Check `gpu.pci_addr` in `vm.yaml` |
 
----
+See [docs/gpu-passthrough-gaming.md](docs/gpu-passthrough-gaming.md) for Sunshine + Moonlight streaming.
 
-## ▸ COMMANDS
+## Commands
 
-```
-╔═══════════════════════════════════╦══════════════════════════════════════════════════════╗
-║ COMMAND                           ║ DESCRIPTION                                          ║
-╠═══════════════════════════════════╬══════════════════════════════════════════════════════╣
-║ vee create <name>                 ║ Provision a new VM                                   ║
-║ vee start <name>                  ║ Boot a VM (detached by default)                      ║
-║ vee stop <name>                   ║ Graceful shutdown                                    ║
-║ vee list                          ║ List all VMs and status                              ║
-║ vee ssh <name>                    ║ Open a shell                                         ║
-║ vee tunnel <name> <port>          ║ Forward a VM port to a random local port via SSH     ║
-║ vee ports <name>                  ║ List bound TCP ports in a running VM (guest agent)   ║
-║ vee logs <name>                   ║ Stream QEMU output                                   ║
-║ vee monitor <name>                ║ Real-time CPU / memory / disk / network stats        ║
-║ vee view <name>                   ║ Open VM display (SPICE or GPU)                       ║
-║ vee delete <name>                 ║ Wipe VM and all its disks                            ║
-║ vee gpu list                      ║ List PCI GPUs and IOMMU groups                       ║
-║ vee gpu bind <pci>                ║ Bind device to vfio-pci                              ║
-║ vee gpu unbind <pci>              ║ Release device back to host driver                   ║
-║ vee gpu status <pci>              ║ Pre-flight check for passthrough                     ║
-║ vee mirror start                  ║ Start host-side pacman caching proxy                 ║
-║ vee mirror status                 ║ Show pacoloco unit state and cache size              ║
-║ vee mirror stop                   ║ Stop the pacoloco user unit                          ║
-║ vee mirror purge                  ║ Delete all cached packages on disk                   ║
-║ vee version                       ║ Print version, commit, and build date                ║
-╚═══════════════════════════════════╩══════════════════════════════════════════════════════╝
-```
+| Command | Description |
+|---------|-------------|
+| `vee create <name>` | Provision a new VM |
+| `vee start <name>` | Boot a VM (detached by default) |
+| `vee stop <name>` | Graceful shutdown |
+| `vee list` | List all VMs and status |
+| `vee status <name>` | Show detailed status of a VM |
+| `vee ssh <name>` | Open a shell |
+| `vee ssh-share <name>` | Share host SSH agent into the VM via AF_VSOCK |
+| `vee tunnel <name> [service]` | List VM services, or open/connect to one |
+| `vee ports <name>` | List bound TCP ports and process names in a running VM |
+| `vee ip <name>` | Show network interfaces and IP addresses inside a VM |
+| `vee logs <name>` | Stream QEMU output |
+| `vee monitor <name>` | Real-time CPU / memory / disk / network stats |
+| `vee view <name>` | Open or connect to a VM's display (SPICE or GPU) |
+| `vee config <name>` | Edit a VM's configuration in an interactive TUI |
+| `vee check <name>` | Run health checks on an installed VM |
+| `vee backup <name>` | Back up directories from a running VM |
+| `vee autostart <name>` | Enable or disable autostart for a VM |
+| `vee delete <name>` | Wipe VM and all its disks |
+| `vee daemon` | Run the vee daemon (starts and watches autostart VMs) |
+| `vee dashboard` | Start a web dashboard for all VMs |
+| `vee gpu list` | List PCI GPUs and IOMMU groups |
+| `vee gpu bind <pci>` | Bind device to vfio-pci (requires root) |
+| `vee gpu unbind <pci>` | Release device back to host driver (requires root) |
+| `vee gpu status <pci>` | Pre-flight check for passthrough |
+| `vee mirror start` | Start host-side pacman caching proxy (pacoloco) |
+| `vee mirror status` | Show pacoloco unit state and cache size |
+| `vee mirror stop` | Stop the pacoloco user unit |
+| `vee mirror purge` | Delete all cached packages on disk |
+| `vee runner key <name>` | Print a runner's GitHub SSH public key |
+| `vee runner snapshot <name>` | Persist a runner's credentials to the host (encrypted) |
+| `vee version` | Print version, commit, and build date |
 
----
-
-## ▸ SHELL COMPLETION
+## Shell completion
 
 ```sh
-# bash
-source <(vee completion bash)
-
-# zsh
-source <(vee completion zsh)
-
-# fish
-vee completion fish | source
+source <(vee completion bash)   # bash
+source <(vee completion zsh)    # zsh
+vee completion fish | source    # fish
 ```
 
----
+## Development
 
-## ▸ DEVELOPMENT
-
-```
+```sh
 make hooks   # enable the pre-commit hook (golangci-lint + go build) for this clone
 make lint    # run golangci-lint (mirrors CI)
 make build   # build the vee binary
@@ -207,16 +183,15 @@ are staged. Enable it once per clone with `make hooks`; bypass a single commit
 with `git commit --no-verify`. CI (lint + build + test) pins the same Go version
 as `go.mod`.
 
-## ▸ DOCS
+## Docs
 
 - [docs/prerequisites.md](docs/prerequisites.md) — system setup, groups, bridge networking, OVMF
 - [docs/gpu-passthrough-gaming.md](docs/gpu-passthrough-gaming.md) — Sunshine + Moonlight streaming over GPU passthrough
+- [docs/media-sources.md](docs/media-sources.md) — attaching NFS/SMB/host-dir/block/USB media to VMs
 - [docs/pacman-mirror.md](docs/pacman-mirror.md) — host-side pacman caching proxy for Arch VMs
-- [docs/host-shutdown.md](docs/host-shutdown.md) — how the daemon blocks host poweroff while VMs are running, and the KDE bypass
-- [docs/github-runner.md](docs/github-runner.md) — self-hosted GitHub Actions runner: cred persistence, GitHub SSH keys, disk GC
+- [docs/host-shutdown.md](docs/host-shutdown.md) — how the daemon blocks host poweroff while VMs are running
+- [docs/github-runner.md](docs/github-runner.md) — self-hosted GitHub Actions runner: cred persistence, SSH keys, disk GC
 
----
+## License
 
-```
-[ vee ] :: ALL SYSTEMS NOMINAL :: READY FOR BOOT
-```
+MIT — see [LICENSE](LICENSE).

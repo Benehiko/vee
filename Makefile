@@ -20,7 +20,7 @@ LDFLAGS     := -s -w \
 CONTAINER_RUNTIME := $(shell command -v nerdctl 2>/dev/null || command -v docker 2>/dev/null)
 HUGO_IMAGE        := hugomods/hugo:go-git-0.147.0
 
-.PHONY: all build install clean e2e site lint test hooks
+.PHONY: all build install clean e2e site lint test hooks licenses
 
 all: build
 
@@ -126,6 +126,42 @@ _add_to_path:
 	  echo "Added to $$RCFILE"; \
 	  echo "Reload with:  $$RELOAD"; \
 	fi
+
+# Regenerate THIRD_PARTY_LICENSES from the vendored module LICENSE files.
+# Run after `go mod vendor` whenever dependencies change.
+licenses:
+	@{ \
+	  count=$$(find vendor \( -name LICENSE -o -name LICENSE.md -o -name COPYING -o -name LICENSE.txt \) | wc -l); \
+	  printf '%s\n' "THIRD-PARTY LICENSES"; \
+	  printf '%s\n' "===================="; \
+	  printf '\n'; \
+	  printf '%s\n' "vee is distributed under the MIT License (see the LICENSE file)."; \
+	  printf '\n'; \
+	  printf '%s\n' "vee vendors third-party Go modules under vendor/. This file reproduces the"; \
+	  printf '%s\n' "license and copyright notices of those modules, as required by their"; \
+	  printf '%s\n' "respective licenses (MIT, BSD-3-Clause, and Apache-2.0). It is assembled"; \
+	  printf '%s\n' "directly from the LICENSE files shipped in each vendored module."; \
+	  printf '\n'; \
+	  printf '%s\n' "It covers only the Go build dependencies. External programs that vee invokes"; \
+	  printf '%s\n' "at runtime (QEMU, OVMF/edk2, virtiofsd, swtpm, and any guest OS images the"; \
+	  printf '%s\n' "user chooses to download) are not distributed with vee and are licensed"; \
+	  printf '%s\n' "separately by their own vendors."; \
+	  printf '\n'; \
+	  printf '%s\n' "To regenerate after changing dependencies: run 'go mod vendor && make licenses'."; \
+	  printf '\n'; \
+	  printf '%s\n' "$$count vendored modules are listed below."; \
+	  printf '\n\n'; \
+	  find vendor \( -name LICENSE -o -name LICENSE.md -o -name COPYING -o -name LICENSE.txt \) | sort | while read -r f; do \
+	    mod=$$(dirname "$$f" | sed 's|^vendor/||'); \
+	    printf '%s\n' "================================================================================"; \
+	    printf '%s\n' "$$mod"; \
+	    printf '%s\n' "================================================================================"; \
+	    printf '\n'; \
+	    cat "$$f"; \
+	    printf '\n\n'; \
+	  done; \
+	} > THIRD_PARTY_LICENSES
+	@echo "Wrote THIRD_PARTY_LICENSES"
 
 e2e: build
 	VEE_E2E=1 VEE_BIN=$(CURDIR)/$(BINARY) $(GO) test $(GOFLAGS) -v -timeout 20m -tags e2e ./e2e/...
