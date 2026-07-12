@@ -54,11 +54,18 @@ func EnsureVirtiofsd(home string) (string, error) {
 		return "", fmt.Errorf("download virtiofsd source: %w", err)
 	}
 
-	// Build inside container — source tarball and output dir are bind-mounted.
-	// Cargo needs network access to fetch the crates registry on first build.
-	// libseccomp and libcap-ng are required link dependencies of virtiofsd.
+	// Build inside a glibc container — source tarball and output dir are
+	// bind-mounted. Cargo needs network access to fetch the crates registry on
+	// first build. libseccomp and libcap-ng are required link dependencies.
+	//
+	// Use a glibc toolchain (rust:bookworm), NOT rust:alpine: the musl build of
+	// virtiofsd 1.13.x segfaults at startup on a glibc host (it creates its
+	// listening socket, then dies), so the daemon never serves the share. The
+	// distro-packaged virtiofsd is glibc for the same reason.
 	buildScript := `set -e
-apk add --no-cache musl-dev libseccomp-dev libcap-ng-dev
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq
+apt-get install -y -qq libseccomp-dev libcap-ng-dev
 [ -f /build/Cargo.toml ] || tar -xz --strip-components=1 -f /src/virtiofsd.tar.gz -C /build
 cd /build
 cargo build --release
@@ -69,7 +76,7 @@ cp target/release/virtiofsd /out/virtiofsd
 		"-v", buildDir + ":/src:ro",
 		"-v", buildDir + ":/build",
 		"-v", binDir + ":/out",
-		"rust:alpine",
+		"rust:bookworm",
 		"sh", "-c", buildScript,
 	}
 
