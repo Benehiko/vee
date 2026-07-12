@@ -88,7 +88,9 @@ vee create winvm --template windows   # pulls automatically if not cached
 ```
 
 **Requirements:** `nerdctl` or `docker` on `PATH` (the ISO is assembled in a
-container; no host tooling is installed). The `windows` template additionally
+container; no host tooling is installed) and ~15 GB of free scratch space, which
+vee allocates next to the ISO cache (under `~/.vee/iso/`) so the build works even
+when `/tmp` is a small RAM-backed `tmpfs`. The `windows` template additionally
 pulls the VirtIO driver ISO and WinFSP so the guest gets paravirtualized disk,
 network, and virtiofs support out of the box.
 

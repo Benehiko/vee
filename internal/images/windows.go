@@ -184,21 +184,53 @@ func (w *WindowsImage) fetchBuildUUID(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("no builds found for %q / %s", w.params.search, w.params.edition)
 	}
 
-	// The API mixes architectures; pick the newest amd64 build. Selecting by
-	// Created (not map order, which is unspecified) keeps this deterministic.
+	// UUP lists two build kinds per version: a "Feature update to ..." entry,
+	// whose ESD set is a full, self-contained image, and a "Cumulative Update
+	// for ..." entry, which is a *differential* pack. Building an ISO from the
+	// differential fails in wimlib with "blob not found" (error 55) because its
+	// file blobs live in a baseline that isn't downloaded. Always prefer the
+	// full feature-update build and never select a cumulative-update one.
+	//
+	// The API mixes architectures; among eligible builds pick the newest by
+	// Created (not map order, which is unspecified) to stay deterministic.
+	isCumulative := func(title string) bool {
+		return strings.Contains(strings.ToLower(title), "cumulative update")
+	}
+	isFeatureUpdate := func(title string) bool {
+		return strings.Contains(strings.ToLower(title), "feature update")
+	}
+
 	var best uupdumpBuild
 	found := false
-	for _, b := range result.Response.Builds {
-		if b.Arch != "" && b.Arch != "amd64" {
-			continue
-		}
+	consider := func(b uupdumpBuild) {
 		if !found || b.Created > best.Created {
 			best = b
 			found = true
 		}
 	}
+	// First pass: full feature-update builds only.
+	for _, b := range result.Response.Builds {
+		if b.Arch != "" && b.Arch != "amd64" {
+			continue
+		}
+		if isFeatureUpdate(b.Title) {
+			consider(b)
+		}
+	}
+	// Fallback: any non-cumulative amd64 build (covers Server ISOs, whose titles
+	// don't say "Feature update"). Cumulative-only differentials stay excluded.
 	if !found {
-		return "", fmt.Errorf("no amd64 build found for %q / %s", w.params.search, w.params.edition)
+		for _, b := range result.Response.Builds {
+			if b.Arch != "" && b.Arch != "amd64" {
+				continue
+			}
+			if !isCumulative(b.Title) {
+				consider(b)
+			}
+		}
+	}
+	if !found {
+		return "", fmt.Errorf("no full (non-cumulative) amd64 build found for %q / %s", w.params.search, w.params.edition)
 	}
 
 	w.provider.Logger().Info("found UUP dump build", zap.String("title", best.Title), zap.String("uuid", best.UUID))
@@ -249,15 +281,19 @@ func (w *WindowsImage) buildISOInContainer(ctx context.Context, esdURLs map[stri
 		return err
 	}
 
-	workDir, err := os.MkdirTemp("", "vee-windows-"+string(w.version)+"-")
+	if err := os.MkdirAll(w.basePath, 0o755); err != nil {
+		return fmt.Errorf("create iso cache dir: %w", err)
+	}
+
+	// Build the work dir alongside the ISO cache rather than in $TMPDIR. The
+	// multi-GB ESD download plus the exported install.wim easily exceed a
+	// RAM-backed /tmp (tmpfs), which would fail mid-download with ENOSPC; the
+	// ISO cache lives on real disk.
+	workDir, err := os.MkdirTemp(w.basePath, ".vee-windows-"+string(w.version)+"-")
 	if err != nil {
 		return fmt.Errorf("create work dir: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(workDir) }()
-
-	if err := os.MkdirAll(w.basePath, 0o755); err != nil {
-		return fmt.Errorf("create iso cache dir: %w", err)
-	}
 
 	// Build a wget command for each ESD file.
 	var wgetLines []string
@@ -283,20 +319,21 @@ if [ -z "$INSTALL_ESD" ]; then
 fi
 echo "Using install ESD: $INSTALL_ESD"
 
-# Extract boot files from ESD index 1 (Windows PE / boot)
-wimlib-imagex extract "$INSTALL_ESD" 1 /Windows/Boot/EFI/ /work/iso/efi/ --no-acls 2>/dev/null || true
-wimlib-imagex extract "$INSTALL_ESD" 1 /Windows/Boot/PCAT/ /work/iso/boot/ --no-acls 2>/dev/null || true
+# UUP ships Windows as a set of ESDs where the install ESD is a delta WIM whose
+# file blobs live in sibling ESDs. Every wimlib operation on it must reference
+# the whole set via --ref so those blobs resolve; without it wimlib fails with
+# "blob not found" (error 55).
+REFGLOB="/work/esd/*.esd"
 
-# Export install.wim from all available indexes
+# Extract boot files from ESD index 1 (Windows PE / boot)
+wimlib-imagex extract "$INSTALL_ESD" 1 /Windows/Boot/EFI/ /work/iso/efi/ --ref="$REFGLOB" --no-acls 2>/dev/null || true
+wimlib-imagex extract "$INSTALL_ESD" 1 /Windows/Boot/PCAT/ /work/iso/boot/ --ref="$REFGLOB" --no-acls 2>/dev/null || true
+
+# Export install.wim from all available indexes, resolving blobs across the set.
 INDEXES=$(wimlib-imagex info "$INSTALL_ESD" | grep '^Index' | awk '{print $2}')
-FIRST=1
 for IDX in $INDEXES; do
-    if [ "$FIRST" = "1" ]; then
-        wimlib-imagex export "$INSTALL_ESD" "$IDX" /work/iso/sources/install.wim --compress=LZX
-        FIRST=0
-    else
-        wimlib-imagex export "$INSTALL_ESD" "$IDX" /work/iso/sources/install.wim --compress=LZX
-    fi
+    wimlib-imagex export "$INSTALL_ESD" "$IDX" /work/iso/sources/install.wim \
+        --ref="$REFGLOB" --compress=LZX
 done
 
 # Assemble bootable ISO with xorriso

@@ -55,7 +55,9 @@ downloads the ESD packages directly from Microsoft's servers, and assembles a
 bootable UEFI ISO inside a throwaway container using `wimlib` and `xorriso`.
 
 Building a Windows ISO requires `nerdctl` or `docker` on `PATH`; no ISO-assembly
-tooling is installed on the host.
+tooling is installed on the host. The build needs roughly 15 GB of free scratch
+space, which vee allocates next to the ISO cache (under `~/.vee/iso/`) so it works
+even when `/tmp` is a small RAM-backed `tmpfs`.
 
 {{< hint type=note >}}
 vee downloads Windows bits from Microsoft's own servers and assembles the ISO
