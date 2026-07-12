@@ -27,7 +27,7 @@ jobs:
             qemu_target: x86_64-softmmu
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Set release tag
         id: tag
@@ -91,7 +91,7 @@ jobs:
         id: package
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: qemu-linux-${{ matrix.goarch }}
           path: |
@@ -111,7 +111,7 @@ jobs:
         run: echo "tag=qemu-${{ inputs.qemu_version }}-${{ inputs.vee_suffix }}" >> "$GITHUB_OUTPUT"
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           path: dist
           merge-multiple: true
