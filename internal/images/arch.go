@@ -20,14 +20,17 @@ const (
 	ArchDownloadChecksumURL = "https://geo.mirror.pkgbuild.com/iso/%s/sha256sums.txt"
 )
 
-// ArchVersion is a monthly release string like "2025.05.01".
+// ArchVersion is a monthly release string like "2026.07.01".
 type ArchVersion string
 
 // KnownArchVersions lists supported release strings, newest first.
+// Arch is rolling and the mirror only keeps the last few monthly snapshots, so
+// this list is refreshed periodically; requesting a GC'd snapshot fails cleanly
+// with "checksum not found". "vee pull arch latest" resolves to the first entry.
 var KnownArchVersions = []ArchVersion{
+	"2026.07.01",
+	"2026.06.01",
 	"2026.05.01",
-	"2026.04.01",
-	"2026.03.01",
 }
 
 type ArchImage struct {

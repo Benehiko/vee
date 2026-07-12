@@ -55,7 +55,7 @@ cached copy instead of re-downloading. A pull for an already-cached image is a n
 
 ```sh
 vee pull ubuntu            # newest known Ubuntu cloud image
-vee pull ubuntu 22.04.4    # a specific version
+vee pull ubuntu 22.04      # a specific version
 vee pull ubuntu-24.04      # same, as a single token
 vee pull windows win10     # build the Windows 10 ISO (see below)
 vee pull --list            # list every supported distro and version
@@ -65,7 +65,7 @@ Both the distro and `distro-version` forms shell-complete from the built-in list
 
 | Distro | Notes |
 |--------|-------|
-| `ubuntu` | Cloud image (cloud-init ready) — 24.04, 22.04.4, 20.04.6 |
+| `ubuntu` | Cloud image (cloud-init ready) — 24.04, 22.04, 20.04 |
 | `arch` | Bootstrap image |
 | `fedora` | Cloud image — 42, 41, 40 |
 | `alpine` | Cloud image |

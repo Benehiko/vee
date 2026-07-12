@@ -21,7 +21,7 @@ Version may be a specific version string or `latest` (the default). The distro a
 
 ```sh
 vee pull ubuntu            # newest known Ubuntu
-vee pull ubuntu 22.04.4    # a specific version
+vee pull ubuntu 22.04      # a specific version
 vee pull ubuntu-24.04      # same, as a single token
 vee pull windows win10     # build the Windows 10 ISO
 vee pull --list            # list every supported distro and version
@@ -37,7 +37,7 @@ vee pull --list            # list every supported distro and version
 
 | Distro | Notes |
 |--------|-------|
-| `ubuntu` | Cloud image (cloud-init ready) — 24.04, 22.04.4, 20.04.6 |
+| `ubuntu` | Cloud image (cloud-init ready) — 24.04, 22.04, 20.04 |
 | `arch` | Bootstrap image |
 | `fedora` | Cloud image — 42, 41, 40 |
 | `alpine` | Cloud image |

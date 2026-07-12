@@ -17,22 +17,49 @@ import (
 
 const (
 	// TrueNAS SCALE ISO download URL.
-	// Pattern: https://download.sys.truenas.net/TrueNAS-SCALE-<version>/TrueNAS-SCALE-<version>.iso
-	TrueNASDownloadURL         = "https://download.sys.truenas.net/TrueNAS-SCALE-%s/TrueNAS-SCALE-%s.iso"
-	TrueNASDownloadChecksumURL = "https://download.sys.truenas.net/TrueNAS-SCALE-%s/TrueNAS-SCALE-%s.iso.sha256"
+	// Pattern: https://download.sys.truenas.net/TrueNAS-SCALE-<Codename>/<version>/TrueNAS-SCALE-<version>.iso
+	// The release codename directory (Fangtooth, Goldeye, ...) is derived from
+	// the version's major.minor via truenasCodenames.
+	TrueNASDownloadURL         = "https://download.sys.truenas.net/TrueNAS-SCALE-%s/%s/TrueNAS-SCALE-%s.iso"
+	TrueNASDownloadChecksumURL = "https://download.sys.truenas.net/TrueNAS-SCALE-%s/%s/TrueNAS-SCALE-%s.iso.sha256"
 )
 
 type TrueNASVersion string
 
 const (
+	TrueNAS2510 TrueNASVersion = "25.10.4"
 	TrueNAS2504 TrueNASVersion = "25.04.2.1"
 	TrueNAS2410 TrueNASVersion = "24.10.2.4"
 )
 
 // KnownTrueNASVersions lists supported TrueNAS SCALE versions, newest first.
 var KnownTrueNASVersions = []TrueNASVersion{
+	TrueNAS2510,
 	TrueNAS2504,
 	TrueNAS2410,
+}
+
+// truenasCodenames maps a TrueNAS SCALE major.minor to its release codename,
+// which forms the download directory. Extend this when a new train ships.
+var truenasCodenames = map[string]string{
+	"24.04": "Dragonfish",
+	"24.10": "ElectricEel",
+	"25.04": "Fangtooth",
+	"25.10": "Goldeye",
+}
+
+// codename returns the release codename for this version's major.minor train.
+func (t *TrueNASImage) codename() (string, error) {
+	parts := strings.SplitN(string(t.version), ".", 3)
+	if len(parts) < 2 {
+		return "", fmt.Errorf("truenas: cannot derive train from version %q", t.version)
+	}
+	train := parts[0] + "." + parts[1]
+	cn, ok := truenasCodenames[train]
+	if !ok {
+		return "", fmt.Errorf("truenas: unknown release train %q (add it to truenasCodenames)", train)
+	}
+	return cn, nil
 }
 
 type TrueNASImage struct {
@@ -111,7 +138,11 @@ func (t *TrueNASImage) Download(ctx context.Context) error {
 		return err
 	}
 
-	isoURL := fmt.Sprintf(TrueNASDownloadURL, t.version, t.version)
+	cn, err := t.codename()
+	if err != nil {
+		return err
+	}
+	isoURL := fmt.Sprintf(TrueNASDownloadURL, cn, t.version, t.version)
 	req, err := http.NewRequestWithContext(ctx, "GET", isoURL, nil)
 	if err != nil {
 		return err
@@ -155,7 +186,11 @@ func (t *TrueNASImage) Download(ctx context.Context) error {
 }
 
 func (t *TrueNASImage) fetchRemoteChecksum(ctx context.Context, httpClient *http.Client) (string, error) {
-	checksumURL := fmt.Sprintf(TrueNASDownloadChecksumURL, t.version, t.version)
+	cn, err := t.codename()
+	if err != nil {
+		return "", err
+	}
+	checksumURL := fmt.Sprintf(TrueNASDownloadChecksumURL, cn, t.version, t.version)
 	req, err := http.NewRequestWithContext(ctx, "GET", checksumURL, nil)
 	if err != nil {
 		return "", err

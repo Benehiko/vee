@@ -16,7 +16,6 @@ import (
 )
 
 const (
-	UbuntuDownloadURL         = "https://releases.ubuntu.com/%s/ubuntu-%s-%s-%s.iso"
 	UbuntuDownloadChecksumURL = "https://releases.ubuntu.com/%s/SHA256SUMS"
 
 	// UbuntuCloudImageURL is the base URL for pre-installed cloud images.
@@ -33,9 +32,13 @@ const (
 
 type UbuntuVersion string
 
+// Ubuntu versions are the release "major.minor" (e.g. "24.04"). Ubuntu's
+// download layout keys both the cloud-image directory and the installer ISO's
+// SHA256SUMS index on major.minor; the installer ISO filename additionally
+// embeds a point release (e.g. 24.04.3), which is resolved at download time.
 const (
-	Ubuntu2004 UbuntuVersion = "20.04.6"
-	Ubuntu2204 UbuntuVersion = "22.04.4"
+	Ubuntu2004 UbuntuVersion = "20.04"
+	Ubuntu2204 UbuntuVersion = "22.04"
 	Ubuntu2310 UbuntuVersion = "23.10"
 	Ubuntu2404 UbuntuVersion = "24.04"
 	Ubuntu2410 UbuntuVersion = "24.10"
@@ -55,6 +58,11 @@ type UbuntuImage struct {
 	imageType UbuntuImageType
 	version   UbuntuVersion
 	arch      string
+
+	// resolvedName is the exact ISO filename discovered from SHA256SUMS at
+	// download time (it embeds a point release, e.g. "24.04.3"). Empty until
+	// resolved; Name() falls back to a stable placeholder.
+	resolvedName string
 }
 
 func NewUbuntuImage(p provider.Provider, imageType UbuntuImageType, version UbuntuVersion, arch string) *UbuntuImage {
@@ -70,8 +78,17 @@ func NewUbuntuImage(p provider.Provider, imageType UbuntuImageType, version Ubun
 func (u *UbuntuImage) Distro() string  { return "ubuntu" }
 func (u *UbuntuImage) Version() string { return string(u.version) }
 
+// nameSuffix is the trailing "<type>-<arch>.iso" that identifies this image's
+// line in SHA256SUMS regardless of the point-release prefix.
+func (u *UbuntuImage) nameSuffix() string {
+	return "-" + string(u.imageType) + "-" + u.arch + ".iso"
+}
+
 func (u *UbuntuImage) Name() string {
-	return "ubuntu-" + string(u.version) + "-" + string(u.imageType) + "-" + u.arch + ".iso"
+	if u.resolvedName != "" {
+		return u.resolvedName
+	}
+	return "ubuntu-" + string(u.version) + string(u.nameSuffix())
 }
 
 func (u *UbuntuImage) Delete() error {
@@ -110,28 +127,51 @@ func (u *UbuntuImage) Download(ctx context.Context) error {
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("ubuntu: fetch checksums %s: HTTP %d", checksumURL, resp.StatusCode)
+	}
 
 	b, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return err
 	}
 
+	// SHA256SUMS lines look like: "<sha256> *ubuntu-24.04.3-live-server-amd64.iso".
+	// The filename embeds a point release that isn't known ahead of time, so
+	// match by the "-<type>-<arch>.iso" suffix and pick the newest (lexically
+	// greatest, which for zero-padded point releases is the latest) entry.
+	suffix := u.nameSuffix()
 	var targetChecksum string
 	for c := range strings.SplitSeq(string(b), "\n") {
-		u.provider.Logger().Info("checksum", zap.String("line", c))
-		if strings.Contains(c, u.Name()) {
-			checksumParts := strings.Split(c, " ")
-			targetChecksum = checksumParts[0]
-			break
+		fields := strings.Fields(c)
+		if len(fields) != 2 {
+			continue
+		}
+		fname := strings.TrimPrefix(fields[1], "*")
+		if !strings.HasPrefix(fname, "ubuntu-"+string(u.version)) || !strings.HasSuffix(fname, suffix) {
+			continue
+		}
+		if fname > u.resolvedName {
+			u.resolvedName = fname
+			targetChecksum = fields[0]
 		}
 	}
 
-	if targetChecksum == "" {
+	if u.resolvedName == "" || targetChecksum == "" {
 		u.provider.Logger().Error("checksum not found", zap.String("file", u.Name()))
-		return fmt.Errorf("checksum not found for %s", u.Name())
+		return fmt.Errorf("no %s ISO found for ubuntu %s in %s", u.imageType, u.version, checksumURL)
 	}
 
-	req, err = http.NewRequestWithContext(ctx, "GET", fmt.Sprintf(UbuntuDownloadURL, u.version, u.version, u.imageType, u.arch), nil)
+	// Re-check the cache now that the exact filename is known.
+	if _, err := os.Stat(u.AbsolutePath()); err == nil {
+		u.provider.Logger().Info("skipping download",
+			zap.String("file", u.AbsolutePath()),
+			zap.String("reason", "already downloaded"))
+		return nil
+	}
+
+	isoURL := fmt.Sprintf("https://releases.ubuntu.com/%s/%s", u.version, u.resolvedName)
+	req, err = http.NewRequestWithContext(ctx, "GET", isoURL, nil)
 	if err != nil {
 		return err
 	}
@@ -141,6 +181,9 @@ func (u *UbuntuImage) Download(ctx context.Context) error {
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("ubuntu: fetch ISO %s: HTTP %d", isoURL, resp.StatusCode)
+	}
 
 	if err := os.MkdirAll(u.basePath, 0o755); err != nil {
 		return err

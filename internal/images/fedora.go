@@ -16,23 +16,30 @@ import (
 )
 
 const (
-	FedoraDownloadURL         = "https://download.fedoraproject.org/pub/fedora/linux/releases/%s/Server/x86_64/iso/Fedora-Server-dvd-x86_64-%s-1.1.iso"
-	FedoraDownloadChecksumURL = "https://download.fedoraproject.org/pub/fedora/linux/releases/%s/Server/x86_64/iso/Fedora-Server-dvd-x86_64-%s-1.1-CHECKSUM"
+	// FedoraReleaseDirURL is the per-release ISO directory. The exact ISO and
+	// CHECKSUM filenames (which embed a per-release build number such as "1.1"
+	// or "1.4") are discovered by scraping this listing rather than hardcoded.
+	FedoraReleaseDirURL = "https://download.fedoraproject.org/pub/fedora/linux/releases/%s/Server/x86_64/iso/"
 )
 
 // FedoraVersion is a Fedora release number like "42".
 type FedoraVersion string
 
 // KnownFedoraVersions lists supported Fedora versions, newest first.
+// Only releases still served under /releases/ are listed; older releases are
+// moved to archives.fedoraproject.org under a different URL.
 var KnownFedoraVersions = []FedoraVersion{
 	"42",
 	"41",
-	"40",
 }
 
 type FedoraImage struct {
 	*BaseImage
 	version FedoraVersion
+
+	// isoName is the ISO filename resolved from the release listing at download
+	// time (e.g. "Fedora-Server-dvd-x86_64-42-1.1.iso"). Empty until resolved.
+	isoName string
 }
 
 func NewFedoraImage(p provider.Provider, version FedoraVersion) *FedoraImage {
@@ -44,8 +51,14 @@ func NewFedoraImage(p provider.Provider, version FedoraVersion) *FedoraImage {
 
 func (f *FedoraImage) Distro() string  { return "fedora" }
 func (f *FedoraImage) Version() string { return string(f.version) }
-func (f *FedoraImage) Name() string {
-	return fmt.Sprintf("Fedora-Server-dvd-x86_64-%s-1.1.iso", f.version)
+
+// Name returns the resolved ISO filename once known, otherwise a stable
+// placeholder scoped to the version so the cache path is deterministic.
+func (fi *FedoraImage) Name() string {
+	if fi.isoName != "" {
+		return fi.isoName
+	}
+	return fmt.Sprintf("Fedora-Server-dvd-x86_64-%s.iso", fi.version)
 }
 
 func (fi *FedoraImage) AbsolutePath() string {
@@ -63,23 +76,65 @@ func (fi *FedoraImage) checksum() (string, error) {
 	return checksum.SHA256sum(fi.AbsolutePath())
 }
 
-func (fi *FedoraImage) Download(ctx context.Context) error {
-	fi.provider.Logger().Info("downloading", zap.String("file", fi.Name()))
+// resolveNames scrapes the release ISO directory and returns the DVD ISO and
+// CHECKSUM filenames for this version.
+func (fi *FedoraImage) resolveNames(ctx context.Context, client *http.Client) (isoName, checksumName string, err error) {
+	dirURL := fmt.Sprintf(FedoraReleaseDirURL, fi.version)
+	req, err := http.NewRequestWithContext(ctx, "GET", dirURL, nil)
+	if err != nil {
+		return "", "", err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return "", "", fmt.Errorf("fedora: list %s: HTTP %d", dirURL, resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", "", err
+	}
+	for _, href := range hrefsIn(string(body)) {
+		switch {
+		case strings.HasPrefix(href, "Fedora-Server-dvd-x86_64-") && strings.HasSuffix(href, ".iso"):
+			isoName = href
+		case strings.HasPrefix(href, "Fedora-Server-") && strings.HasSuffix(href, "-x86_64-CHECKSUM"):
+			checksumName = href
+		}
+	}
+	if isoName == "" || checksumName == "" {
+		return "", "", fmt.Errorf("fedora: could not find ISO/CHECKSUM in %s", dirURL)
+	}
+	return isoName, checksumName, nil
+}
 
-	checksumURL := fmt.Sprintf(FedoraDownloadChecksumURL, fi.version, fi.version)
+func (fi *FedoraImage) Download(ctx context.Context) error {
+	fi.provider.Logger().Info("downloading", zap.String("distro", "fedora"), zap.String("version", string(fi.version)))
 
 	httpClient := utils.DirectHTTPClient()
-	req, err := http.NewRequestWithContext(ctx, "GET", checksumURL, nil)
+	dirURL := fmt.Sprintf(FedoraReleaseDirURL, fi.version)
+
+	isoName, checksumName, err := fi.resolveNames(ctx, httpClient)
 	if err != nil {
 		return err
 	}
+	fi.isoName = isoName
 
+	// Fetch the CHECKSUM file.
+	req, err := http.NewRequestWithContext(ctx, "GET", dirURL+checksumName, nil)
+	if err != nil {
+		return err
+	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
-
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("fedora: fetch checksum %s: HTTP %d", dirURL+checksumName, resp.StatusCode)
+	}
 	b, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return err
@@ -88,7 +143,7 @@ func (fi *FedoraImage) Download(ctx context.Context) error {
 	// CHECKSUM file format: SHA256 (filename) = hash
 	var targetChecksum string
 	for line := range strings.SplitSeq(string(b), "\n") {
-		if strings.Contains(line, fi.Name()) && strings.HasPrefix(strings.TrimSpace(line), "SHA256") {
+		if strings.Contains(line, isoName) && strings.HasPrefix(strings.TrimSpace(line), "SHA256") {
 			parts := strings.Split(line, "=")
 			if len(parts) == 2 {
 				targetChecksum = strings.TrimSpace(parts[1])
@@ -96,9 +151,8 @@ func (fi *FedoraImage) Download(ctx context.Context) error {
 			break
 		}
 	}
-
 	if targetChecksum == "" {
-		return fmt.Errorf("checksum not found for %s", fi.Name())
+		return fmt.Errorf("checksum not found for %s", isoName)
 	}
 
 	if _, err := os.Stat(fi.AbsolutePath()); err == nil {
@@ -121,16 +175,18 @@ func (fi *FedoraImage) Download(ctx context.Context) error {
 		}
 	}
 
-	req, err = http.NewRequestWithContext(ctx, "GET", fmt.Sprintf(FedoraDownloadURL, fi.version, fi.version), nil)
+	req, err = http.NewRequestWithContext(ctx, "GET", dirURL+isoName, nil)
 	if err != nil {
 		return err
 	}
-
 	resp, err = httpClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("fedora: fetch ISO %s: HTTP %d", dirURL+isoName, resp.StatusCode)
+	}
 
 	if err := os.MkdirAll(fi.basePath, 0o755); err != nil {
 		return err

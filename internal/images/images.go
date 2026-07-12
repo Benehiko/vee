@@ -4,10 +4,33 @@ import (
 	"context"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/Benehiko/vee/provider"
 	"github.com/schollz/progressbar/v3"
 )
+
+// hrefsIn extracts the values of every href="..." attribute in an HTML
+// directory listing. Used to discover the exact ISO/checksum filenames served
+// by upstream mirrors instead of hardcoding filenames that drift per release.
+func hrefsIn(html string) []string {
+	var out []string
+	rest := html
+	for {
+		i := strings.Index(rest, `href="`)
+		if i < 0 {
+			break
+		}
+		rest = rest[i+len(`href="`):]
+		j := strings.Index(rest, `"`)
+		if j < 0 {
+			break
+		}
+		out = append(out, rest[:j])
+		rest = rest[j+1:]
+	}
+	return out
+}
 
 type Image interface {
 	Name() string
