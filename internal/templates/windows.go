@@ -83,6 +83,22 @@ func NewWindowsConfig(ctx context.Context, p provider.Provider, version images.W
 		Cores:    4,
 		Threads:  1,
 		CPUModel: conf.DefaultCPUModel,
+		// Hyper-V enlightenments. Without them Windows' bootloader / WinPE
+		// triple-faults and resets in a loop before Setup ever draws (a dark
+		// blue screen that immediately reboots), so the install never starts.
+		CPUFlags: []string{
+			"hv-relaxed=on",
+			"hv-vapic=on",
+			"hv-time=on",
+			"hv-spinlocks=0x1fff",
+		},
+		// SMM is required for the secboot OVMF firmware. The secure-pflash
+		// -global arms SMM-protected Secure Boot; both are needed for Windows 11
+		// to boot the installer here.
+		MachineType: "q35,smm=on",
+		Globals: []string{
+			"driver=cfi.pflash01,property=secure,value=on",
+		},
 		NIC: vm.NICConfig{
 			Mode:  "user",
 			Model: "virtio-net-pci",
