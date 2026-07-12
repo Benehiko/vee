@@ -1153,6 +1153,13 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 	)
 	opts = append(opts, qemu.WithCPU(cpu))
 
+	// Machine type override (e.g. "q35,smm=on" for Windows Secure Boot) and any
+	// extra -global args (e.g. the secure-pflash global).
+	opts = append(opts, qemu.WithMachineType(cfg.MachineType))
+	for _, g := range cfg.Globals {
+		opts = append(opts, qemu.WithGlobal(g))
+	}
+
 	// UEFI
 	if cfg.UEFI.Enabled {
 		codePath := cfg.UEFI.CodePath

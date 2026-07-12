@@ -133,15 +133,21 @@ type ServiceEntry struct {
 }
 
 type VMConfig struct {
-	Name           string           `yaml:"name"                    json:"name"`
-	Template       string           `yaml:"template"                json:"template"`
-	Memory         string           `yaml:"memory"                  json:"memory"`
-	CPUs           int              `yaml:"cpus"                    json:"cpus"`
-	Sockets        int              `yaml:"sockets"                 json:"sockets"`
-	Cores          int              `yaml:"cores"                   json:"cores"`
-	Threads        int              `yaml:"threads"                 json:"threads"`
-	CPUModel       string           `yaml:"cpu_model"               json:"cpu_model"`
-	CPUFlags       []string         `yaml:"cpu_flags,omitempty"     json:"cpu_flags,omitempty"`
+	Name     string   `yaml:"name"                    json:"name"`
+	Template string   `yaml:"template"                json:"template"`
+	Memory   string   `yaml:"memory"                  json:"memory"`
+	CPUs     int      `yaml:"cpus"                    json:"cpus"`
+	Sockets  int      `yaml:"sockets"                 json:"sockets"`
+	Cores    int      `yaml:"cores"                   json:"cores"`
+	Threads  int      `yaml:"threads"                 json:"threads"`
+	CPUModel string   `yaml:"cpu_model"               json:"cpu_model"`
+	CPUFlags []string `yaml:"cpu_flags,omitempty"     json:"cpu_flags,omitempty"`
+	// MachineType overrides the -machine type (e.g. "q35,smm=on"). Empty uses
+	// the provider default.
+	MachineType string `yaml:"machine_type,omitempty" json:"machine_type,omitempty"`
+	// Globals are extra -global args (e.g. the secure-pflash global that arms
+	// SMM-based Secure Boot).
+	Globals        []string         `yaml:"globals,omitempty" json:"globals,omitempty"`
 	Disks          []DiskConfig     `yaml:"disks"                   json:"disks"`
 	NIC            NICConfig        `yaml:"nic"                     json:"nic"`
 	GPU            GPUConfig        `yaml:"gpu,omitempty"           json:"gpu,omitempty"`

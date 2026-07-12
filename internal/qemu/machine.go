@@ -55,9 +55,10 @@ type BaseMachine struct {
 	vfioDevices  []*VFIODevice
 	tpm          *TPM
 	vsock        *VSockDevice
-	cpuPinning   []int  // host CPU indices; empty = no pinning
-	rtc          string // e.g. "base=localtime,clock=host"
-	bootOrder    string // e.g. "c" for disk-first; empty = firmware default
+	cpuPinning   []int    // host CPU indices; empty = no pinning
+	rtc          string   // e.g. "base=localtime,clock=host"
+	bootOrder    string   // e.g. "c" for disk-first; empty = firmware default
+	globals      []string // extra -global args, e.g. "driver=cfi.pflash01,property=secure,value=on"
 }
 
 var (
@@ -70,6 +71,24 @@ type QemuOptions func(*BaseMachine)
 func WithName(name string) QemuOptions {
 	return func(q *BaseMachine) {
 		q.name = name
+	}
+}
+
+// WithMachineType overrides the -machine type string (e.g. "q35,smm=on").
+// Empty leaves the provider default in place.
+func WithMachineType(machineType string) QemuOptions {
+	return func(q *BaseMachine) {
+		if machineType != "" {
+			q.machineType = machineType
+		}
+	}
+}
+
+// WithGlobal appends a -global argument (the value after "-global"), e.g.
+// "driver=cfi.pflash01,property=secure,value=on" to arm SMM-based Secure Boot.
+func WithGlobal(global string) QemuOptions {
+	return func(q *BaseMachine) {
+		q.globals = append(q.globals, global)
 	}
 }
 
@@ -238,6 +257,9 @@ func (q *BaseMachine) Validate() error {
 func (q *BaseMachine) Args() []string {
 	var args []string
 	args = append(args, "-machine", q.machineType)
+	for _, g := range q.globals {
+		args = append(args, "-global", g)
+	}
 	args = append(args, "-m", q.memory)
 
 	if q.memfd != nil {
