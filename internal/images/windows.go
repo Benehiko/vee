@@ -303,47 +303,96 @@ func (w *WindowsImage) buildISOInContainer(ctx context.Context, esdURLs map[stri
 		wgetLines = append(wgetLines, fmt.Sprintf("wget -q --show-progress -O /work/esd/'%s' '%s'", safe, safeURL))
 	}
 
-	buildScript := `set -e
-apk add --no-cache wimlib xorriso wget ca-certificates >/dev/null 2>&1
-mkdir -p /work/esd /work/iso/sources /work/iso/boot /work/iso/efi
+	// A UUP set is not a single install image: the "<edition>_<lang>.esd" file
+	// (e.g. core_en-us.esd) is the metadata ESD that indexes the OS image, whose
+	// actual file blobs are spread across the sibling "Microsoft-Windows-*.ESD"
+	// component packages. The install image lives at index 3 of the metadata
+	// ESD; WinPE is index 1 and WinRE is index 2. Exporting must name the
+	// metadata ESD as the source and --ref the whole set so blobs resolve. The
+	// old "largest ESD" heuristic picked a component package instead, which
+	// failed with "blob not found" (wimlib error 55).
+	metaESD := fmt.Sprintf("%s_%s.esd", strings.ToLower(w.params.edition), uupdumpLang)
 
-# Download all ESD files
+	buildScript := `set -e
+apk add --no-cache wimlib xorriso cabextract wget ca-certificates >/dev/null 2>&1
+mkdir -p /work/esd /work/ref /work/iso/sources /work/iso/boot /work/iso/efi
+
+# Download all UUP files (ESDs and component-package CABs).
 ` + strings.Join(wgetLines, "\n") + `
 
-# Find the install ESD (largest .esd file)
-INSTALL_ESD=$(ls -S /work/esd/*.esd 2>/dev/null | head -1)
-if [ -z "$INSTALL_ESD" ]; then
-    echo "ERROR: no .esd files found in /work/esd" >&2
-    ls /work/esd/ >&2
-    exit 1
-fi
-echo "Using install ESD: $INSTALL_ESD"
-
-# UUP ships Windows as a set of ESDs where the install ESD is a delta WIM whose
-# file blobs live in sibling ESDs. Every wimlib operation on it must reference
-# the whole set via --ref so those blobs resolve; without it wimlib fails with
-# "blob not found" (error 55).
-REFGLOB="/work/esd/*.esd"
-
-# Extract boot files from ESD index 1 (Windows PE / boot)
-wimlib-imagex extract "$INSTALL_ESD" 1 /Windows/Boot/EFI/ /work/iso/efi/ --ref="$REFGLOB" --no-acls 2>/dev/null || true
-wimlib-imagex extract "$INSTALL_ESD" 1 /Windows/Boot/PCAT/ /work/iso/boot/ --ref="$REFGLOB" --no-acls 2>/dev/null || true
-
-# Export install.wim from all available indexes, resolving blobs across the set.
-INDEXES=$(wimlib-imagex info "$INSTALL_ESD" | grep '^Index' | awk '{print $2}')
-for IDX in $INDEXES; do
-    wimlib-imagex export "$INSTALL_ESD" "$IDX" /work/iso/sources/install.wim \
-        --ref="$REFGLOB" --compress=LZX
+# A UUP set does not contain a ready install.wim. The install image's file blobs
+# are spread across two kinds of component packages: sibling ESDs and CAB files.
+# wimlib resolves cross-container blobs via --ref, but CABs must first be
+# extracted and captured into interim ESDs (mirrors uup-converter-wimlib). Build
+# a single reference directory holding every ESD plus the captured CAB ESDs.
+#
+# UUP ships component ESDs with an uppercase ".ESD" extension, so all globbing
+# here is case-insensitive; a case-sensitive "*.esd" glob silently drops them
+# and their blobs, causing "blob not found" (wimlib error 55).
+for f in /work/esd/*.esd /work/esd/*.ESD; do
+    [ -f "$f" ] && ln -sf "$f" /work/ref/"$(basename "$f")"
 done
 
-# Assemble bootable ISO with xorriso
+CABN=0
+for cab in /work/esd/*.cab /work/esd/*.CAB; do
+    [ -f "$cab" ] || continue
+    base=$(basename "$cab")
+    dir="/tmp/cabx/$base.d"
+    mkdir -p "$dir"
+    if cabextract -q -d "$dir" "$cab" >/dev/null 2>&1; then
+        if wimlib-imagex capture "$dir" /work/ref/"$base.esd" \
+            --no-acls --norpfix "pkg" "pkg" >/dev/null 2>&1; then
+            CABN=$((CABN+1))
+        fi
+    fi
+    rm -rf "$dir"
+done
+echo "prepared reference set: $(ls /work/ref | wc -l) images ($CABN from CABs)"
+
+# Locate the metadata ESD "<edition>_<lang>.esd" (case-insensitive). It indexes
+# the OS image (index 3); WinPE is index 1 and WinRE is index 2.
+META="` + metaESD + `"
+INSTALL_ESD=$(ls /work/ref/ | grep -i -x "$META" | head -1)
+if [ -n "$INSTALL_ESD" ]; then
+    INSTALL_ESD="/work/ref/$INSTALL_ESD"
+else
+    # Fallback: the sole ESD not shipped as a Microsoft-Windows-* component pack.
+    INSTALL_ESD=$(ls /work/ref/*.esd /work/ref/*.ESD 2>/dev/null | grep -vi '/Microsoft' | grep -vi '/ModernApps' | head -1)
+fi
+if [ -z "$INSTALL_ESD" ] || [ ! -f "$INSTALL_ESD" ]; then
+    echo "ERROR: could not locate metadata ESD ($META) in /work/ref" >&2
+    ls -S /work/ref/ >&2
+    exit 1
+fi
+echo "Using metadata ESD: $INSTALL_ESD"
+
+# The reference directory holds only WIM/ESD images, so a plain "*" is safe.
+REFGLOB="/work/ref/*"
+
+# Index 1 ("Windows Setup Media") is the full bootable ISO tree: bootmgr, /boot,
+# /efi, setup.exe and an empty /sources. Apply it as the ISO root, then drop the
+# OS install image into /sources.
+wimlib-imagex apply "$INSTALL_ESD" 1 /work/iso --ref="$REFGLOB" --no-acls 2>/dev/null
+mkdir -p /work/iso/sources
+
+# Export the OS install image (index 3) into install.wim, resolving blobs across
+# the whole reference set (base ESDs + captured CAB ESDs).
+wimlib-imagex export "$INSTALL_ESD" 3 /work/iso/sources/install.wim \
+    --ref="$REFGLOB" --compress=LZX
+
+if [ ! -f /work/iso/boot/etfsboot.com ] || [ ! -f /work/iso/efi/microsoft/boot/efisys_noprompt.bin ]; then
+    echo "ERROR: boot files missing after applying setup media" >&2
+    exit 1
+fi
+
+# Assemble a hybrid BIOS + UEFI bootable ISO. etfsboot.com is the BIOS El Torito
+# boot image; efisys_noprompt.bin is the UEFI one (no "press any key" prompt).
 xorriso -as mkisofs \
     -iso-level 3 \
     -full-iso9660-filenames \
     -volid "WIN_INSTALL" \
-    -eltorito-boot boot/etfsboot.com \
-    -eltorito-catalog boot/boot.cat \
-    -no-emul-boot -boot-load-seg 0x07C0 -boot-load-size 8 \
+    -b boot/etfsboot.com \
+    -no-emul-boot -boot-load-size 8 -boot-info-table \
     -eltorito-alt-boot \
     -e efi/microsoft/boot/efisys_noprompt.bin \
     -no-emul-boot \

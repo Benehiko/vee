@@ -50,9 +50,11 @@ Run `vee pull --list` to see the exact version strings supported by your build.
 ## Windows ISOs
 
 vee builds Windows install ISOs on demand — there is no manual ISO download step.
-It resolves the newest build through the [UUP dump](https://uupdump.net/) API,
-downloads the ESD packages directly from Microsoft's servers, and assembles a
-bootable UEFI ISO inside a throwaway container using `wimlib` and `xorriso`.
+It resolves the newest full ("feature update") build through the
+[UUP dump](https://uupdump.net/) API, downloads the ESD and CAB component
+packages directly from Microsoft's servers, integrates them into a single
+`install.wim` (via `cabextract` + `wimlib`), and assembles a bootable BIOS+UEFI
+ISO inside a throwaway container using `xorriso`.
 
 Building a Windows ISO requires `nerdctl` or `docker` on `PATH`; no ISO-assembly
 tooling is installed on the host. The build needs roughly 15 GB of free scratch
