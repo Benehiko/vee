@@ -19,6 +19,12 @@ func TestAutounattendXMLValid(t *testing.T) {
 		if err := xml.Unmarshal([]byte(xmlStr), &v); err != nil {
 			t.Errorf("version %s: Autounattend.xml is not well-formed: %v", version, err)
 		}
+		// The answer file uses the wcm: prefix throughout; it MUST declare the
+		// wcm namespace or Windows Setup rejects the file (Go's lenient XML
+		// decoder does not, which is why this needs an explicit check).
+		if strings.Contains(xmlStr, "wcm:") && !strings.Contains(xmlStr, `xmlns:wcm=`) {
+			t.Errorf("version %s: answer file uses wcm: prefix but does not declare xmlns:wcm", version)
+		}
 		wantDriver := `\viostor\` + dir + `\amd64`
 		if !strings.Contains(xmlStr, wantDriver) {
 			t.Errorf("version %s: driver path %q missing from answer file", version, wantDriver)

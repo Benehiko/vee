@@ -286,7 +286,11 @@ func configFromTemplate(ctx context.Context, prov provider.Provider, opts Opts, 
 		}
 		return templates.NewTruenasConfig(ctx, prov, opts.Name, opts.DistroVersion, opts.NICBridge, spicePort, opts.DataDisks)
 	case "windows":
-		winVersion := images.Windows11
+		// Default to Windows 10: its classic Setup honours the generated
+		// Autounattend.xml and installs fully unattended. Windows 11's 24H2
+		// Setup reboot-loops on the same answer file, so it is opt-in via
+		// --distro-version win11.
+		winVersion := images.Windows10
 		if opts.DistroVersion != "" && opts.DistroVersion != "latest" {
 			winVersion = images.WindowsVersion(opts.DistroVersion)
 		}
