@@ -1,6 +1,7 @@
 package ssh
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -29,7 +30,10 @@ func NewProxy(agentSock string) (*Proxy, error) {
 	if agentSock == "" {
 		return nil, fmt.Errorf("SSH_AUTH_SOCK not set and no socket path provided")
 	}
-	if _, err := os.Stat(agentSock); err != nil {
+	// agentSock is an operator-supplied SSH agent socket path (flag or
+	// SSH_AUTH_SOCK); statting it to validate its existence is the intended
+	// behavior, not attacker-controlled path traversal.
+	if _, err := os.Stat(agentSock); err != nil { //nolint:gosec // trusted operator-supplied SSH agent socket path
 		return nil, fmt.Errorf("SSH agent socket %s: %w", agentSock, err)
 	}
 	return &Proxy{agentSock: agentSock}, nil
@@ -62,6 +66,12 @@ func (p *Proxy) Listen() error {
 // Serve accepts connections and proxies them to SSH_AUTH_SOCK.
 // Blocks until the listener is closed.
 func (p *Proxy) Serve() error {
+	return p.ServeContext(context.Background())
+}
+
+// ServeContext accepts connections and proxies them to SSH_AUTH_SOCK, using ctx
+// for the dial to the host agent socket. Blocks until the listener is closed.
+func (p *Proxy) ServeContext(ctx context.Context) error {
 	if p.listener == nil {
 		return fmt.Errorf("call Listen before Serve")
 	}
@@ -70,7 +80,7 @@ func (p *Proxy) Serve() error {
 		if err != nil {
 			return err
 		}
-		go p.handle(conn)
+		go p.handle(ctx, conn)
 	}
 }
 
@@ -82,10 +92,11 @@ func (p *Proxy) Close() error {
 	return nil
 }
 
-func (p *Proxy) handle(guest net.Conn) {
+func (p *Proxy) handle(ctx context.Context, guest net.Conn) {
 	defer func() { _ = guest.Close() }()
 
-	agent, err := net.Dial("unix", p.agentSock)
+	var d net.Dialer
+	agent, err := d.DialContext(ctx, "unix", p.agentSock)
 	if err != nil {
 		return
 	}

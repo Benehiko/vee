@@ -64,7 +64,7 @@ func CheckDisksForData(cfg *VMConfig) ([]DiskWarning, error) {
 // checkBlockDevice reads the first 512 bytes of the device and looks for
 // MBR or GPT signatures indicating an existing partition table.
 func checkBlockDevice(path string) (*DiskWarning, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec // path is a user-configured passthrough block device to inspect
 	if err != nil {
 		// Device may require elevated permissions; warn rather than hard-error.
 		return &DiskWarning{Path: path, Reason: fmt.Sprintf("could not open device to inspect: %v", err)}, nil
@@ -101,6 +101,7 @@ func checkBlockDevice(path string) (*DiskWarning, error) {
 // non-zero virtual size, which means the image was previously created and
 // may contain data.
 func checkImageFile(path string) (*DiskWarning, error) {
+	//nolint:gosec,noctx // qemu-img inspects a user-configured VM disk image path; no ctx available without an API change across callers
 	out, err := exec.Command("qemu-img", "info", "--output=human", path).Output()
 	if err != nil {
 		// Not a recognised image format; treat as empty.

@@ -24,7 +24,7 @@ var portsCmd = &cobra.Command{
 			return fmt.Errorf("VM %q was not started with guest agent support; recreate with a template that enables guest_agent", name)
 		}
 
-		client, close, err := openQGAClient(state.QGASocket, 5*time.Second)
+		client, close, err := openQGAClient(cmd.Context(), state.QGASocket, 5*time.Second)
 		if err != nil {
 			return err
 		}
@@ -61,7 +61,7 @@ type portEntry struct {
 }
 
 // parseSSOutput parses `ss -tlnp` output into port entries.
-// Output format: State Recv-Q Send-Q Local-Address:Port Peer-Address:Port Process
+// Output format: State Recv-Q Send-Q Local-Address:Port Peer-Address:Port Process.
 func parseSSOutput(output string) []portEntry {
 	var entries []portEntry
 	for line := range strings.SplitSeq(strings.TrimSpace(output), "\n") {
@@ -101,7 +101,7 @@ func extractPort(addr string) string {
 }
 
 // extractProcessName extracts the first process name from ss process field.
-// e.g. users:(("nginx",pid=123,fd=4)) → nginx
+// e.g. users:(("nginx",pid=123,fd=4)) → nginx.
 func extractProcessName(field string) string {
 	if !strings.HasPrefix(field, "users:") {
 		return ""

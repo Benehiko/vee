@@ -1,12 +1,35 @@
 version: "2"
 
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/Benehiko/vee
+    gofumpt:
+      extra-rules: true
+
 linters:
   enable:
-    - govet
     - errcheck
+    - govet
     - staticcheck
-    - ineffassign
     - unused
+    - ineffassign
+    - revive
+    - gosec
+    - bodyclose
+    - noctx
+    - rowserrcheck
+    - sqlclosecheck
+    - contextcheck
+    - nilerr
+    - gocritic
+    - godot
+    - misspell
+    - whitespace
   settings:
     revive:
       rules:
@@ -15,10 +38,10 @@ linters:
         - name: package-comments
           disabled: true
 
-formatters:
-  enable:
-    - gofumpt
-
 run:
   timeout: 5m
   modules-download-mode: vendor
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

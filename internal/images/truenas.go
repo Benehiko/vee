@@ -9,10 +9,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/Benehiko/vee/internal/utils"
-	"github.com/Benehiko/vee/provider"
 	"github.com/codingsince1985/checksum"
 	"go.uber.org/zap"
+
+	"github.com/Benehiko/vee/internal/utils"
+	"github.com/Benehiko/vee/provider"
 )
 
 const (
@@ -156,7 +157,7 @@ func (t *TrueNASImage) Download(ctx context.Context) error {
 		return fmt.Errorf("downloading ISO: unexpected status %s", resp.Status)
 	}
 
-	if err := os.MkdirAll(t.basePath, 0o755); err != nil {
+	if err := os.MkdirAll(t.basePath, 0o750); err != nil {
 		return err
 	}
 

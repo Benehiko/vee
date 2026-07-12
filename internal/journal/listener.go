@@ -37,7 +37,7 @@ func NewListener(vmName, dir string, port int) *Listener {
 // It binds to 0.0.0.0:<port> so it is reachable from bridge-networked guests.
 // Returns an error if systemd-journal-remote is not found or fails to start.
 func (l *Listener) Start(ctx context.Context) error {
-	if err := os.MkdirAll(l.dir, 0o755); err != nil {
+	if err := os.MkdirAll(l.dir, 0o750); err != nil {
 		return fmt.Errorf("journal dir: %w", err)
 	}
 
@@ -52,6 +52,7 @@ func (l *Listener) Start(ctx context.Context) error {
 	// --listen-http=<addr>:<port> puts it in HTTP receive mode.
 	// --output=<dir> writes one journal file per sender.
 	// --split-mode=host writes per-sender files named by the sending hostname.
+	//nolint:gosec // bin is resolved via exec.LookPath and args are fixed flags plus an int port; no user-controlled shell input.
 	l.cmd = exec.CommandContext(listenCtx, bin,
 		"--listen-http=0.0.0.0:"+strconv.Itoa(l.port),
 		"--output="+l.dir,
@@ -102,8 +103,9 @@ func (l *Listener) JournalFiles() ([]string, error) {
 // FreePort finds a free TCP port on all interfaces starting from defaultPort.
 // Returns defaultPort if it's available, otherwise searches upward.
 func FreePort() (int, error) {
+	var lc net.ListenConfig
 	for port := defaultPort; port < defaultPort+100; port++ {
-		ln, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
+		ln, err := lc.Listen(context.Background(), "tcp", fmt.Sprintf("0.0.0.0:%d", port))
 		if err == nil {
 			_ = ln.Close()
 			return port, nil

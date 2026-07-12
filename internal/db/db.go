@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -62,7 +63,11 @@ CREATE TABLE IF NOT EXISTS dir_cache (
 // the schema, and migrates existing YAML/JSON VM data from storagePath when
 // upgrading from version 0.
 func Open(dbPath, storagePath string) (*sql.DB, error) {
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+	// Open has no caller-supplied context; use a fresh background context for
+	// the one-time schema/migration statements executed at startup.
+	ctx := context.Background()
+
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o750); err != nil {
 		return nil, err
 	}
 
@@ -73,12 +78,12 @@ func Open(dbPath, storagePath string) (*sql.DB, error) {
 
 	db.SetMaxOpenConns(1)
 
-	if _, err := db.Exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;"); err != nil {
+	if _, err := db.ExecContext(ctx, "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;"); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("pragma: %w", err)
 	}
 
-	ver, err := userVersion(db)
+	ver, err := userVersion(ctx, db)
 	if err != nil {
 		_ = db.Close()
 		return nil, err
@@ -86,12 +91,12 @@ func Open(dbPath, storagePath string) (*sql.DB, error) {
 
 	switch {
 	case ver == 0:
-		if err := initSchema(db, storagePath); err != nil {
+		if err := initSchema(ctx, db, storagePath); err != nil {
 			_ = db.Close()
 			return nil, err
 		}
 	case ver < currentVersion:
-		if err := runMigrations(db, ver); err != nil {
+		if err := runMigrations(ctx, db, ver); err != nil {
 			_ = db.Close()
 			return nil, err
 		}
@@ -100,49 +105,49 @@ func Open(dbPath, storagePath string) (*sql.DB, error) {
 	return db, nil
 }
 
-func runMigrations(db *sql.DB, fromVersion int) error {
-	tx, err := db.Begin()
+func runMigrations(ctx context.Context, db *sql.DB, fromVersion int) error {
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
 
 	if fromVersion < 2 {
-		if _, err := tx.Exec(migration2); err != nil {
+		if _, err := tx.ExecContext(ctx, migration2); err != nil {
 			return fmt.Errorf("migration 2: %w", err)
 		}
 	}
 
-	if _, err := tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", currentVersion)); err != nil {
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", currentVersion)); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-func userVersion(db *sql.DB) (int, error) {
+func userVersion(ctx context.Context, db *sql.DB) (int, error) {
 	var v int
-	if err := db.QueryRow("PRAGMA user_version").Scan(&v); err != nil {
+	if err := db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&v); err != nil {
 		return 0, fmt.Errorf("user_version: %w", err)
 	}
 	return v, nil
 }
 
-func initSchema(db *sql.DB, storagePath string) error {
-	tx, err := db.Begin()
+func initSchema(ctx context.Context, db *sql.DB, storagePath string) error {
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.Exec(schema); err != nil {
+	if _, err := tx.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("create schema: %w", err)
 	}
 
-	if err := migrateFromYAML(tx, storagePath); err != nil {
+	if err := migrateFromYAML(ctx, tx, storagePath); err != nil {
 		return fmt.Errorf("migrate yaml: %w", err)
 	}
 
-	if _, err := tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", currentVersion)); err != nil {
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", currentVersion)); err != nil {
 		return err
 	}
 
@@ -150,7 +155,7 @@ func initSchema(db *sql.DB, storagePath string) error {
 }
 
 // migrateFromYAML walks storagePath/*/vm.yaml and state.json and inserts rows.
-func migrateFromYAML(tx *sql.Tx, storagePath string) error {
+func migrateFromYAML(ctx context.Context, tx *sql.Tx, storagePath string) error {
 	entries, err := os.ReadDir(storagePath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -166,6 +171,7 @@ func migrateFromYAML(tx *sql.Tx, storagePath string) error {
 		name := e.Name()
 		vmDir := filepath.Join(storagePath, name)
 
+		//nolint:gosec // vmDir is derived from the trusted local storage dir, not external input.
 		cfgData, err := os.ReadFile(filepath.Join(vmDir, "vm.yaml"))
 		if err != nil {
 			continue
@@ -177,14 +183,15 @@ func migrateFromYAML(tx *sql.Tx, storagePath string) error {
 			continue
 		}
 
-		if _, err := tx.Exec(
+		if _, err := tx.ExecContext(ctx,
 			`INSERT OR IGNORE INTO vms (name, template, config_json, created_at) VALUES (?,?,?,?)`,
 			name, template, cfgJSON, createdAt,
 		); err != nil {
 			return err
 		}
 
-		// state.json — best-effort
+		// state.json — best-effort.
+		//nolint:gosec // vmDir is derived from the trusted local storage dir, not external input.
 		stateData, err := os.ReadFile(filepath.Join(vmDir, "state.json"))
 		if err != nil {
 			stateData = []byte(`{"running":false}`)
@@ -204,7 +211,7 @@ func migrateFromYAML(tx *sql.Tx, storagePath string) error {
 			sshPort = int(v)
 		}
 
-		if _, err := tx.Exec(
+		if _, err := tx.ExecContext(ctx,
 			`INSERT OR IGNORE INTO vm_states (vm_name, running, pid, ssh_port, state_json) VALUES (?,?,?,?,?)`,
 			name, running, pid, sshPort, string(stateData),
 		); err != nil {

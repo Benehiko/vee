@@ -47,7 +47,7 @@ type Config struct {
 // The ISO is built with xorriso (preferred) or genisoimage.
 // Returns the absolute path to the ISO file.
 func Generate(vmDir string, cfg *Config) (string, error) {
-	if err := os.MkdirAll(vmDir, 0o755); err != nil {
+	if err := os.MkdirAll(vmDir, 0o750); err != nil {
 		return "", err
 	}
 
@@ -59,10 +59,10 @@ func Generate(vmDir string, cfg *Config) (string, error) {
 
 	udPath := filepath.Join(vmDir, "user-data")
 	mdPath := filepath.Join(vmDir, "meta-data")
-	if err := os.WriteFile(udPath, []byte(userData), 0o644); err != nil {
+	if err := os.WriteFile(udPath, []byte(userData), 0o600); err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(mdPath, []byte(metaData), 0o644); err != nil {
+	if err := os.WriteFile(mdPath, []byte(metaData), 0o600); err != nil {
 		return "", err
 	}
 
@@ -224,6 +224,7 @@ func renderMetaData(cfg *Config) string {
 func buildISO(isoPath, udPath, mdPath string) error {
 	// Prefer xorriso, fall back to genisoimage.
 	tool, args := isoTool(isoPath, udPath, mdPath)
+	//nolint:gosec,noctx // tool is a fixed literal ("xorriso"/"genisoimage") and args are internally-built ISO paths, not user-controlled shell input; buildISO/Generate take no ctx and threading one requires an exported-signature change plus an out-of-package caller edit for a short-lived local ISO build.
 	cmd := exec.Command(tool, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

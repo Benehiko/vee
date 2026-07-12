@@ -82,7 +82,7 @@ func Install(ctx context.Context) (*Paths, error) {
 		return nil, err
 	}
 	for _, dir := range []string{p.BinDir, p.ConfigDir, p.CacheDir, p.UnitDir} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
 			return nil, fmt.Errorf("mkdir %s: %w", dir, err)
 		}
 	}
@@ -166,6 +166,7 @@ func Purge() error {
 
 func systemctlUser(ctx context.Context, args ...string) error {
 	full := append([]string{"--user"}, args...)
+	//nolint:gosec // args are internal constants (unit name, systemctl verbs), never user input.
 	cmd := exec.CommandContext(ctx, "systemctl", full...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -178,6 +179,7 @@ func dirSize(root string) int64 {
 	var total int64
 	_ = filepath.Walk(root, func(_ string, info os.FileInfo, err error) error {
 		if err != nil {
+			//nolint:nilerr // best-effort size estimate: skip unreadable entries and keep walking.
 			return nil
 		}
 		if !info.IsDir() {

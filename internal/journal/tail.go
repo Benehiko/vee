@@ -48,6 +48,7 @@ func Tail(ctx context.Context, dir string, opts TailOptions) error {
 		args = append(args, fmt.Sprintf("--lines=%d", opts.Lines))
 	}
 
+	//nolint:gosec // bin is resolved via exec.LookPath and args are fixed flags plus validated file paths from the journal dir; no shell involvement.
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

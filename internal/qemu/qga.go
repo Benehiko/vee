@@ -2,6 +2,7 @@ package qemu
 
 import (
 	"bufio"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -29,12 +30,15 @@ type qgaResponse struct {
 }
 
 // NewQGAClient dials the QGA Unix socket, retrying until timeout.
-func NewQGAClient(socketPath string, timeout time.Duration) (*QGAClient, error) {
+func NewQGAClient(ctx context.Context, socketPath string, timeout time.Duration) (*QGAClient, error) {
 	deadline := time.Now().Add(timeout)
+	ctx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+	var dialer net.Dialer
 	var conn net.Conn
 	var err error
 	for time.Now().Before(deadline) {
-		conn, err = net.Dial("unix", socketPath)
+		conn, err = dialer.DialContext(ctx, "unix", socketPath)
 		if err == nil {
 			return &QGAClient{conn: conn, rd: bufio.NewReader(conn)}, nil
 		}
@@ -200,7 +204,7 @@ func (c *QGAClient) GuestExecStatus(pid int) (GuestExecStatus, error) {
 
 // RunCommand executes a command inside the guest and waits for it to finish.
 // Returns stdout, stderr, exit code, and any transport error.
-func (c *QGAClient) RunCommand(path string, args []string) (stdout string, stderr string, exitCode int, err error) {
+func (c *QGAClient) RunCommand(path string, args []string) (stdout, stderr string, exitCode int, err error) {
 	pid, err := c.GuestExec(path, args, true)
 	if err != nil {
 		return "", "", 0, err

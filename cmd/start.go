@@ -10,15 +10,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Benehiko/vee/internal/boot"
-	"github.com/Benehiko/vee/internal/journal"
-	"github.com/Benehiko/vee/internal/qemubin"
-	"github.com/Benehiko/vee/internal/vm"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
+
+	"github.com/Benehiko/vee/internal/boot"
+	"github.com/Benehiko/vee/internal/journal"
+	"github.com/Benehiko/vee/internal/qemubin"
+	"github.com/Benehiko/vee/internal/vm"
 )
 
 var startForeground bool
@@ -82,6 +83,7 @@ func runStartSpinner(cmd *cobra.Command, mgr *vm.Manager, name string) error {
 
 	phaseCh, errCh := mgr.WaitReadyWithPhases(ctx, name, 10*time.Minute)
 
+	//nolint:gosec // os.Stdout.Fd() is a small OS file descriptor; no overflow.
 	if !term.IsTerminal(int(os.Stdout.Fd())) {
 		// Drain phase events to keep the watcher goroutine moving but render
 		// nothing — we only print final status in non-TTY mode.
@@ -273,7 +275,7 @@ func streamSerialForeground(ctx context.Context, logPath string) {
 			return
 		case <-time.After(250 * time.Millisecond):
 		}
-		fh, err := os.Open(logPath)
+		fh, err := os.Open(logPath) //nolint:gosec // logPath is derived from vee-managed storage path and VM name.
 		if err == nil {
 			f = fh
 		}

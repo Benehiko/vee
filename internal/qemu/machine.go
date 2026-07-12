@@ -13,10 +13,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Benehiko/vee/internal/utils"
-	"github.com/Benehiko/vee/provider"
 	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
+
+	"github.com/Benehiko/vee/internal/utils"
+	"github.com/Benehiko/vee/provider"
 )
 
 type VGA string
@@ -390,16 +391,18 @@ func (q *BaseMachine) start(ctx context.Context, detach bool) (*StartResult, err
 		zap.String("binary", binary),
 		zap.Strings("args", args))
 
+	//nolint:gosec // binary/args are the operator-configured QEMU command for this VM manager, not user shell input.
 	cmd := exec.CommandContext(ctx, binary, args...)
 
 	if detach {
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 		// Redirect output to a log file so it is not lost.
 		logPath := filepath.Join(q.AbsolutePath(), "qemu.log")
-		if err := os.MkdirAll(q.AbsolutePath(), 0o755); err != nil {
+		if err := os.MkdirAll(q.AbsolutePath(), 0o750); err != nil {
 			return nil, err
 		}
-		logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		//nolint:gosec // logPath is derived from the VM's own storage dir (AbsolutePath()/qemu.log), not user input.
+		logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 		if err != nil {
 			return nil, err
 		}
@@ -590,6 +593,7 @@ func (q *BaseMachine) applyCPUPinning(pid int) {
 	pinned := 0
 	for _, e := range entries {
 		tid := e.Name()
+		//nolint:gosec,noctx // taskset is a resolved binary; mask/tid are internally derived CPU indices/PIDs. Best-effort post-start pinning; no ctx in scope.
 		out, err := exec.Command(taskset, "-cp", mask, tid).CombinedOutput()
 		if err != nil {
 			q.provider.Logger().Warn("CPU pinning: taskset failed for thread",

@@ -266,7 +266,7 @@ func (w *Watcher) Run(ctx context.Context, out chan<- Event) error {
 // classify returns the phase for a line, whether the line is a terminal
 // failure, the original line (for failure capture), and an optional detail
 // string extracted from a capture group when detailGroup > 0.
-func classify(line string) (phase Phase, fail bool, panicLine string, detail string) {
+func classify(line string) (phase Phase, fail bool, panicLine, detail string) {
 	for _, p := range patterns {
 		m := p.re.FindStringSubmatch(line)
 		if m == nil {

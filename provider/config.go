@@ -116,9 +116,10 @@ func loadConfig(defaults *Config) (*Config, error) {
 	configFilePath := filepath.Join(home, ".vee", "config.yaml")
 
 	if _, err := os.Stat(configFilePath); os.IsNotExist(err) {
-		if err := os.MkdirAll(filepath.Dir(configFilePath), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(configFilePath), 0o750); err != nil {
 			return nil, err
 		}
+		//nolint:gosec // configFilePath is derived from the user's home dir, not external input.
 		f, err := os.Create(configFilePath)
 		if err != nil {
 			return nil, err
@@ -127,7 +128,7 @@ func loadConfig(defaults *Config) (*Config, error) {
 			return nil, err
 		}
 
-		if err := os.MkdirAll(defaults.StoragePath, 0o755); err != nil {
+		if err := os.MkdirAll(defaults.StoragePath, 0o750); err != nil {
 			return nil, err
 		}
 	}

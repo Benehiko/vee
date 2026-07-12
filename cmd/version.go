@@ -53,7 +53,7 @@ func resolveVersion() (v, c, d string) {
 		if d == "" {
 			d = "unknown"
 		}
-		return
+		return v, c, d
 	}
 
 	if v == "" {
@@ -86,7 +86,7 @@ func resolveVersion() (v, c, d string) {
 	if d == "" {
 		d = "unknown"
 	}
-	return
+	return v, c, d
 }
 
 func init() {

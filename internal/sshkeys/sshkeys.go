@@ -14,13 +14,14 @@ import (
 
 // EnsureVeeKeyPair returns the vee-managed public key string (authorized_keys format),
 // generating the keypair at <home>/.vee/ssh/id_ed25519 if it doesn't exist yet.
-func EnsureVeeKeyPair(home string) (pubKey string, privKeyPath string, err error) {
+func EnsureVeeKeyPair(home string) (pubKey, privKeyPath string, err error) {
 	dir := filepath.Join(home, ".vee", "ssh")
 	privKeyPath = filepath.Join(dir, "id_ed25519")
 	pubKeyPath := privKeyPath + ".pub"
 
 	if _, err := os.Stat(privKeyPath); err == nil {
 		// Already exists — read the public key.
+		//nolint:gosec // G304: path derived from caller-supplied home dir joined with fixed vee-managed filenames, not arbitrary user input.
 		data, err := os.ReadFile(pubKeyPath)
 		if err != nil {
 			return "", "", fmt.Errorf("read vee public key: %w", err)
@@ -52,7 +53,7 @@ func EnsureVeeKeyPair(home string) (pubKey string, privKeyPath string, err error
 	}
 
 	pubKeyBytes := ssh.MarshalAuthorizedKey(sshPub)
-	if err := os.WriteFile(pubKeyPath, pubKeyBytes, 0o644); err != nil {
+	if err := os.WriteFile(pubKeyPath, pubKeyBytes, 0o600); err != nil {
 		return "", "", fmt.Errorf("write public key: %w", err)
 	}
 

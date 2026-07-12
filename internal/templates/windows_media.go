@@ -8,8 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/Benehiko/vee/provider"
 	"go.uber.org/zap"
+
+	"github.com/Benehiko/vee/provider"
 )
 
 // oscdimgURL is Microsoft's standalone oscdimg.exe on the public symbol server.
@@ -99,6 +100,7 @@ func ensureNoPromptISO(ctx context.Context, p provider.Provider, srcISO string) 
 
 	// Initialise the prefix once (idempotent; ~a few seconds when already done).
 	if _, err := os.Stat(filepath.Join(prefix, "drive_c", "windows")); err != nil {
+		//nolint:gosec // G204: wine path is resolved via exec.LookPath; args are constant.
 		boot := exec.CommandContext(ctx, wine, "wineboot", "-u")
 		boot.Env = wineEnv
 		boot.Stdout = os.Stderr
@@ -109,7 +111,7 @@ func ensureNoPromptISO(ctx context.Context, p provider.Provider, srcISO string) 
 		}
 	}
 
-	if err := os.MkdirAll(filepath.Join(prefix, "dosdevices"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(prefix, "dosdevices"), 0o750); err != nil {
 		return "", err
 	}
 	_ = os.Remove(filepath.Join(prefix, "dosdevices", "s:"))
@@ -130,6 +132,7 @@ func ensureNoPromptISO(ctx context.Context, p provider.Provider, srcISO string) 
 		`s:\`,
 		`t:\` + filepath.Base(dst),
 	}
+	//nolint:gosec // G204: wine path from exec.LookPath; oscdimg + args are program-controlled, not user input.
 	cmd := exec.CommandContext(ctx, wine, append([]string{oscdimg}, oscArgs...)...)
 	cmd.Env = wineEnv
 	cmd.Stdout = os.Stderr
@@ -151,6 +154,7 @@ func ensureNoPromptISO(ctx context.Context, p provider.Provider, srcISO string) 
 // loop device. UDF Windows media can only be read through a real mount; the
 // userspace ISO extractors see only the ISO9660 stub.
 func loopMountISO(ctx context.Context, iso string) (string, func(), error) {
+	//nolint:gosec // G204: fixed udisksctl command; iso is a program-derived path, not attacker-controlled.
 	out, err := exec.CommandContext(ctx, "udisksctl", "loop-setup", "-r", "-f", iso).CombinedOutput()
 	if err != nil {
 		return "", nil, fmt.Errorf("udisksctl loop-setup: %w: %s", err, out)
@@ -168,8 +172,8 @@ func loopMountISO(ctx context.Context, iso string) (string, func(), error) {
 	}
 
 	detach := func() {
-		_ = exec.Command("udisksctl", "unmount", "-b", loopDev).Run()
-		_ = exec.Command("udisksctl", "loop-delete", "-b", loopDev).Run()
+		_ = exec.CommandContext(ctx, "udisksctl", "unmount", "-b", loopDev).Run()
+		_ = exec.CommandContext(ctx, "udisksctl", "loop-delete", "-b", loopDev).Run()
 	}
 
 	mo, err := exec.CommandContext(ctx, "udisksctl", "mount", "-b", loopDev).CombinedOutput()

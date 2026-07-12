@@ -75,7 +75,7 @@ func TestSnapshotRestoreRoundTrip(t *testing.T) {
 		t.Fatalf("identity: %v", err)
 	}
 
-	want := map[string]string{
+	want := map[string]string{ //nolint:gosec // fixed test fixture JSON, not a real credential.
 		".credentials": `{"scheme":"OAuth"}`,
 		".runner":      `{"agentId":7}`,
 	}

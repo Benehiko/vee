@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -8,10 +9,11 @@ import (
 	"path/filepath"
 	"text/template"
 
-	"github.com/Benehiko/vee/internal/qemubin"
-	"github.com/Benehiko/vee/internal/vm"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
+
+	"github.com/Benehiko/vee/internal/qemubin"
+	"github.com/Benehiko/vee/internal/vm"
 )
 
 var daemonCmd = &cobra.Command{
@@ -47,7 +49,7 @@ Requires root (sudo).`,
 		if err := installVFIOModprobeConf(); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not write vfio modprobe config: %v\n", err)
 		}
-		if err := uninstallLegacyUserUnit(); err != nil {
+		if err := uninstallLegacyUserUnit(cmd.Context()); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not remove legacy --user vee.service: %v\n", err)
 		}
 		return installSystemdUnit()
@@ -58,7 +60,7 @@ var daemonUninstallCmd = &cobra.Command{
 	Use:   "uninstall",
 	Short: "Disable and remove the vee systemd system service",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return uninstallSystemdUnit()
+		return uninstallSystemdUnit(cmd.Context())
 	},
 }
 
@@ -141,6 +143,7 @@ func installVFIOModprobeConf() error {
 		if path, lookErr := exec.LookPath(cmd[0]); lookErr == nil {
 			args := append([]string{path}, cmd[1:]...)
 			sudoArgs := append([]string{"sudo"}, args...)
+			//nolint:gosec,noctx // initramfs tool path from LookPath; fixed args; best-effort install step, no ctx here.
 			out, runErr := exec.Command(sudoArgs[0], sudoArgs[1:]...).CombinedOutput()
 			if runErr != nil {
 				fmt.Fprintf(os.Stderr, "warning: %s failed: %v\n%s\n", cmd[0], runErr, out)
@@ -165,6 +168,7 @@ func sudoWriteCmd(path, content string) (*exec.Cmd, error) {
 		}
 		sudo = pkexec
 	}
+	//nolint:gosec,noctx // sudo/pkexec from LookPath; writes fixed vee-owned config paths; cmd is run later by caller.
 	cmd := exec.Command(sudo, "tee", path)
 	cmd.Stdin = os.Stdin
 	// Feed the content via a pipe.
@@ -299,6 +303,7 @@ func installSystemdUnit() error {
 		{"sudo", "systemctl", "daemon-reload"},
 		{"sudo", "systemctl", "enable", "--now", "vee.service"},
 	} {
+		//nolint:gosec,noctx // fixed systemctl argument list; install step, no ctx in this call chain.
 		out, cmdErr := exec.Command(sargs[0], sargs[1:]...).CombinedOutput()
 		if cmdErr != nil {
 			prov.Logger().Debug("systemctl invocation failed",
@@ -312,11 +317,12 @@ func installSystemdUnit() error {
 	return nil
 }
 
-func uninstallSystemdUnit() error {
+func uninstallSystemdUnit(ctx context.Context) error {
 	for _, sargs := range [][]string{
 		{"sudo", "systemctl", "disable", "--now", "vee.service"},
 	} {
-		out, err := exec.Command(sargs[0], sargs[1:]...).CombinedOutput()
+		//nolint:gosec // fixed systemctl argument list; not tainted user input.
+		out, err := exec.CommandContext(ctx, sargs[0], sargs[1:]...).CombinedOutput()
 		if err != nil {
 			prov.Logger().Debug("systemctl invocation failed during uninstall",
 				zap.Strings("args", sargs), zap.ByteString("output", out), zap.Error(err))
@@ -324,13 +330,13 @@ func uninstallSystemdUnit() error {
 		}
 	}
 
-	if out, err := exec.Command("sudo", "rm", "-f", systemUnitPath, polkitRulePath, udevRulePath).CombinedOutput(); err != nil {
+	if out, err := exec.CommandContext(ctx, "sudo", "rm", "-f", systemUnitPath, polkitRulePath, udevRulePath).CombinedOutput(); err != nil {
 		return fmt.Errorf("remove unit/polkit/udev files: %w\n%s", err, out)
 	}
 	// Reload udev so the removed rule stops applying to future device events.
-	_, _ = exec.Command("sudo", "udevadm", "control", "--reload-rules").CombinedOutput()
+	_, _ = exec.CommandContext(ctx, "sudo", "udevadm", "control", "--reload-rules").CombinedOutput()
 
-	out, err := exec.Command("sudo", "systemctl", "daemon-reload").CombinedOutput()
+	out, err := exec.CommandContext(ctx, "sudo", "systemctl", "daemon-reload").CombinedOutput()
 	if err != nil {
 		prov.Logger().Debug("systemctl daemon-reload failed",
 			zap.ByteString("output", out), zap.Error(err))
@@ -376,6 +382,7 @@ func installUdevRule(username string) error {
 		{"sudo", "udevadm", "control", "--reload-rules"},
 		{"sudo", "udevadm", "trigger", "--subsystem-match=pci", "--attr-match=driver=vfio-pci", "--action=change"},
 	} {
+		//nolint:gosec,noctx // fixed udevadm argument list; install step, no ctx in this call chain.
 		if out, err := exec.Command(args[0], args[1:]...).CombinedOutput(); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: %v: %v\n%s\n", args, err, out)
 		}
@@ -412,7 +419,7 @@ func installPolkitRule(username string) error {
 // The legacy user-scoped unit is incompatible with the system unit because
 // systemd would run two vee daemons simultaneously (one per scope), and the
 // user-scoped daemon does not survive session teardown during host shutdown.
-func uninstallLegacyUserUnit() error {
+func uninstallLegacyUserUnit(ctx context.Context) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
@@ -424,7 +431,8 @@ func uninstallLegacyUserUnit() error {
 	for _, sargs := range [][]string{
 		{"--user", "disable", "--now", "vee.service"},
 	} {
-		out, err := exec.Command("systemctl", sargs...).CombinedOutput()
+		//nolint:gosec // fixed systemctl argument list; not tainted user input.
+		out, err := exec.CommandContext(ctx, "systemctl", sargs...).CombinedOutput()
 		if err != nil {
 			prov.Logger().Debug("systemctl --user disable failed",
 				zap.Strings("args", sargs), zap.ByteString("output", out), zap.Error(err))
@@ -433,7 +441,7 @@ func uninstallLegacyUserUnit() error {
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	_, _ = exec.Command("systemctl", "--user", "daemon-reload").CombinedOutput()
+	_, _ = exec.CommandContext(ctx, "systemctl", "--user", "daemon-reload").CombinedOutput()
 	fmt.Printf("Removed legacy --user vee.service at %s\n", path)
 	return nil
 }

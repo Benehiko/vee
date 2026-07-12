@@ -14,7 +14,7 @@ import (
 	"github.com/Benehiko/vee/internal/vm"
 )
 
-// styles
+// styles.
 var (
 	styleTitle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")).Padding(0, 1)
 	styleSelected   = lipgloss.NewStyle().Background(lipgloss.Color("237")).Bold(true)
@@ -53,7 +53,7 @@ type listModel struct {
 	err     string
 }
 
-// messages
+// messages.
 type (
 	refreshMsg    []listEntry
 	refreshErrMsg string
@@ -76,7 +76,6 @@ func (m listModel) Init() tea.Cmd {
 
 func (m listModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-
 	case tea.KeyMsg:
 		// Delete confirmation mode
 		if m.confirm != "" {
@@ -219,11 +218,12 @@ func (m listModel) View() string {
 
 	sb.WriteString("\n")
 
-	if m.confirm != "" {
+	switch {
+	case m.confirm != "":
 		sb.WriteString(styleErr.Render(fmt.Sprintf("  Delete %q? [y/N] ", m.confirm)))
-	} else if m.status != "" {
+	case m.status != "":
 		sb.WriteString(styleRunning.Render("  " + m.status))
-	} else if m.err != "" {
+	case m.err != "":
 		sb.WriteString(styleErr.Render("  " + m.err))
 	}
 
@@ -322,7 +322,7 @@ func (m listModel) doStats() tea.Cmd {
 		name := e.config.Name
 		sock := e.state.QMPSocket
 		cmds = append(cmds, func() tea.Msg {
-			client, err := qemu.NewQMPClient(sock, 2*time.Second)
+			client, err := qemu.NewQMPClient(context.Background(), sock, 2*time.Second) //nolint:contextcheck // Bubbletea tea.Cmd has no request context
 			if err != nil {
 				return nil
 			}

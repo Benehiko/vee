@@ -94,7 +94,7 @@ func EnsureKey(id *age.X25519Identity, name string) (pub string, created bool, e
 
 	if _, statErr := os.Stat(agePath); statErr == nil {
 		// Already generated — return the stored public key.
-		data, rerr := os.ReadFile(pubPath)
+		data, rerr := os.ReadFile(pubPath) //nolint:gosec // pubPath is derived from a fixed ~/.vee/runner-ssh dir and a controlled key basename, not user input
 		if rerr != nil {
 			return "", false, fmt.Errorf("read public key %s: %w", pubPath, rerr)
 		}
@@ -133,7 +133,7 @@ func PublicKey(name string) (pub string, ok bool, err error) {
 	if err != nil {
 		return "", false, err
 	}
-	data, rerr := os.ReadFile(pubPath)
+	data, rerr := os.ReadFile(pubPath) //nolint:gosec // pubPath is derived from a fixed ~/.vee/runner-ssh dir and a controlled key basename, not user input
 	if rerr != nil {
 		if os.IsNotExist(rerr) {
 			return "", false, nil
@@ -151,7 +151,7 @@ func LoadPrivateKey(id *age.X25519Identity, name string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	enc, err := os.ReadFile(agePath)
+	enc, err := os.ReadFile(agePath) //nolint:gosec // agePath is derived from a fixed ~/.vee/runner-ssh dir and a controlled key basename, not user input
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, fmt.Errorf("no runner ssh key at %s: %w", agePath, os.ErrNotExist)
@@ -221,7 +221,7 @@ func writeFileAtomic(dst string, data []byte, perm os.FileMode) error {
 		return fmt.Errorf("temp nonce: %w", err)
 	}
 	tmp := filepath.Join(d, fmt.Sprintf(".%x.tmp", nonce))
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm) //nolint:gosec // tmp is a random-nonce temp file inside the destination's own dir, not user input
 	if err != nil {
 		return fmt.Errorf("create temp %s: %w", tmp, err)
 	}

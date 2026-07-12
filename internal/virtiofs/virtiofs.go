@@ -92,12 +92,14 @@ func (v *Virtiofsd) args() []string {
 // Start blocks until the virtiofsd process exits.
 func (v *Virtiofsd) Start(ctx context.Context) error {
 	binary := v.provider.Config().VirtiofsdPath
+	//nolint:gosec // G204: binary is the operator-configured virtiofsd path and args are built from validated struct fields, not untrusted input.
 	return exec.CommandContext(ctx, binary, v.args()...).Run()
 }
 
 // StartDetached launches virtiofsd as a detached background process and returns its PID.
 func (v *Virtiofsd) StartDetached(ctx context.Context) (int, error) {
 	binary := v.provider.Config().VirtiofsdPath
+	//nolint:gosec // G204: binary is the operator-configured virtiofsd path and args are built from validated struct fields, not untrusted input.
 	cmd := exec.CommandContext(ctx, binary, v.args()...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {

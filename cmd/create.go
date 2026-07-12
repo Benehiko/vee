@@ -8,6 +8,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spf13/cobra"
+	"golang.org/x/term"
+
 	"github.com/Benehiko/vee/internal/blockdev"
 	"github.com/Benehiko/vee/internal/gpu"
 	"github.com/Benehiko/vee/internal/images"
@@ -17,8 +20,6 @@ import (
 	"github.com/Benehiko/vee/internal/tui"
 	"github.com/Benehiko/vee/internal/vm"
 	"github.com/Benehiko/vee/internal/vm/build"
-	"github.com/spf13/cobra"
-	"golang.org/x/term"
 )
 
 var (

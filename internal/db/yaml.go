@@ -9,10 +9,10 @@ import (
 
 // yamlToJSON converts a vm.yaml file's bytes into a JSON string suitable for
 // storage, and extracts the template name and created_at timestamp.
-func yamlToJSON(data []byte) (cfgJSON string, template string, createdAt time.Time, err error) {
+func yamlToJSON(data []byte) (cfgJSON, template string, createdAt time.Time, err error) {
 	var raw map[string]any
 	if err = yaml.Unmarshal(data, &raw); err != nil {
-		return
+		return cfgJSON, template, createdAt, err
 	}
 
 	if t, ok := raw["template"].(string); ok {
@@ -27,8 +27,8 @@ func yamlToJSON(data []byte) (cfgJSON string, template string, createdAt time.Ti
 
 	b, err := json.Marshal(raw)
 	if err != nil {
-		return
+		return cfgJSON, template, createdAt, err
 	}
 	cfgJSON = string(b)
-	return
+	return cfgJSON, template, createdAt, err
 }

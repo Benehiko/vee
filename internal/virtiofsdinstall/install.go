@@ -32,7 +32,7 @@ func EnsureVirtiofsd(home string) (string, error) {
 		return dst, nil
 	}
 
-	if err := os.MkdirAll(binDir, 0o755); err != nil {
+	if err := os.MkdirAll(binDir, 0o750); err != nil {
 		return "", fmt.Errorf("create bin dir: %w", err)
 	}
 
@@ -45,7 +45,7 @@ func EnsureVirtiofsd(home string) (string, error) {
 
 	// Download tarball on the host (has network access).
 	buildDir := filepath.Join(os.TempDir(), "virtiofsd-build")
-	if err := os.MkdirAll(buildDir, 0o755); err != nil {
+	if err := os.MkdirAll(buildDir, 0o750); err != nil {
 		return "", fmt.Errorf("create build dir: %w", err)
 	}
 	tarPath := filepath.Join(buildDir, "virtiofsd.tar.gz")
@@ -80,6 +80,7 @@ cp target/release/virtiofsd /out/virtiofsd
 		"sh", "-c", buildScript,
 	}
 
+	//nolint:gosec // G204: containerRuntime is resolved via exec.LookPath from a fixed allowlist (nerdctl/docker); args are internally constructed, not user input.
 	cmd := exec.CommandContext(context.Background(), containerRuntime, args...)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
@@ -87,7 +88,8 @@ cp target/release/virtiofsd /out/virtiofsd
 		return "", fmt.Errorf("virtiofsd build failed: %w", err)
 	}
 
-	if err := os.Chmod(dst, 0o755); err != nil {
+	// virtiofsd is an executable; it needs the exec bit, so perms cannot be 0o600 or less.
+	if err := os.Chmod(dst, 0o750); err != nil { //nolint:gosec // G302: executable binary requires the exec bit; 0o750 is the tightest workable mode.
 		return "", fmt.Errorf("chmod virtiofsd: %w", err)
 	}
 
@@ -108,7 +110,7 @@ func downloadFile(dst, url string) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("HTTP %d fetching %s", resp.StatusCode, url)
 	}
-	f, err := os.Create(dst)
+	f, err := os.Create(dst) //nolint:gosec // G304: dst is an internally constructed path under os.TempDir(), not user-controlled.
 	if err != nil {
 		return err
 	}

@@ -1,6 +1,7 @@
 package gpu
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -26,7 +27,7 @@ func BindVFIO(addr string) error {
 	}
 
 	// Load vfio-pci kernel module.
-	if err := exec.Command("modprobe", "vfio-pci").Run(); err != nil {
+	if err := exec.CommandContext(context.Background(), "modprobe", "vfio-pci").Run(); err != nil {
 		return fmt.Errorf("modprobe vfio-pci: %w", err)
 	}
 

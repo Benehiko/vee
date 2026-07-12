@@ -42,7 +42,7 @@ func newProvider(silent bool) (Provider, error) {
 		return nil, err
 	}
 
-	if err := os.MkdirAll(config.StoragePath, 0o755); err != nil {
+	if err := os.MkdirAll(config.StoragePath, 0o750); err != nil {
 		return nil, err
 	}
 
@@ -60,12 +60,13 @@ func newProvider(silent bool) (Provider, error) {
 }
 
 func newLogger(logPath string, silent bool) (*zap.Logger, error) {
-	if err := os.MkdirAll(logPath, 0o755); err != nil {
+	if err := os.MkdirAll(logPath, 0o750); err != nil {
 		return nil, err
 	}
 
 	logFile := filepath.Join(logPath, "vee.log")
-	f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	//nolint:gosec // logFile is derived from the configured log dir, not external input.
+	f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, err
 	}

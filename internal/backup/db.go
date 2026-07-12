@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"context"
 	"database/sql"
 	"time"
 )
@@ -27,13 +28,14 @@ type Run struct {
 
 // CreateRun inserts a new backup run with status=pending and returns its ID.
 func CreateRun(db *sql.DB, vmName, dest string, dirs []string) (int64, error) {
-	tx, err := db.Begin()
+	ctx := context.Background()
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	res, err := tx.Exec(
+	res, err := tx.ExecContext(ctx,
 		`INSERT INTO backup_runs (vm_name, dest, status) VALUES (?, ?, ?)`,
 		vmName, dest, StatusPending,
 	)
@@ -46,7 +48,7 @@ func CreateRun(db *sql.DB, vmName, dest string, dirs []string) (int64, error) {
 	}
 
 	for _, dir := range dirs {
-		if _, err := tx.Exec(`INSERT INTO backup_dirs (run_id, guest_path) VALUES (?, ?)`, id, dir); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO backup_dirs (run_id, guest_path) VALUES (?, ?)`, id, dir); err != nil {
 			return 0, err
 		}
 	}
@@ -57,28 +59,29 @@ func CreateRun(db *sql.DB, vmName, dest string, dirs []string) (int64, error) {
 // SetStatus updates the status (and optionally error/timestamps) of a run.
 func SetStatus(db *sql.DB, id int64, status Status, errMsg string) error {
 	now := time.Now().UTC()
+	ctx := context.Background()
 	switch status {
 	case StatusRunning:
-		_, err := db.Exec(
+		_, err := db.ExecContext(ctx,
 			`UPDATE backup_runs SET status=?, started_at=? WHERE id=?`,
 			status, now, id,
 		)
 		return err
 	case StatusDone, StatusFailed:
-		_, err := db.Exec(
+		_, err := db.ExecContext(ctx,
 			`UPDATE backup_runs SET status=?, finished_at=?, error=? WHERE id=?`,
 			status, now, errMsg, id,
 		)
 		return err
 	default:
-		_, err := db.Exec(`UPDATE backup_runs SET status=? WHERE id=?`, status, id)
+		_, err := db.ExecContext(ctx, `UPDATE backup_runs SET status=? WHERE id=?`, status, id)
 		return err
 	}
 }
 
 // LastIncomplete returns the most recent pending or failed run for a VM, or nil.
 func LastIncomplete(db *sql.DB, vmName string) (*Run, error) {
-	row := db.QueryRow(
+	row := db.QueryRowContext(context.Background(),
 		`SELECT id, dest, status, error FROM backup_runs
 		 WHERE vm_name=? AND status IN ('pending','failed')
 		 ORDER BY id DESC LIMIT 1`,
@@ -105,7 +108,7 @@ func LastIncomplete(db *sql.DB, vmName string) (*Run, error) {
 
 // ListRuns returns all backup runs for a VM, newest first.
 func ListRuns(db *sql.DB, vmName string) ([]*Run, error) {
-	rows, err := db.Query(
+	rows, err := db.QueryContext(context.Background(),
 		`SELECT id, dest, status, started_at, finished_at, error
 		 FROM backup_runs WHERE vm_name=? ORDER BY id DESC`,
 		vmName,
@@ -150,7 +153,7 @@ func ListRuns(db *sql.DB, vmName string) ([]*Run, error) {
 }
 
 func loadDirs(db *sql.DB, runID int64) ([]string, error) {
-	rows, err := db.Query(`SELECT guest_path FROM backup_dirs WHERE run_id=? ORDER BY rowid`, runID)
+	rows, err := db.QueryContext(context.Background(), `SELECT guest_path FROM backup_dirs WHERE run_id=? ORDER BY rowid`, runID)
 	if err != nil {
 		return nil, err
 	}

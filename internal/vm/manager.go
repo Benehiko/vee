@@ -2,7 +2,7 @@ package vm
 
 import (
 	"context"
-	"crypto/sha1"
+	"crypto/sha1" //nolint:gosec // sha1 used only to derive a stable non-cryptographic vsock CID from the VM name; changing it would break existing VMs' CIDs
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -17,6 +17,8 @@ import (
 	"syscall"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/Benehiko/vee/internal/boot"
 	"github.com/Benehiko/vee/internal/cloudinit"
 	cputil "github.com/Benehiko/vee/internal/cpu"
@@ -25,7 +27,6 @@ import (
 	"github.com/Benehiko/vee/internal/virtiofs"
 	"github.com/Benehiko/vee/internal/virtiofsdinstall"
 	"github.com/Benehiko/vee/provider"
-	"go.uber.org/zap"
 )
 
 type Manager struct {
@@ -129,7 +130,7 @@ func (m *Manager) ListAutoStart() ([]*VMConfig, error) {
 // Create validates and persists a new VMConfig, creating disk images and OVMF vars.
 func (m *Manager) Create(ctx context.Context, cfg *VMConfig) error {
 	dir := m.vmDir(cfg.Name)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return err
 	}
 
@@ -410,8 +411,11 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 
 	// Watch for guest-initiated SHUTDOWN events so the daemon can tell
 	// "user shut down inside the VM" apart from a crash. Best-effort.
+	// The watcher outlives this Start call (it runs for the VM's lifetime),
+	// so detach it from the request ctx — cancelling Start must not kill the
+	// watcher — while still carrying any ctx values via WithoutCancel.
 	if newState.QMPSocket != "" {
-		go m.watchShutdownEvents(name, newState.QMPSocket)
+		go m.watchShutdownEvents(context.WithoutCancel(ctx), name, newState.QMPSocket)
 	}
 
 	// Register hostname → IP and inject SSH key. Best-effort: log but don't fail start.
@@ -429,15 +433,16 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 			}
 			if cfg.Template == "truenas" {
 				pubKey, keyErr := veeSSHPublicKey()
-				if keyErr != nil {
+				switch {
+				case keyErr != nil:
 					m.provider.Logger().Warn("read vee SSH public key failed", zap.Error(keyErr))
-				} else if m.PromptFn == nil && cfg.TrueNASAPIKey == "" {
+				case m.PromptFn == nil && cfg.TrueNASAPIKey == "":
 					m.provider.Logger().Warn("skipping TrueNAS SSH key injection: no API key and no prompt available")
-				} else {
-					apiKey, adminUser, ensureErr := EnsureTrueNASAPIKey(cfg, ip, m.storagePath(), m.PromptFn)
+				default:
+					apiKey, adminUser, ensureErr := EnsureTrueNASAPIKey(ctx, cfg, ip, m.storagePath(), m.PromptFn)
 					if ensureErr != nil {
 						m.provider.Logger().Warn("TrueNAS API key setup failed", zap.Error(ensureErr))
-					} else if injectErr := InjectVeeSSHKey(ip, apiKey, adminUser, pubKey); injectErr != nil {
+					} else if injectErr := InjectVeeSSHKey(ctx, ip, apiKey, adminUser, pubKey); injectErr != nil {
 						m.provider.Logger().Warn("TrueNAS SSH key injection failed", zap.Error(injectErr))
 					}
 				}
@@ -562,14 +567,15 @@ func (m *Manager) WaitReadyWithPhases(ctx context.Context, name string, timeout 
 		probe := func() bool {
 			if state.SSHPort > 0 {
 				addr := fmt.Sprintf("127.0.0.1:%d", state.SSHPort)
-				conn, dialErr := net.DialTimeout("tcp", addr, 2*time.Second)
+				dialer := net.Dialer{Timeout: 2 * time.Second}
+				conn, dialErr := dialer.DialContext(watchCtx, "tcp", addr)
 				if dialErr == nil {
 					_ = conn.Close()
 					return true
 				}
 			}
 			if state.QGASocket != "" {
-				client, qgaErr := qemu.NewQGAClient(state.QGASocket, 2*time.Second)
+				client, qgaErr := qemu.NewQGAClient(watchCtx, state.QGASocket, 2*time.Second)
 				if qgaErr == nil {
 					pingErr := client.GuestPing()
 					_ = client.Close()
@@ -662,7 +668,7 @@ func veeSSHPublicKey() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	data, err := os.ReadFile(filepath.Join(home, ".vee", "ssh", "id_ed25519.pub"))
+	data, err := os.ReadFile(filepath.Join(home, ".vee", "ssh", "id_ed25519.pub")) //nolint:gosec // fixed path under the user's home dir, not untrusted input
 	if err != nil {
 		return "", err
 	}
@@ -679,7 +685,7 @@ func (m *Manager) waitIP(ctx context.Context, cfg *VMConfig, state *VMState, tim
 			}
 		}
 		if state.QGASocket != "" {
-			if ip, err := ResolveIPFromQGA(state.QGASocket); err == nil {
+			if ip, err := ResolveIPFromQGA(ctx, state.QGASocket); err == nil {
 				return ip, nil
 			}
 		}
@@ -698,6 +704,7 @@ func (m *Manager) waitIP(ctx context.Context, cfg *VMConfig, state *VMState, tim
 // If the MAC is not found on the first pass, it sends a broadcast ping on each
 // local subnet to trigger ARP responses, then retries the neighbour table once.
 func ResolveIPFromMAC(mac string) (string, error) {
+	//nolint:noctx // exported helper without ctx; adding one changes its signature and all cmd/ callers
 	out, err := exec.Command("ip", "neigh").Output()
 	if err != nil {
 		return "", fmt.Errorf("ip neigh: %w", err)
@@ -709,6 +716,7 @@ func ResolveIPFromMAC(mac string) (string, error) {
 	// MAC not in neighbour table — ping each local broadcast address to
 	// stimulate ARP, then scan again.
 	pingBroadcasts()
+	//nolint:noctx // exported helper without ctx; adding one changes its signature and all cmd/ callers
 	out, err = exec.Command("ip", "neigh").Output()
 	if err != nil {
 		return "", fmt.Errorf("ip neigh: %w", err)
@@ -742,6 +750,7 @@ func pingBroadcasts() {
 // socket (unprivileged on Linux 3.11+ with net.ipv4.ping_group_range set).
 // Falls back silently — this is best-effort ARP stimulation only.
 func sendICMPEcho(addr string) {
+	//nolint:noctx // best-effort ARP stimulation; no ctx in this call chain and adding one changes exported ResolveIPFromMAC
 	conn, err := net.DialTimeout("ip4:icmp", addr, time.Second)
 	if err != nil {
 		return
@@ -751,8 +760,8 @@ func sendICMPEcho(addr string) {
 	// Minimal ICMP echo request: type=8 code=0 checksum id=0 seq=1 data=none.
 	msg := []byte{8, 0, 0, 0, 0, 1, 0, 1}
 	cs := icmpChecksum(msg)
-	msg[2] = byte(cs >> 8)
-	msg[3] = byte(cs)
+	msg[2] = byte((cs >> 8) & 0xff)
+	msg[3] = byte(cs & 0xff)
 	_, _ = conn.Write(msg)
 }
 
@@ -819,8 +828,8 @@ func equalMAC(a, b string) bool {
 }
 
 // ResolveIPFromQGA returns the first non-loopback IPv4 via the QEMU guest agent.
-func ResolveIPFromQGA(qgaSocket string) (string, error) {
-	client, err := qemu.NewQGAClient(qgaSocket, 3*time.Second)
+func ResolveIPFromQGA(ctx context.Context, qgaSocket string) (string, error) {
+	client, err := qemu.NewQGAClient(ctx, qgaSocket, 3*time.Second)
 	if err != nil {
 		return "", fmt.Errorf("QGA dial: %w", err)
 	}
@@ -854,7 +863,7 @@ func (m *Manager) Stop(ctx context.Context, name string) error {
 // DesiredStateStopped (the daemon honours that and won't restart it),
 // whereas ShutdownReasonHost preserves DesiredStateRunning so autostart
 // VMs come back up on the next host boot.
-func (m *Manager) stopWithReason(_ context.Context, name, reason string) error {
+func (m *Manager) stopWithReason(ctx context.Context, name, reason string) error {
 	state, err := m.loadState(name)
 	if err != nil {
 		return err
@@ -864,7 +873,7 @@ func (m *Manager) stopWithReason(_ context.Context, name, reason string) error {
 	}
 
 	if state.QMPSocket != "" {
-		client, qmpErr := qemu.NewQMPClient(state.QMPSocket, 3*time.Second)
+		client, qmpErr := qemu.NewQMPClient(ctx, state.QMPSocket, 3*time.Second)
 		if qmpErr == nil {
 			_ = client.SystemPowerdown()
 			_ = client.Close()
@@ -1258,7 +1267,8 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 			var stuck []string
 			for _, addr := range allAddrs {
 				ds, resetErr := gpu.EnsureReady(addr)
-				if resetErr != nil {
+				switch {
+				case resetErr != nil:
 					m.provider.Logger().Warn("VFIO device wake/reset failed",
 						zap.String("pci_addr", addr),
 						zap.String("power_state", string(ds.PowerState)),
@@ -1268,13 +1278,13 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 					if ds.NeedsReset() {
 						stuck = append(stuck, fmt.Sprintf("%s (%s/%s)", addr, ds.PowerState, ds.RuntimeStatus))
 					}
-				} else if ds.NeedsAttention() {
+				case ds.NeedsAttention():
 					m.provider.Logger().Warn("VFIO device in D3hot/suspended — vfio-pci will attempt runtime resume",
 						zap.String("pci_addr", addr),
 						zap.String("power_state", string(ds.PowerState)),
 						zap.String("runtime_status", ds.RuntimeStatus),
 					)
-				} else {
+				default:
 					m.provider.Logger().Info("VFIO device ready",
 						zap.String("pci_addr", addr),
 						zap.String("power_state", string(ds.PowerState)),
@@ -1420,6 +1430,7 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 		}
 		home, homeErr := os.UserHomeDir()
 		if homeErr == nil {
+			//nolint:contextcheck // EnsureVirtiofsd lives in internal/virtiofsdinstall and takes no ctx; adding one is out of scope for this package
 			if path, ensureErr := virtiofsdinstall.EnsureVirtiofsd(home); ensureErr == nil {
 				m.provider.Config().VirtiofsdPath = path
 			} else {
@@ -1523,6 +1534,7 @@ func startSwtpm(stateDir, socketPath string) error {
 }
 
 func newSwtpmCmd(stateDir, socketPath string) *exec.Cmd {
+	//nolint:gosec,noctx // swtpm is a fixed binary; args are vee-controlled VM paths; cmd is returned for the caller to run, so no ctx is threaded here
 	return exec.Command("swtpm", "socket",
 		"--tpmstate", "dir="+stateDir,
 		"--ctrl", "type=unixio,path="+socketPath,
@@ -1534,7 +1546,7 @@ func newSwtpmCmd(stateDir, socketPath string) *exec.Cmd {
 // deterministicCID returns a stable guest CID (>= 3) derived from the VM name.
 // CIDs 0-2 are reserved: hypervisor, local, host.
 func deterministicCID(name string) uint32 {
-	h := sha1.Sum([]byte(name))
+	h := sha1.Sum([]byte(name)) //nolint:gosec // non-cryptographic: stable CID derivation from VM name
 	cid := uint32(h[0])<<24 | uint32(h[1])<<16 | uint32(h[2])<<8 | uint32(h[3])
 	if cid < 3 {
 		cid += 3
@@ -1557,6 +1569,7 @@ func availablePort(preferred, min, max int) int {
 }
 
 func isPortFree(port int) bool {
+	//nolint:noctx // local port-availability probe; no ctx available and adding one requires an API change across callers
 	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
 		return false
@@ -1577,12 +1590,12 @@ func isAlive(pid int) bool {
 }
 
 func copyFile(src, dst string) error {
-	in, err := os.Open(src)
+	in, err := os.Open(src) //nolint:gosec // src is a vee-controlled VM file path, not untrusted input
 	if err != nil {
 		return err
 	}
 	defer func() { _ = in.Close() }()
-	out, err := os.Create(dst)
+	out, err := os.Create(dst) //nolint:gosec // dst is a vee-controlled VM file path, not untrusted input
 	if err != nil {
 		return err
 	}
@@ -1629,9 +1642,9 @@ func (m *Manager) RunHealthCheck(ctx context.Context, name string) ([]HealthChec
 
 // runCheckScript executes /usr/local/bin/vee-check in the VM and returns stdout.
 // Prefers QGA (works without network routing); falls back to SSH port.
-func (m *Manager) runCheckScript(_ context.Context, cfg *VMConfig, state *VMState) (string, error) {
+func (m *Manager) runCheckScript(ctx context.Context, cfg *VMConfig, state *VMState) (string, error) {
 	if state.QGASocket != "" {
-		client, err := qemu.NewQGAClient(state.QGASocket, 5*time.Second)
+		client, err := qemu.NewQGAClient(ctx, state.QGASocket, 5*time.Second)
 		if err != nil {
 			return "", fmt.Errorf("connect QGA socket %s: %w", state.QGASocket, err)
 		}
@@ -1669,7 +1682,7 @@ func (m *Manager) runCheckScript(_ context.Context, cfg *VMConfig, state *VMStat
 			fmt.Sprintf("%s@127.0.0.1", user),
 			"/usr/local/bin/vee-check",
 		}
-		out, execErr := exec.Command("ssh", args...).Output()
+		out, execErr := exec.CommandContext(ctx, "ssh", args...).Output() //nolint:gosec // ssh binary is fixed; args are vee-controlled identity/port/user for the managed VM
 		if execErr != nil {
 			return "", fmt.Errorf("ssh exec: %w", execErr)
 		}

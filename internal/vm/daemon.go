@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/Benehiko/vee/internal/notify"
 	"github.com/Benehiko/vee/internal/shutdown"
-	"go.uber.org/zap"
 )
 
 const (
@@ -180,6 +181,7 @@ func (m *Manager) handleHostShutdown(ctx context.Context) {
 	defer cancel()
 	_ = ctx // outer ctx may already be cancelled by systemd; use a fresh one for stop work
 
+	//nolint:contextcheck // deliberately uses a fresh ctx: the inherited ctx is already cancelled by systemd during shutdown, so stop work must not inherit its cancellation
 	if err := m.StopAllRunning(stopCtx, daemonStopPerVMTimeout, ShutdownReasonHost); err != nil {
 		log.Warn("some VMs did not stop cleanly", zap.Error(err))
 		_ = notify.Send(

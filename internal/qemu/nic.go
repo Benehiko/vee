@@ -1,7 +1,7 @@
 package qemu
 
 import (
-	"crypto/sha1"
+	"crypto/sha1" //nolint:gosec // SHA-1 here derives a stable MAC from a VM name; not a security primitive. Changing it would alter MACs of existing VMs.
 	"fmt"
 	"strings"
 )
@@ -39,7 +39,7 @@ func NewNIC(mode NICMode, bridge, mac string, hostfwds ...string) *NIC {
 
 // DeterministicMAC generates a stable locally-administered MAC from a VM name.
 func DeterministicMAC(name string) string {
-	h := sha1.Sum([]byte(name))
+	h := sha1.Sum([]byte(name)) //nolint:gosec // SHA-1 derives a stable MAC from a VM name; not a security primitive.
 	// 52:54:00 is QEMU's conventional locally-administered prefix.
 	return fmt.Sprintf("52:54:%02x:%02x:%02x:%02x", h[0], h[1], h[2], h[3])
 }

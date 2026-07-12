@@ -79,6 +79,9 @@ func (c *Conn) Acquire(who, why string) (*Lock, error) {
 	if err := call.Store(&fd); err != nil {
 		return nil, fmt.Errorf("inhibit fd: %w", err)
 	}
+	if fd < 0 {
+		return nil, fmt.Errorf("inhibit fd: invalid negative descriptor %d", fd)
+	}
 	return &Lock{fd: os.NewFile(uintptr(fd), "logind-inhibit")}, nil
 }
 

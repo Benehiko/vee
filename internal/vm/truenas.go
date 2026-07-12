@@ -2,6 +2,7 @@ package vm
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,7 +20,7 @@ const (
 // the TrueNAS API to become reachable, prompts for username+password (once),
 // creates a named "vee" API key, persists everything to vm.yaml, and returns
 // the key and the admin username.
-func EnsureTrueNASAPIKey(cfg *VMConfig, ip, storagePath string, promptFn func(prompt string) (string, error)) (apiKey, adminUser string, err error) {
+func EnsureTrueNASAPIKey(ctx context.Context, cfg *VMConfig, ip, storagePath string, promptFn func(prompt string) (string, error)) (apiKey, adminUser string, err error) {
 	if cfg.TrueNASAPIKey != "" {
 		return cfg.TrueNASAPIKey, cfg.TrueNASUser, nil
 	}
@@ -27,7 +28,7 @@ func EnsureTrueNASAPIKey(cfg *VMConfig, ip, storagePath string, promptFn func(pr
 	client := &http.Client{Timeout: truenasAPITimeout}
 	base := "http://" + ip + "/api/v2.0"
 
-	if err := truenasWaitAPI(client, base, truenasBootTimeout); err != nil {
+	if err := truenasWaitAPI(ctx, client, base, truenasBootTimeout); err != nil {
 		return "", "", fmt.Errorf("waiting for TrueNAS API: %w", err)
 	}
 
@@ -42,7 +43,7 @@ func EnsureTrueNASAPIKey(cfg *VMConfig, ip, storagePath string, promptFn func(pr
 		return "", "", fmt.Errorf("read password: %w", err)
 	}
 
-	key, err := truenasCreateAPIKey(client, base, username, password)
+	key, err := truenasCreateAPIKey(ctx, client, base, username, password)
 	if err != nil {
 		return "", "", fmt.Errorf("create TrueNAS API key: %w", err)
 	}
@@ -56,10 +57,14 @@ func EnsureTrueNASAPIKey(cfg *VMConfig, ip, storagePath string, promptFn func(pr
 }
 
 // truenasWaitAPI polls GET /api/v2.0/system/info until it responds or timeout.
-func truenasWaitAPI(client *http.Client, base string, timeout time.Duration) error {
+func truenasWaitAPI(ctx context.Context, client *http.Client, base string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		resp, err := client.Get(base + "/system/info")
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/system/info", nil)
+		if err != nil {
+			return err
+		}
+		resp, err := client.Do(req)
 		if err == nil {
 			_ = resp.Body.Close()
 			if resp.StatusCode < 500 {
@@ -74,12 +79,12 @@ func truenasWaitAPI(client *http.Client, base string, timeout time.Duration) err
 // InjectVeeSSHKey adds pubKey to the given user's authorized SSH keys on a
 // TrueNAS SCALE instance reachable at ip, authenticated with apiKey.
 // The operation is idempotent — if the key is already present it does nothing.
-func InjectVeeSSHKey(ip, apiKey, username, pubKey string) error {
+func InjectVeeSSHKey(ctx context.Context, ip, apiKey, username, pubKey string) error {
 	client := &http.Client{Timeout: truenasAPITimeout}
 	base := "http://" + ip + "/api/v2.0"
 	auth := "Bearer " + apiKey
 
-	userID, currentKeys, err := truenasFindUser(client, base, auth, username)
+	userID, currentKeys, err := truenasFindUser(ctx, client, base, auth, username)
 	if err != nil {
 		return fmt.Errorf("truenas find user: %w", err)
 	}
@@ -95,10 +100,10 @@ func InjectVeeSSHKey(ip, apiKey, username, pubKey string) error {
 	}
 	merged += pubKey + "\n"
 
-	return truenasUpdateSSHKey(client, base, auth, userID, merged)
+	return truenasUpdateSSHKey(ctx, client, base, auth, userID, merged)
 }
 
-func truenasCreateAPIKey(client *http.Client, base, user, password string) (string, error) {
+func truenasCreateAPIKey(ctx context.Context, client *http.Client, base, user, password string) (string, error) {
 	payload, err := json.Marshal(map[string]any{
 		"name":     "vee",
 		"username": user,
@@ -106,7 +111,7 @@ func truenasCreateAPIKey(client *http.Client, base, user, password string) (stri
 	if err != nil {
 		return "", err
 	}
-	req, err := http.NewRequest("POST", base+"/api_key", bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/api_key", bytes.NewReader(payload))
 	if err != nil {
 		return "", err
 	}
@@ -136,8 +141,8 @@ func truenasCreateAPIKey(client *http.Client, base, user, password string) (stri
 	return result.Key, nil
 }
 
-func truenasFindUser(client *http.Client, base, auth, username string) (int, string, error) {
-	req, err := http.NewRequest("GET", base+"/user?username="+username, nil)
+func truenasFindUser(ctx context.Context, client *http.Client, base, auth, username string) (int, string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/user?username="+username, nil)
 	if err != nil {
 		return 0, "", err
 	}
@@ -170,12 +175,12 @@ func truenasFindUser(client *http.Client, base, auth, username string) (int, str
 	return 0, "", fmt.Errorf("user %q not found", username)
 }
 
-func truenasUpdateSSHKey(client *http.Client, base, auth string, userID int, sshpubkey string) error {
+func truenasUpdateSSHKey(ctx context.Context, client *http.Client, base, auth string, userID int, sshpubkey string) error {
 	payload, err := json.Marshal(map[string]string{"sshpubkey": sshpubkey})
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequest("PUT", fmt.Sprintf("%s/user/id/%d", base, userID), bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, fmt.Sprintf("%s/user/id/%d", base, userID), bytes.NewReader(payload))
 	if err != nil {
 		return err
 	}

@@ -16,7 +16,7 @@ type Poller struct {
 
 // NewPoller dials the QMP socket and starts polling every interval.
 func NewPoller(ctx context.Context, socketPath string, interval time.Duration) (*Poller, error) {
-	client, err := qemu.NewQMPClient(socketPath, 5*time.Second)
+	client, err := qemu.NewQMPClient(ctx, socketPath, 5*time.Second)
 	if err != nil {
 		return nil, err
 	}

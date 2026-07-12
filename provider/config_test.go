@@ -67,13 +67,13 @@ func TestLoadConfigFromYAML(t *testing.T) {
 	t.Setenv("HOME", tmp)
 
 	veeDir := filepath.Join(tmp, ".vee")
-	if err := os.MkdirAll(veeDir, 0o755); err != nil {
+	if err := os.MkdirAll(veeDir, 0o750); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 	yaml := `default_memory: 8G
 default_cpus: 4
 `
-	if err := os.WriteFile(filepath.Join(veeDir, "config.yaml"), []byte(yaml), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(veeDir, "config.yaml"), []byte(yaml), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 

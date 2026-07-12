@@ -2,6 +2,7 @@ package qemu
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -52,12 +53,15 @@ type ShutdownEventData struct {
 }
 
 // NewQMPClient dials the QMP Unix socket, retrying for up to timeout.
-func NewQMPClient(socketPath string, timeout time.Duration) (*QMPClient, error) {
+func NewQMPClient(ctx context.Context, socketPath string, timeout time.Duration) (*QMPClient, error) {
 	deadline := time.Now().Add(timeout)
+	ctx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+	var dialer net.Dialer
 	var conn net.Conn
 	var err error
 	for time.Now().Before(deadline) {
-		conn, err = net.Dial("unix", socketPath)
+		conn, err = dialer.DialContext(ctx, "unix", socketPath)
 		if err == nil {
 			break
 		}
@@ -150,8 +154,8 @@ func (c *QMPClient) Close() error {
 // QMPClient so command responses and events never interleave on the same
 // scanner. Caller must call Close on the returned QMPClient when done; the
 // connection is also closed automatically when QEMU exits.
-func NewQMPEventListener(socketPath string, timeout time.Duration) (*QMPClient, error) {
-	return NewQMPClient(socketPath, timeout)
+func NewQMPEventListener(ctx context.Context, socketPath string, timeout time.Duration) (*QMPClient, error) {
+	return NewQMPClient(ctx, socketPath, timeout)
 }
 
 // ReadEvent blocks until the next QMP event arrives on the connection.

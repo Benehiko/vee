@@ -11,9 +11,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	"go.uber.org/zap"
+
 	"github.com/Benehiko/vee/internal/utils"
 	"github.com/Benehiko/vee/provider"
-	"go.uber.org/zap"
 )
 
 // AlpineVersion is a minor version string like "3.21".
@@ -167,11 +168,12 @@ func (a *AlpineImage) Download(ctx context.Context) error {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if err := os.MkdirAll(a.basePath, 0o755); err != nil {
+	if err := os.MkdirAll(a.basePath, 0o750); err != nil {
 		return err
 	}
 
 	destPath := filepath.Join(a.basePath, target)
+	//nolint:gosec // destPath is basePath (internal) joined with a target derived from the signed Alpine index, not user input.
 	f, err := os.Create(destPath)
 	if err != nil {
 		return err
@@ -201,6 +203,7 @@ func (a *AlpineImage) Download(ctx context.Context) error {
 
 // sha512File returns the lowercase hex SHA512 digest of the file at path.
 func sha512File(path string) (string, error) {
+	//nolint:gosec // path is an internally constructed image cache path, not user-controlled input.
 	f, err := os.Open(path)
 	if err != nil {
 		return "", err

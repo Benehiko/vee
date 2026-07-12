@@ -281,7 +281,7 @@ func (w *WindowsImage) buildISOInContainer(ctx context.Context, esdURLs map[stri
 		return err
 	}
 
-	if err := os.MkdirAll(w.basePath, 0o755); err != nil {
+	if err := os.MkdirAll(w.basePath, 0o750); err != nil {
 		return fmt.Errorf("create iso cache dir: %w", err)
 	}
 
@@ -409,6 +409,7 @@ xorriso -as mkisofs \
 		"sh", "-c", buildScript,
 	}
 
+	//nolint:gosec // runtime is a container CLI resolved via LookPath; args are internally built to run the ISO build in a container. This is core VM-manager functionality.
 	cmd := exec.CommandContext(ctx, runtime, args...)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr

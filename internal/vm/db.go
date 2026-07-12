@@ -3,6 +3,7 @@ package vm
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -13,6 +14,7 @@ func dbSaveConfig(db *sql.DB, cfg *VMConfig) error {
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
 	}
+	//nolint:noctx // local SQLite; these helpers have no ctx and threading one requires an API change across cmd/ callers
 	_, err = db.Exec(
 		`INSERT INTO vms (name, template, config_json, created_at)
 		 VALUES (?, ?, ?, ?)
@@ -25,8 +27,9 @@ func dbSaveConfig(db *sql.DB, cfg *VMConfig) error {
 // dbLoadConfig reads a VMConfig from the vms table.
 func dbLoadConfig(db *sql.DB, name string) (*VMConfig, error) {
 	var raw string
+	//nolint:noctx // local SQLite; these helpers have no ctx and threading one requires an API change across cmd/ callers
 	err := db.QueryRow(`SELECT config_json FROM vms WHERE name = ?`, name).Scan(&raw)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("VM %q not found", name)
 	}
 	if err != nil {
@@ -49,6 +52,7 @@ func dbSaveState(db *sql.DB, name string, state *VMState) error {
 	if state.Running {
 		running = 1
 	}
+	//nolint:noctx // local SQLite; these helpers have no ctx and threading one requires an API change across cmd/ callers
 	_, err = db.Exec(
 		`INSERT INTO vm_states (vm_name, running, pid, ssh_port, state_json)
 		 VALUES (?, ?, ?, ?, ?)
@@ -63,8 +67,9 @@ func dbSaveState(db *sql.DB, name string, state *VMState) error {
 // dbLoadState reads a VMState from vm_states.
 func dbLoadState(db *sql.DB, name string) (*VMState, error) {
 	var raw string
+	//nolint:noctx // local SQLite; these helpers have no ctx and threading one requires an API change across cmd/ callers
 	err := db.QueryRow(`SELECT state_json FROM vm_states WHERE vm_name = ?`, name).Scan(&raw)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return &VMState{Running: false}, nil
 	}
 	if err != nil {
@@ -79,6 +84,7 @@ func dbLoadState(db *sql.DB, name string) (*VMState, error) {
 
 // dbListAll returns all VMConfigs from the vms table.
 func dbListAll(db *sql.DB) ([]*VMConfig, error) {
+	//nolint:noctx // local SQLite; these helpers have no ctx and threading one requires an API change across cmd/ callers
 	rows, err := db.Query(`SELECT config_json FROM vms ORDER BY created_at`)
 	if err != nil {
 		return nil, err
@@ -102,6 +108,7 @@ func dbListAll(db *sql.DB) ([]*VMConfig, error) {
 
 // dbDeleteVM removes a VM and its state from the DB (cascade handles vm_states).
 func dbDeleteVM(db *sql.DB, name string) error {
+	//nolint:noctx // local SQLite; these helpers have no ctx and threading one requires an API change across cmd/ callers
 	_, err := db.Exec(`DELETE FROM vms WHERE name = ?`, name)
 	return err
 }
@@ -109,6 +116,7 @@ func dbDeleteVM(db *sql.DB, name string) error {
 // dbEnsureVM inserts a stub vms row if one doesn't exist yet (needed before
 // saving state for a newly-created VM before its full config is written).
 func dbEnsureVM(db *sql.DB, name, template string) error {
+	//nolint:noctx // local SQLite; these helpers have no ctx and threading one requires an API change across cmd/ callers
 	_, err := db.Exec(
 		`INSERT OR IGNORE INTO vms (name, template, config_json, created_at)
 		 VALUES (?, ?, '{}', ?)`,

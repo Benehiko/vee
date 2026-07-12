@@ -6,8 +6,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/Benehiko/vee/provider"
 	"github.com/schollz/progressbar/v3"
+
+	"github.com/Benehiko/vee/provider"
 )
 
 // hrefsIn extracts the values of every href="..." attribute in an HTML

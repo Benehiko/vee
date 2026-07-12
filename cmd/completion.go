@@ -1,9 +1,10 @@
 package cmd
 
 import (
+	"github.com/spf13/cobra"
+
 	"github.com/Benehiko/vee/internal/vm"
 	"github.com/Benehiko/vee/provider"
-	"github.com/spf13/cobra"
 )
 
 func completeVMNames(_ *cobra.Command, args []string, _ string) ([]string, cobra.ShellCompDirective) {

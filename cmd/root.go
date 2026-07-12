@@ -3,9 +3,10 @@ package cmd
 import (
 	"os"
 
+	"github.com/spf13/cobra"
+
 	"github.com/Benehiko/vee/internal/tui"
 	"github.com/Benehiko/vee/provider"
-	"github.com/spf13/cobra"
 )
 
 var (

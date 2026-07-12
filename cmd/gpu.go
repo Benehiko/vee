@@ -6,8 +6,9 @@ import (
 	"sort"
 	"text/tabwriter"
 
-	"github.com/Benehiko/vee/internal/gpu"
 	"github.com/spf13/cobra"
+
+	"github.com/Benehiko/vee/internal/gpu"
 )
 
 const (

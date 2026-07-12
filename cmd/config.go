@@ -1,8 +1,9 @@
 package cmd
 
 import (
-	"github.com/Benehiko/vee/internal/tui"
 	"github.com/spf13/cobra"
+
+	"github.com/Benehiko/vee/internal/tui"
 )
 
 var configCmd = &cobra.Command{

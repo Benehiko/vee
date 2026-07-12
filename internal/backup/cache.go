@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -14,7 +15,7 @@ const cacheTTL = time.Hour
 func CacheGet(db *sql.DB, vmName string) ([]*DirEntry, error) {
 	var pathsJSON string
 	var cachedAt time.Time
-	err := db.QueryRow(
+	err := db.QueryRowContext(context.Background(),
 		`SELECT paths_json, cached_at FROM dir_cache WHERE vm_name = ?`, vmName,
 	).Scan(&pathsJSON, &cachedAt)
 	if err == sql.ErrNoRows {
@@ -43,7 +44,7 @@ func CacheSet(db *sql.DB, vmName string, entries []*DirEntry) error {
 	if err != nil {
 		return fmt.Errorf("cache encode: %w", err)
 	}
-	_, err = db.Exec(
+	_, err = db.ExecContext(context.Background(),
 		`INSERT OR REPLACE INTO dir_cache (vm_name, paths_json, cached_at) VALUES (?, ?, ?)`,
 		vmName, string(j), time.Now(),
 	)
@@ -53,7 +54,7 @@ func CacheSet(db *sql.DB, vmName string, entries []*DirEntry) error {
 // CacheAge returns how old the cache entry is. Returns -1 if no entry exists.
 func CacheAge(db *sql.DB, vmName string) (time.Duration, error) {
 	var cachedAt time.Time
-	err := db.QueryRow(`SELECT cached_at FROM dir_cache WHERE vm_name = ?`, vmName).Scan(&cachedAt)
+	err := db.QueryRowContext(context.Background(), `SELECT cached_at FROM dir_cache WHERE vm_name = ?`, vmName).Scan(&cachedAt)
 	if err == sql.ErrNoRows {
 		return -1, nil
 	}

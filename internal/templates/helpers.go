@@ -1,9 +1,10 @@
 package templates
 
-import "crypto/sha1"
+import "hash/fnv"
 
 // deterministicSSHPort maps a VM name to a stable host port in [2200, 2299].
 func deterministicSSHPort(name string) int {
-	h := sha1.Sum([]byte(name))
-	return 2200 + int(h[0])%100
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(name))
+	return 2200 + int(h.Sum32()%100)
 }

@@ -1,6 +1,7 @@
 package qemu_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -45,7 +46,7 @@ func TestQMPGreetingAndCapabilities(t *testing.T) {
 	})
 	defer cleanup()
 
-	client, err := qemu.NewQMPClient(sockPath, 2*time.Second)
+	client, err := qemu.NewQMPClient(context.Background(), sockPath, 2*time.Second)
 	if err != nil {
 		t.Fatalf("NewQMPClient: %v", err)
 	}
@@ -68,7 +69,7 @@ func TestQMPCommandSerialization(t *testing.T) {
 	})
 	defer cleanup()
 
-	client, err := qemu.NewQMPClient(sockPath, 2*time.Second)
+	client, err := qemu.NewQMPClient(context.Background(), sockPath, 2*time.Second)
 	if err != nil {
 		t.Fatalf("NewQMPClient: %v", err)
 	}
@@ -91,7 +92,7 @@ func TestQMPQueryStatus(t *testing.T) {
 	})
 	defer cleanup()
 
-	client, err := qemu.NewQMPClient(sockPath, 2*time.Second)
+	client, err := qemu.NewQMPClient(context.Background(), sockPath, 2*time.Second)
 	if err != nil {
 		t.Fatalf("NewQMPClient: %v", err)
 	}
@@ -118,7 +119,7 @@ func TestQMPErrorResponse(t *testing.T) {
 	})
 	defer cleanup()
 
-	client, err := qemu.NewQMPClient(sockPath, 2*time.Second)
+	client, err := qemu.NewQMPClient(context.Background(), sockPath, 2*time.Second)
 	if err != nil {
 		t.Fatalf("NewQMPClient: %v", err)
 	}
@@ -134,7 +135,7 @@ func TestQMPErrorResponse(t *testing.T) {
 }
 
 func TestQMPDialTimeout(t *testing.T) {
-	_, err := qemu.NewQMPClient("/nonexistent/qmp-timeout.sock", 100*time.Millisecond)
+	_, err := qemu.NewQMPClient(context.Background(), "/nonexistent/qmp-timeout.sock", 100*time.Millisecond)
 	if err == nil {
 		t.Fatal("expected dial error, got nil")
 	}
@@ -160,7 +161,7 @@ func TestQMPQueryRaw(t *testing.T) {
 	})
 	defer cleanup()
 
-	client, err := qemu.NewQMPClient(sockPath, 2*time.Second)
+	client, err := qemu.NewQMPClient(context.Background(), sockPath, 2*time.Second)
 	if err != nil {
 		t.Fatalf("NewQMPClient: %v", err)
 	}

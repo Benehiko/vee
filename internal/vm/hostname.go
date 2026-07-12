@@ -22,6 +22,7 @@ func RegisterHostname(hostname, ip string) error {
 	// -n: never prompt for password. If sudo would block on a password we want
 	// a fast error so the caller can log+continue, not a 12-minute hang under
 	// non-interactive runners (e2e tests, headless daemons).
+	//nolint:noctx // RegisterHostname has no ctx; adding one changes its exported signature and all cmd/ callers
 	cmd := exec.Command("sudo", "-n", "tee", "-a", hostsFile)
 	cmd.Stdin = strings.NewReader(entry)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -56,6 +57,7 @@ func removeHostsEntry(hostname string) error {
 	}
 
 	content := strings.Join(kept, "\n") + "\n"
+	//nolint:noctx // removeHostsEntry has no ctx; adding one changes exported Register/UnregisterHostname signatures and all cmd/ callers
 	cmd := exec.Command("sudo", "-n", "tee", hostsFile)
 	cmd.Stdin = strings.NewReader(content)
 	if out, err := cmd.CombinedOutput(); err != nil {

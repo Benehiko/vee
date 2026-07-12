@@ -15,7 +15,7 @@ import (
 // ovmfVarsPath – path to an already-populated OVMF_VARS.fd
 // pciAddr     – GPU PCI address for VFIO passthrough, e.g. "08:00.0"
 // virtiofsMountDir – host directory to share as virtiofs tag "Games" (empty = skip)
-// mac         – deterministic MAC address for the bridge NIC
+// mac         – deterministic MAC address for the bridge NIC.
 func NewPassthroughConfig(p provider.Provider, name, nvmeDev, ovmfVarsPath, pciAddr, virtiofsMountDir, mac string) *vm.VMConfig {
 	conf := p.Config()
 

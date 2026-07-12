@@ -3,8 +3,9 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/Benehiko/vee/internal/mirror"
 	"github.com/spf13/cobra"
+
+	"github.com/Benehiko/vee/internal/mirror"
 )
 
 var mirrorCmd = &cobra.Command{

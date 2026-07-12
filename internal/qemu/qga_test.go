@@ -1,6 +1,7 @@
 package qemu_test
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"net"
@@ -28,7 +29,7 @@ func TestQGADial(t *testing.T) {
 	})
 	defer cleanup()
 
-	client, err := qemu.NewQGAClient(sockPath, 2*time.Second)
+	client, err := qemu.NewQGAClient(context.Background(), sockPath, 2*time.Second)
 	if err != nil {
 		t.Fatalf("NewQGAClient: %v", err)
 	}
@@ -47,7 +48,7 @@ func TestQGAGuestPing(t *testing.T) {
 	})
 	defer cleanup()
 
-	client, err := qemu.NewQGAClient(sockPath, 2*time.Second)
+	client, err := qemu.NewQGAClient(context.Background(), sockPath, 2*time.Second)
 	if err != nil {
 		t.Fatalf("NewQGAClient: %v", err)
 	}
@@ -73,7 +74,7 @@ func TestQGAGuestExec(t *testing.T) {
 	})
 	defer cleanup()
 
-	client, err := qemu.NewQGAClient(sockPath, 2*time.Second)
+	client, err := qemu.NewQGAClient(context.Background(), sockPath, 2*time.Second)
 	if err != nil {
 		t.Fatalf("NewQGAClient: %v", err)
 	}
@@ -98,7 +99,7 @@ func TestQGAGuestExecStatus(t *testing.T) {
 	})
 	defer cleanup()
 
-	client, err := qemu.NewQGAClient(sockPath, 2*time.Second)
+	client, err := qemu.NewQGAClient(context.Background(), sockPath, 2*time.Second)
 	if err != nil {
 		t.Fatalf("NewQGAClient: %v", err)
 	}
@@ -133,7 +134,7 @@ func TestQGARunCommand(t *testing.T) {
 	})
 	defer cleanup()
 
-	client, err := qemu.NewQGAClient(sockPath, 2*time.Second)
+	client, err := qemu.NewQGAClient(context.Background(), sockPath, 2*time.Second)
 	if err != nil {
 		t.Fatalf("NewQGAClient: %v", err)
 	}
@@ -165,7 +166,7 @@ func TestQGAGuestNetworkGetInterfaces(t *testing.T) {
 	})
 	defer cleanup()
 
-	client, err := qemu.NewQGAClient(sockPath, 2*time.Second)
+	client, err := qemu.NewQGAClient(context.Background(), sockPath, 2*time.Second)
 	if err != nil {
 		t.Fatalf("NewQGAClient: %v", err)
 	}
@@ -187,7 +188,7 @@ func TestQGAGuestNetworkGetInterfaces(t *testing.T) {
 }
 
 func TestQGADialTimeout(t *testing.T) {
-	_, err := qemu.NewQGAClient("/nonexistent/qga-timeout.sock", 100*time.Millisecond)
+	_, err := qemu.NewQGAClient(context.Background(), "/nonexistent/qga-timeout.sock", 100*time.Millisecond)
 	if err == nil {
 		t.Fatal("expected dial error, got nil")
 	}

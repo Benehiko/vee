@@ -118,7 +118,7 @@ func WakeDevice(addr string) error {
 	pciAddr := normalizePCIAddr(addr)
 	controlPath := filepath.Join("/sys/bus/pci/devices", pciAddr, "power", "control")
 
-	if err := os.WriteFile(controlPath, []byte("on"), 0o644); err != nil {
+	if err := os.WriteFile(controlPath, []byte("on"), 0o600); err != nil {
 		return fmt.Errorf("write power/control for %s: %w", pciAddr, err)
 	}
 

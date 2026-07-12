@@ -1,11 +1,13 @@
 package vm
 
 import (
+	"context"
 	"encoding/json"
 	"time"
 
-	"github.com/Benehiko/vee/internal/qemu"
 	"go.uber.org/zap"
+
+	"github.com/Benehiko/vee/internal/qemu"
 )
 
 // shutdownWatcherDialTimeout bounds how long the watcher will wait for the
@@ -23,13 +25,13 @@ const shutdownWatcherDialTimeout = 5 * time.Second
 //   - it observes a SHUTDOWN event and updates state, or
 //   - the QMP connection closes (QEMU exited before we got a SHUTDOWN), or
 //   - the QMP dial fails outright.
-func (m *Manager) watchShutdownEvents(name, qmpSocket string) {
+func (m *Manager) watchShutdownEvents(ctx context.Context, name, qmpSocket string) {
 	log := m.provider.Logger()
 	if qmpSocket == "" {
 		return
 	}
 
-	client, err := qemu.NewQMPEventListener(qmpSocket, shutdownWatcherDialTimeout)
+	client, err := qemu.NewQMPEventListener(ctx, qmpSocket, shutdownWatcherDialTimeout)
 	if err != nil {
 		log.Debug("shutdown watcher: QMP dial failed",
 			zap.String("vm", name), zap.Error(err))

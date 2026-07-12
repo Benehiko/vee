@@ -27,10 +27,10 @@ func renderConfig(p *Paths) string {
 
 // WriteConfig writes the pacoloco YAML config to p.ConfigPath.
 func WriteConfig(p *Paths) error {
-	if err := os.MkdirAll(p.ConfigDir, 0o755); err != nil {
+	if err := os.MkdirAll(p.ConfigDir, 0o750); err != nil {
 		return fmt.Errorf("mkdir %s: %w", p.ConfigDir, err)
 	}
-	return os.WriteFile(p.ConfigPath, []byte(renderConfig(p)), 0o644)
+	return os.WriteFile(p.ConfigPath, []byte(renderConfig(p)), 0o600)
 }
 
 // renderUnit produces the systemd --user unit text.
@@ -53,8 +53,8 @@ WantedBy=default.target
 
 // WriteUnit writes the systemd --user unit file to p.UnitPath.
 func WriteUnit(p *Paths) error {
-	if err := os.MkdirAll(p.UnitDir, 0o755); err != nil {
+	if err := os.MkdirAll(p.UnitDir, 0o750); err != nil {
 		return fmt.Errorf("mkdir %s: %w", p.UnitDir, err)
 	}
-	return os.WriteFile(p.UnitPath, []byte(renderUnit(p)), 0o644)
+	return os.WriteFile(p.UnitPath, []byte(renderUnit(p)), 0o600)
 }

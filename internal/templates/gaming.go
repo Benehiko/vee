@@ -279,8 +279,7 @@ func archGamingSetup(user, password string, sshKeys []string, hostname string, o
 	if !opts.Passthrough {
 		gpuPkgs += " vulkan-virtio lib32-vulkan-mesa-layers"
 	}
-	switch opts.GPUVendor {
-	case GPUVendorNvidia:
+	if opts.GPUVendor == GPUVendorNvidia {
 		gpuPkgs = "nvidia nvidia-utils lib32-nvidia-utils vulkan-icd-loader lib32-vulkan-icd-loader vulkan-tools"
 	}
 

@@ -315,12 +315,13 @@ func (m configModel) View() string {
 		sb.WriteString("  " + m.nameInput.View() + "\n")
 	case stepGPU:
 		sb.WriteString(styleWizLabel.Render("GPU (VFIO)") + "\n\n")
-		if m.gpuErr != "" {
+		switch {
+		case m.gpuErr != "":
 			sb.WriteString(styleWizErr.Render("  "+m.gpuErr) + "\n")
 			sb.WriteString(styleWizDim.Render("  (no GPU selected — edit pci_addr in vm.yaml later)") + "\n")
-		} else if len(m.gpuDevices) == 0 {
+		case len(m.gpuDevices) == 0:
 			sb.WriteString(styleWizDim.Render("  No GPUs found in IOMMU groups") + "\n")
-		} else {
+		default:
 			for i, d := range m.gpuDevices {
 				label := gpu.GPULabel(d)
 				driver := d.Driver
@@ -338,11 +339,12 @@ func (m configModel) View() string {
 		}
 	case stepNVMe:
 		sb.WriteString(styleWizLabel.Render("NVMe device") + "\n\n")
-		if m.nvmeErr != "" {
+		switch {
+		case m.nvmeErr != "":
 			sb.WriteString(styleWizErr.Render("  "+m.nvmeErr) + "\n")
-		} else if len(m.nvmeDevices) == 0 {
+		case len(m.nvmeDevices) == 0:
 			sb.WriteString(styleWizDim.Render("  No NVMe devices found") + "\n")
-		} else {
+		default:
 			for i, d := range m.nvmeDevices {
 				label := d.Label()
 				if i == m.nvmeIdx {

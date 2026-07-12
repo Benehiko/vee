@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -14,8 +15,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Benehiko/vee/internal/vm"
 	"github.com/spf13/cobra"
+
+	"github.com/Benehiko/vee/internal/vm"
 )
 
 var tunnelSerialRaw bool
@@ -111,7 +113,7 @@ func printServiceMenu(cfg *vm.VMConfig, services []resolvedService) error {
 // ANSI escape codes are stripped by default; pass --raw to disable.
 func tunnelSerial(cmd *cobra.Command, name string) error {
 	logPath := filepath.Join(prov.Config().StoragePath, name, "serial.log")
-	f, err := os.Open(logPath)
+	f, err := os.Open(logPath) //nolint:gosec // logPath is derived from vee-managed storage path and VM name.
 	if err != nil {
 		if os.IsNotExist(err) {
 			return fmt.Errorf("no serial log for VM %q (has it been started?)", name)
@@ -225,7 +227,7 @@ func connectService(cmd *cobra.Command, cfg *vm.VMConfig, state *vm.VMState, s r
 	// Otherwise open a tunnel.
 	switch {
 	case cfg.NIC.Mode == "bridge" || (cfg.NIC.Mode == "" && state.SSHPort == 0):
-		vmIP, resolveErr := tunnelResolveIP(cfg, state)
+		vmIP, resolveErr := tunnelResolveIP(cmd.Context(), cfg, state)
 		if resolveErr != nil {
 			return resolveErr
 		}
@@ -233,7 +235,7 @@ func connectService(cmd *cobra.Command, cfg *vm.VMConfig, state *vm.VMState, s r
 		fmt.Printf("tunnelling localhost:%d → %s:%d\n", localPort, cfg.Name, s.Port)
 		fmt.Println(url)
 		maybeBrowser(s, url)
-		return runTCPProxy(cfg.Name, localPort, vmIP, s.Port)
+		return runTCPProxy(cmd.Context(), cfg.Name, localPort, vmIP, s.Port)
 
 	case state.SSHPort > 0:
 		url := localServiceURL(s, localPort)
@@ -248,7 +250,7 @@ func connectService(cmd *cobra.Command, cfg *vm.VMConfig, state *vm.VMState, s r
 }
 
 // findHostFwd returns the host port for a forwarded guest port, or 0 if none.
-// HostFwds format: "tcp:127.0.0.1:<hostPort>-:<guestPort>"
+// HostFwds format: "tcp:127.0.0.1:<hostPort>-:<guestPort>".
 func findHostFwd(fwds []string, guestPort int) int {
 	guestStr := strconv.Itoa(guestPort)
 	for _, fwd := range fwds {
@@ -311,6 +313,7 @@ func maybeBrowser(s resolvedService, url string) {
 	}
 	for _, bin := range []string{"xdg-open", "open"} {
 		if path, err := exec.LookPath(bin); err == nil {
+			//nolint:gosec,noctx // path from LookPath; url is vee-constructed; fire-and-forget browser launch, no ctx.
 			_ = exec.Command(path, url).Start()
 			return
 		}
@@ -337,6 +340,7 @@ func launchSPICEClient(url string) bool {
 	for _, c := range candidates {
 		if path, err := exec.LookPath(c.bin); err == nil {
 			fmt.Printf("launching %s\n", c.bin)
+			//nolint:gosec,noctx // path from LookPath; args from vee-constructed spice:// URL; fire-and-forget launch, no ctx.
 			_ = exec.Command(path, c.args(url)...).Start()
 			return true
 		}
@@ -344,22 +348,23 @@ func launchSPICEClient(url string) bool {
 	return false
 }
 
-func tunnelResolveIP(cfg *vm.VMConfig, state *vm.VMState) (string, error) {
+func tunnelResolveIP(ctx context.Context, cfg *vm.VMConfig, state *vm.VMState) (string, error) {
 	if cfg.NIC.MAC != "" {
 		if ip, err := vm.ResolveIPFromMAC(cfg.NIC.MAC); err == nil {
 			return ip, nil
 		}
 	}
 	if state.QGASocket != "" {
-		return vm.ResolveIPFromQGA(state.QGASocket)
+		return vm.ResolveIPFromQGA(ctx, state.QGASocket)
 	}
 	return "", fmt.Errorf("cannot resolve IP: no MAC in ARP table and no guest agent socket")
 }
 
 // runTCPProxy listens on localPort and proxies connections to vmIP:remotePort.
 // Blocks until Ctrl+C.
-func runTCPProxy(vmName string, localPort int, vmIP string, remotePort int) error {
-	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", localPort))
+func runTCPProxy(ctx context.Context, vmName string, localPort int, vmIP string, remotePort int) error {
+	var lc net.ListenConfig
+	ln, err := lc.Listen(ctx, "tcp", fmt.Sprintf("127.0.0.1:%d", localPort))
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
@@ -377,15 +382,17 @@ func runTCPProxy(vmName string, localPort int, vmIP string, remotePort int) erro
 	for {
 		conn, acceptErr := ln.Accept()
 		if acceptErr != nil {
+			//nolint:nilerr // Accept fails when the listener is closed on Ctrl+C; treat as clean shutdown.
 			return nil
 		}
-		go proxyConn(conn, target)
+		go proxyConn(ctx, conn, target)
 	}
 }
 
-func proxyConn(local net.Conn, remote string) {
+func proxyConn(ctx context.Context, local net.Conn, remote string) {
 	defer func() { _ = local.Close() }()
-	rem, err := net.Dial("tcp", remote)
+	var d net.Dialer
+	rem, err := d.DialContext(ctx, "tcp", remote)
 	if err != nil {
 		return
 	}
@@ -397,7 +404,7 @@ func proxyConn(local net.Conn, remote string) {
 }
 
 // runSSHTunnel opens an ssh -L tunnel for user-mode VMs.
-func runSSHTunnel(vmName string, localPort int, sshHost string, sshPort int, remotePort int, cfg *vm.VMConfig) error {
+func runSSHTunnel(vmName string, localPort int, sshHost string, sshPort, remotePort int, cfg *vm.VMConfig) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("home dir: %w", err)
@@ -435,6 +442,7 @@ func runSSHTunnel(vmName string, localPort int, sshHost string, sshPort int, rem
 	if err != nil {
 		return fmt.Errorf("ssh not found: %w", err)
 	}
+	//nolint:gosec,noctx // sshBin from LookPath; args from vetted VM config; ssh -fN backgrounds itself, no ctx here.
 	tunnelSSH := exec.Command(sshBin, sshArgs...)
 	tunnelSSH.Stdout = os.Stdout
 	tunnelSSH.Stderr = os.Stderr
@@ -449,6 +457,7 @@ func runSSHTunnel(vmName string, localPort int, sshHost string, sshPort int, rem
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 	fmt.Println("\nclosing tunnel")
+	//nolint:gosec,noctx // sshBin from LookPath; closes the previously-opened SSH control socket, no ctx here.
 	_ = exec.Command(sshBin, "-S", controlPath, "-O", "exit", dest).Run()
 	return nil
 }

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -43,13 +44,15 @@ func (d *Dashboard) Poll(ctx context.Context, interval time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			d.refresh()
+			d.refresh(ctx)
 		}
 	}
 }
 
-func (d *Dashboard) refresh() {
-	entries, err := d.mgr.List()
+func (d *Dashboard) refresh(ctx context.Context) {
+	// vm.Manager.List does not yet accept a context; ctx is threaded here so the
+	// poll loop propagates cancellation intent once List becomes context-aware.
+	entries, err := d.mgr.List() //nolint:contextcheck // vm.Manager.List has no context parameter in this package; cannot propagate ctx to the leaf
 	if err != nil {
 		return
 	}
@@ -64,7 +67,7 @@ func (d *Dashboard) refresh() {
 			PID:          e.State.PID,
 		}
 		if e.State.Running && e.State.QMPSocket != "" {
-			client, err := qemu.NewQMPClient(e.State.QMPSocket, 2*time.Second)
+			client, err := qemu.NewQMPClient(ctx, e.State.QMPSocket, 2*time.Second)
 			if err == nil {
 				if raw, err := client.QueryRaw(); err == nil {
 					vs.Stats = monitor.Stats{
@@ -100,12 +103,16 @@ func (d *Dashboard) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // Listen starts the HTTP server on addr, blocking until ctx is cancelled.
 func (d *Dashboard) Listen(ctx context.Context, addr string) error {
-	srv := &http.Server{Addr: addr, Handler: d}
-	go func() {
+	srv := &http.Server{Addr: addr, Handler: d, ReadHeaderTimeout: 10 * time.Second}
+	go func() { //nolint:gosec // G118: parent ctx is already cancelled; graceful shutdown needs a fresh deadline, not the request-scoped ctx
 		<-ctx.Done()
-		_ = srv.Shutdown(context.Background())
+		// ctx is already cancelled here; graceful shutdown needs its own timeout
+		// budget derived from a fresh root context to drain in-flight requests.
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutdownCtx) //nolint:contextcheck // parent ctx is already cancelled; shutdown requires a fresh deadline to drain in-flight requests
 	}()
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil

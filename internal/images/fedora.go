@@ -9,10 +9,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/Benehiko/vee/internal/utils"
-	"github.com/Benehiko/vee/provider"
 	"github.com/codingsince1985/checksum"
 	"go.uber.org/zap"
+
+	"github.com/Benehiko/vee/internal/utils"
+	"github.com/Benehiko/vee/provider"
 )
 
 const (
@@ -188,7 +189,7 @@ func (fi *FedoraImage) Download(ctx context.Context) error {
 		return fmt.Errorf("fedora: fetch ISO %s: HTTP %d", dirURL+isoName, resp.StatusCode)
 	}
 
-	if err := os.MkdirAll(fi.basePath, 0o755); err != nil {
+	if err := os.MkdirAll(fi.basePath, 0o750); err != nil {
 		return err
 	}
 

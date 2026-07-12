@@ -41,11 +41,9 @@ func LookupDeviceName(vendor, device string) string {
 				name := strings.TrimSpace(line[4:])
 				vendorName = name
 				inVendor = true
-			} else {
-				if inVendor {
-					// Past our vendor block — stop.
-					break
-				}
+			} else if inVendor {
+				// Past our vendor block — stop.
+				break
 			}
 			continue
 		}

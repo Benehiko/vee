@@ -9,10 +9,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/Benehiko/vee/internal/utils"
-	"github.com/Benehiko/vee/provider"
 	"github.com/codingsince1985/checksum"
 	"go.uber.org/zap"
+
+	"github.com/Benehiko/vee/internal/utils"
+	"github.com/Benehiko/vee/provider"
 )
 
 const (
@@ -132,7 +133,7 @@ func (a *ArchImage) Download(ctx context.Context) error {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if err := os.MkdirAll(a.basePath, 0o755); err != nil {
+	if err := os.MkdirAll(a.basePath, 0o750); err != nil {
 		return err
 	}
 

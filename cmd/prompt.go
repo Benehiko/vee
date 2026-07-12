@@ -6,12 +6,13 @@ import (
 	"os"
 	"strings"
 
-	"github.com/Benehiko/vee/internal/templates"
-	"github.com/Benehiko/vee/internal/tui"
-	"github.com/Benehiko/vee/internal/vpn"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/Benehiko/vee/internal/templates"
+	"github.com/Benehiko/vee/internal/tui"
+	"github.com/Benehiko/vee/internal/vpn"
 )
 
 var ghostStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
@@ -28,9 +29,8 @@ type textInputModel struct {
 func (m *textInputModel) Init() tea.Cmd { return textinput.Blink }
 
 func (m *textInputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.Type {
+	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		switch keyMsg.Type {
 		case tea.KeyEnter:
 			return m, tea.Quit
 		case tea.KeyCtrlC, tea.KeyEsc:
@@ -70,9 +70,7 @@ func runTextInput(prompt, placeholder string, suggestions func(string) []string)
 // promptPath displays prompt and reads a filesystem path from stdin with
 // tab-completion and inline ghost text preview. Returns empty string if blank.
 func promptPath(prompt string) (string, error) {
-	val, cancelled, err := runTextInput(prompt, "leave blank to skip", func(v string) []string {
-		return tui.PathSuggestions(v)
-	})
+	val, cancelled, err := runTextInput(prompt, "leave blank to skip", tui.PathSuggestions)
 	if err != nil || cancelled {
 		return "", err
 	}
@@ -169,6 +167,7 @@ func promptNordVPN(stdin *bufio.Reader) (*vpn.NordVPNConfig, error) {
 		// Non-fatal: fall back to plain text prompt.
 		fmt.Fprint(os.Stderr, "Country to connect to (leave blank for auto): ")
 		country, _ := stdin.ReadString('\n')
+		//nolint:nilerr // country fetch failure is intentionally non-fatal; fall back to manual entry.
 		return &vpn.NordVPNConfig{Token: token, Country: strings.TrimSpace(country)}, nil
 	}
 
@@ -209,7 +208,7 @@ func promptGenericWireGuard() (*vpn.WireGuardConfig, error) {
 	if err != nil || confPath == "" {
 		return nil, err
 	}
-	data, err := os.ReadFile(confPath)
+	data, err := os.ReadFile(confPath) //nolint:gosec // confPath is a user-supplied path the user intends to read.
 	if err != nil {
 		return nil, fmt.Errorf("read WireGuard config: %w", err)
 	}

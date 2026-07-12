@@ -98,7 +98,7 @@ Examples:
 			}
 		}
 
-		if err := os.MkdirAll(dest, 0o755); err != nil {
+		if err := os.MkdirAll(dest, 0o750); err != nil {
 			return fmt.Errorf("create dest %s: %w", dest, err)
 		}
 
@@ -234,7 +234,7 @@ func parseSSHHost(s string) (string, int, error) {
 	h, p, err := net.SplitHostPort(s)
 	if err != nil {
 		// No port — treat whole string as host.
-		return s, 22, nil
+		return s, 22, nil //nolint:nilerr // missing port is not an error; default to 22.
 	}
 	var port int
 	if _, err := fmt.Sscan(p, &port); err != nil || port <= 0 {
@@ -269,6 +269,7 @@ func promptSSHConn(vmName string) (backup.SSHConn, error) {
 	}
 
 	fmt.Printf("Password for %s: ", raw)
+	//nolint:gosec // os.Stdin.Fd() is a small OS file descriptor; no overflow.
 	pw, err := term.ReadPassword(int(os.Stdin.Fd()))
 	fmt.Println()
 	if err != nil {
@@ -295,6 +296,7 @@ func injectSSHKey(conn backup.SSHConn, pubKeyPath string) error {
 		if sshpass, err := exec.LookPath("sshpass"); err == nil {
 			fullArgs := append([]string{"-p", conn.Password, "ssh-copy-id"}, args...)
 			fullArgs = append(fullArgs, target)
+			//nolint:gosec,noctx // sshpass/ssh-copy-id invocation with user SSH details; interactive one-shot, no ctx in this call chain.
 			cmd := exec.Command(sshpass, fullArgs...)
 			cmd.Stdout = os.Stdout
 			cmd.Stderr = os.Stderr
@@ -304,6 +306,7 @@ func injectSSHKey(conn backup.SSHConn, pubKeyPath string) error {
 		fmt.Println("(sshpass not found; you may be prompted for your password again)")
 	}
 	args = append(args, target)
+	//nolint:gosec,noctx // ssh-copy-id invocation with user SSH details; interactive one-shot, no ctx in this call chain.
 	cmd := exec.Command("ssh-copy-id", args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout

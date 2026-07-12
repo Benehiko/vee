@@ -9,8 +9,9 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/Benehiko/vee/internal/vm"
 	"github.com/spf13/cobra"
+
+	"github.com/Benehiko/vee/internal/vm"
 )
 
 var (
@@ -88,7 +89,7 @@ Examples:
 			}
 			ip, resolveErr := vm.ResolveIPFromMAC(mac)
 			if resolveErr != nil && state.QGASocket != "" {
-				ip, resolveErr = vm.ResolveIPFromQGA(state.QGASocket)
+				ip, resolveErr = vm.ResolveIPFromQGA(cmd.Context(), state.QGASocket)
 			}
 			if resolveErr != nil {
 				return fmt.Errorf("could not resolve IP for VM %q (MAC %s): %w\nGet the IP with: vee ip %s", name, mac, resolveErr, name)
@@ -120,6 +121,7 @@ Examples:
 		}
 
 		// Replace the current process with ssh so signals flow naturally.
+		//nolint:gosec // sshBin resolved via LookPath; args built from vetted VM config for an interactive SSH session.
 		return syscall.Exec(sshBin, append([]string{"ssh"}, sshArgs...), os.Environ())
 	},
 }
@@ -160,7 +162,7 @@ func init() {
 // ports) from the vee-managed known_hosts file. Called before every connect so
 // a reinstalled VM with the same IP never blocks with a host-key-changed error.
 func scrubKnownHost(knownHostsPath, host string, port int) {
-	data, err := os.ReadFile(knownHostsPath)
+	data, err := os.ReadFile(knownHostsPath) //nolint:gosec // knownHostsPath is the fixed vee-managed ~/.vee/ssh/known_hosts.
 	if err != nil {
 		return
 	}
@@ -192,5 +194,6 @@ func scrubKnownHost(knownHostsPath, host string, port int) {
 	if len(kept) > 0 {
 		out += "\n"
 	}
+	//nolint:gosec // knownHostsPath is the fixed vee-managed ~/.vee/ssh/known_hosts.
 	_ = os.WriteFile(knownHostsPath, []byte(out), 0o600)
 }

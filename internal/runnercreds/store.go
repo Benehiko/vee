@@ -147,6 +147,7 @@ func Restore(id *age.X25519Identity, name string) ([]RestoredFile, error) {
 	if err != nil {
 		return nil, err
 	}
+	//nolint:gosec // path is ~/.vee/runner-creds/<name>.age from SnapshotPath, built from os.UserHomeDir, not user input.
 	enc, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {

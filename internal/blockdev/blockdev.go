@@ -88,6 +88,7 @@ func buildByIDMap() (map[string]string, error) {
 // readSize returns the device capacity in bytes. /sys/block/<n>/size is a
 // count of 512-byte sectors regardless of the underlying logical block size.
 func readSize(name string) uint64 {
+	//nolint:gosec // G304: path is confined to /sys/block; name is a kernel device dir entry, not user input.
 	b, err := os.ReadFile(filepath.Join("/sys/block", name, "size"))
 	if err != nil {
 		return 0
@@ -142,6 +143,7 @@ func readModel(name string) string {
 		filepath.Join("/sys/block", name, "device/device/model"),
 	}
 	for _, p := range paths {
+		//nolint:gosec // G304: path is confined to /sys/block; name is a kernel device dir entry, not user input.
 		b, err := os.ReadFile(p)
 		if err == nil {
 			return strings.TrimSpace(string(b))

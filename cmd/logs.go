@@ -48,7 +48,7 @@ Examples:
 func runQEMULog(cmd *cobra.Command, name string) error {
 	logPath := filepath.Join(prov.Config().StoragePath, name, "qemu.log")
 
-	f, err := os.Open(logPath)
+	f, err := os.Open(logPath) //nolint:gosec // logPath is derived from vee-managed storage path and VM name.
 	if err != nil {
 		if os.IsNotExist(err) {
 			return fmt.Errorf("no log found for VM %q (has it been started?)", name)

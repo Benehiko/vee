@@ -3,9 +3,10 @@ package cmd
 import (
 	"fmt"
 
+	"github.com/spf13/cobra"
+
 	"github.com/Benehiko/vee/internal/monitor"
 	"github.com/Benehiko/vee/internal/vm"
-	"github.com/spf13/cobra"
 )
 
 var monitorCmd = &cobra.Command{

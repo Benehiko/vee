@@ -6,9 +6,10 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/spf13/cobra"
+
 	veessh "github.com/Benehiko/vee/internal/ssh"
 	"github.com/Benehiko/vee/internal/vm"
-	"github.com/spf13/cobra"
 )
 
 var sshShareAgentSock string

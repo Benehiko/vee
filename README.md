@@ -224,16 +224,22 @@ vee completion fish | source    # fish
 ## Development
 
 ```sh
-make hooks   # enable the pre-commit hook (golangci-lint + go build) for this clone
-make lint    # run golangci-lint (mirrors CI)
+make hooks   # enable the pre-commit hook (fmt check + lint + build) for this clone
+make fmt     # apply gofumpt + goimports formatting in place
+make lint    # format check + golangci-lint (mirrors CI)
 make build   # build the vee binary
 make test    # go test -race ./...
 ```
 
+Formatting (`gofumpt` + `goimports`) and linting are enforced by a strict
+`.golangci.yml`. `make lint` runs `golangci-lint fmt --diff` (fails on any
+unformatted code) followed by `golangci-lint run`; run `make fmt` to fix
+formatting before committing.
+
 The pre-commit hook lives in `.githooks/` (tracked) and only runs when Go files
-are staged. Enable it once per clone with `make hooks`; bypass a single commit
-with `git commit --no-verify`. CI (lint + build + test) pins the same Go version
-as `go.mod`.
+are staged: it runs the format check, lint, and build. Enable it once per clone
+with `make hooks`; bypass a single commit with `git commit --no-verify`. CI
+(lint + format + build + test) reads the Go version from `go.mod`.
 
 ## Docs
 

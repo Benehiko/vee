@@ -78,7 +78,7 @@ func WithCPUFlags(flags []string) CPUOption {
 	}
 }
 
-func WithSMP(smp int, sockets int, threads int, cores int) func(*CPU) {
+func WithSMP(smp, sockets, threads, cores int) func(*CPU) {
 	return func(c *CPU) {
 		c.SMP = smp
 		c.Sockets = sockets

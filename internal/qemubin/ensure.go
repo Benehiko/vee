@@ -46,7 +46,7 @@ func Ensure() (string, error) {
 	marker := binPath + ".version"
 
 	// Check if already installed at the pinned version.
-	if b, err := os.ReadFile(marker); err == nil && string(b) == PinnedVersion {
+	if b, err := os.ReadFile(marker); err == nil && string(b) == PinnedVersion { //nolint:gosec // marker path derived from UserHomeDir + fixed name, not user input
 		if _, err := os.Stat(binPath); err == nil {
 			return binPath, nil
 		}
@@ -72,7 +72,7 @@ func Ensure() (string, error) {
 	}
 
 	// Write version marker.
-	if err := os.WriteFile(marker, []byte(PinnedVersion), 0o644); err != nil {
+	if err := os.WriteFile(marker, []byte(PinnedVersion), 0o600); err != nil {
 		return "", fmt.Errorf("write version marker: %w", err)
 	}
 
@@ -81,11 +81,11 @@ func Ensure() (string, error) {
 }
 
 func downloadAndInstall(url, expectedSHA256, destPath string) error {
-	if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(destPath), 0o750); err != nil {
 		return err
 	}
 
-	resp, err := http.Get(url) //nolint:noctx // simple one-shot download
+	resp, err := http.Get(url) //nolint:noctx,gosec // one-shot download from pinned GitHub release URL (releaseBaseURL + PinnedVersion), not attacker-controlled
 	if err != nil {
 		return fmt.Errorf("download %s: %w", url, err)
 	}
@@ -124,7 +124,7 @@ func downloadAndInstall(url, expectedSHA256, destPath string) error {
 }
 
 func extractBinary(tarGzPath, binaryName, destPath string) error {
-	f, err := os.Open(tarGzPath)
+	f, err := os.Open(tarGzPath) //nolint:gosec // tarGzPath is a temp file created by this package via os.CreateTemp, not user input
 	if err != nil {
 		return err
 	}
@@ -148,7 +148,7 @@ func extractBinary(tarGzPath, binaryName, destPath string) error {
 		if filepath.Base(hdr.Name) != binaryName {
 			continue
 		}
-		out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+		out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o750) //nolint:gosec // executable QEMU binary requires the exec bit; 0o750 is the tightest perm that keeps it runnable
 		if err != nil {
 			return err
 		}

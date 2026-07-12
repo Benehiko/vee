@@ -16,11 +16,20 @@ if ! git diff --cached --name-only --diff-filter=ACM | grep -q '\.go$'; then
   exit 0
 fi
 
-echo "pre-commit: golangci-lint run"
 if command -v golangci-lint >/dev/null 2>&1; then
+  # Format check first — do not mutate/re-stage; if the diff is non-empty the
+  # author must run `make fmt` and re-stage, so the commit reflects what is staged.
+  echo "pre-commit: golangci-lint fmt --diff"
+  if ! golangci-lint fmt --diff >/dev/null 2>&1; then
+    echo "pre-commit: code is not formatted. Run 'make fmt', then re-stage and commit." >&2
+    golangci-lint fmt --diff >&2 || true
+    exit 1
+  fi
+
+  echo "pre-commit: golangci-lint run"
   golangci-lint run --timeout=5m ./...
 else
-  echo "pre-commit: golangci-lint not found on PATH — skipping lint (CI will still enforce it)" >&2
+  echo "pre-commit: golangci-lint not found on PATH — skipping lint+fmt (CI will still enforce them)" >&2
 fi
 
 echo "pre-commit: go build -mod=vendor ./..."

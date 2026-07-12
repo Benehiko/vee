@@ -22,7 +22,7 @@ func vmDir(storagePath, name string) string {
 
 func SaveConfig(storagePath string, cfg *VMConfig) error {
 	dir := vmDir(storagePath, cfg.Name)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return err
 	}
 	return atomicWrite(filepath.Join(dir, configFile), func() ([]byte, error) {
@@ -32,7 +32,7 @@ func SaveConfig(storagePath string, cfg *VMConfig) error {
 
 func LoadConfig(storagePath, name string) (*VMConfig, error) {
 	path := filepath.Join(vmDir(storagePath, name), configFile)
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // path derived from vee storage dir + VM name, not untrusted input
 	if err != nil {
 		return nil, err
 	}
@@ -58,7 +58,7 @@ func SaveStateForVM(storagePath, name string, state *VMState) error {
 
 func LoadState(storagePath, name string) (*VMState, error) {
 	path := filepath.Join(vmDir(storagePath, name), stateFile)
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // path derived from vee storage dir + VM name, not untrusted input
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return &VMState{Running: false}, nil
@@ -105,6 +105,7 @@ func ListAll(storagePath string) ([]*VMConfig, error) {
 
 // freeTCPPort asks the kernel for a free TCP port on localhost.
 func freeTCPPort() (int, error) {
+	//nolint:noctx // ephemeral port probe; no ctx available and adding one requires an API change across callers
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return 0, err
@@ -116,6 +117,7 @@ func freeTCPPort() (int, error) {
 
 // isPortInUse returns true if something is already listening on the given TCP port.
 func isPortInUse(port int) bool {
+	//nolint:noctx // port-in-use probe; no ctx available and adding one requires an API change across callers
 	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
 		return true
@@ -130,7 +132,7 @@ func atomicWrite(path string, marshal func() ([]byte, error)) error {
 		return err
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, path)

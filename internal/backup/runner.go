@@ -28,7 +28,7 @@ func (r *Runner) Execute(runID int64, dest string, dirs []string) error {
 		rel := strings.TrimLeft(guestPath, "/")
 		localDest := filepath.Join(dest, rel)
 
-		if err := os.MkdirAll(localDest, 0o755); err != nil {
+		if err := os.MkdirAll(localDest, 0o750); err != nil {
 			firstErr = fmt.Errorf("mkdir %s: %w", localDest, err)
 			break
 		}

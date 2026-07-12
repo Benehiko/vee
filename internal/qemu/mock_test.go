@@ -1,6 +1,7 @@
 package qemu_test
 
 import (
+	"context"
 	"net"
 	"testing"
 )
@@ -9,7 +10,8 @@ import (
 // connection and runs handler in a goroutine. Returns a cleanup function.
 func mockSocketServer(t *testing.T, sockPath string, handler func(net.Conn)) func() {
 	t.Helper()
-	ln, err := net.Listen("unix", sockPath)
+	var lc net.ListenConfig
+	ln, err := lc.Listen(context.Background(), "unix", sockPath)
 	if err != nil {
 		t.Fatalf("listen unix %s: %v", sockPath, err)
 	}

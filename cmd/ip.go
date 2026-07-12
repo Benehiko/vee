@@ -24,7 +24,7 @@ var ipCmd = &cobra.Command{
 			return fmt.Errorf("VM %q was not started with guest agent support; recreate with a template that enables guest_agent", name)
 		}
 
-		client, closeClient, err := openQGAClient(state.QGASocket, 5*time.Second)
+		client, closeClient, err := openQGAClient(cmd.Context(), state.QGASocket, 5*time.Second)
 		if err != nil {
 			return err
 		}

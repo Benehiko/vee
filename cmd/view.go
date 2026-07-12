@@ -4,8 +4,9 @@ import (
 	"fmt"
 	"os/exec"
 
-	"github.com/Benehiko/vee/internal/vm"
 	"github.com/spf13/cobra"
+
+	"github.com/Benehiko/vee/internal/vm"
 )
 
 var viewForceSPICE bool
@@ -55,6 +56,7 @@ var viewCmd = &cobra.Command{
 			if err != nil {
 				return fmt.Errorf("remote-viewer not found; install virt-viewer: %w", err)
 			}
+			//nolint:gosec // viewer resolved via LookPath; uri is a vee-constructed spice:// URL.
 			return exec.Command(viewer, uri).Start()
 		}
 

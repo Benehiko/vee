@@ -39,7 +39,7 @@ func ParseDataDisk(s string) DataDisk {
 // on the VM's LAN IP), and SATA/AHCI for its OS boot pool disks. Data drives
 // are passed through as virtio-blk-pci with serials derived from the disk-by-id
 // name so ZFS can identify physical drives after reboots.
-func NewTruenasConfig(ctx context.Context, p provider.Provider, name, version string, bridge string, spicePort int, dataDisks []string) (*vm.VMConfig, error) {
+func NewTruenasConfig(ctx context.Context, p provider.Provider, name, version, bridge string, spicePort int, dataDisks []string) (*vm.VMConfig, error) {
 	if version == "" {
 		version = "latest"
 	}

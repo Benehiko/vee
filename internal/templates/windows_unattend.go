@@ -8,10 +8,11 @@ import (
 	"path/filepath"
 	"strings"
 
+	"go.uber.org/zap"
+
 	"github.com/Benehiko/vee/internal/images"
 	"github.com/Benehiko/vee/internal/utils"
 	"github.com/Benehiko/vee/provider"
-	"go.uber.org/zap"
 )
 
 // Windows unattended-install support.
@@ -80,7 +81,7 @@ func ensureCachedDownload(ctx context.Context, p provider.Provider, url, name st
 		return dst, nil
 	}
 
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
 		return "", fmt.Errorf("create cache dir: %w", err)
 	}
 
@@ -405,23 +406,24 @@ func buildExtrasISO(ctx context.Context, p provider.Provider, outPath, virtioISO
 	}
 	defer func() { _ = os.RemoveAll(stage) }()
 
-	if err := os.WriteFile(filepath.Join(stage, "Autounattend.xml"), []byte(autounattend), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(stage, "Autounattend.xml"), []byte(autounattend), 0o600); err != nil {
 		return fmt.Errorf("write Autounattend.xml: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(stage, "setup-guest.ps1"), []byte(setupScript), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(stage, "setup-guest.ps1"), []byte(setupScript), 0o600); err != nil {
 		return fmt.Errorf("write setup-guest.ps1: %w", err)
 	}
 	if winfspMSIPath != "" {
-		data, readErr := os.ReadFile(winfspMSIPath)
+		data, readErr := os.ReadFile(winfspMSIPath) //nolint:gosec // G304: winfspMSIPath is a program-controlled cache path, not user input.
 		if readErr != nil {
 			return fmt.Errorf("read WinFsp MSI: %w", readErr)
 		}
-		if err := os.WriteFile(filepath.Join(stage, winfspMSI), data, 0o644); err != nil {
+		//nolint:gosec // G703: destination is a program-controlled staging dir joined with the constant winfspMSI filename, not user input.
+		if err := os.WriteFile(filepath.Join(stage, winfspMSI), data, 0o600); err != nil {
 			return fmt.Errorf("stage WinFsp MSI: %w", err)
 		}
 	}
 
-	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(outPath), 0o750); err != nil {
 		return fmt.Errorf("create extras iso dir: %w", err)
 	}
 
@@ -445,6 +447,7 @@ genisoimage -J -joliet-long -r -V ` + winUnattendVolID + ` -o /out/` + outName +
 		"alpine:latest",
 		"sh", "-c", buildScript,
 	}
+	//nolint:gosec // G204: runtime from findWindowsContainerRuntime (LookPath); args are program-controlled paths.
 	cmd := exec.CommandContext(ctx, runtime, args...)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr

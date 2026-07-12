@@ -14,8 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Benehiko/vee/internal/sshkeys"
 	"golang.org/x/crypto/ssh"
+
+	"github.com/Benehiko/vee/internal/sshkeys"
 )
 
 // veeBin returns the path to the vee binary under test.

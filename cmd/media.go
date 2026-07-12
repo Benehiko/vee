@@ -6,8 +6,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/Benehiko/vee/internal/media"
 	"golang.org/x/term"
+
+	"github.com/Benehiko/vee/internal/media"
 )
 
 // parseMediaSpec parses one --media argument into a media.Source.
@@ -72,9 +73,9 @@ func parseMediaSpec(spec string) (media.Source, error) {
 	case strings.HasPrefix(head, "smb://"):
 		rest := strings.TrimPrefix(head, "smb://")
 		var user string
-		if at := strings.Index(rest, "@"); at >= 0 {
-			user = rest[:at]
-			rest = rest[at+1:]
+		if u, r, ok := strings.Cut(rest, "@"); ok {
+			user = u
+			rest = r
 		}
 		server, share, ok := strings.Cut(rest, "/")
 		if !ok || server == "" || share == "" {
@@ -181,6 +182,7 @@ func collectMediaSecrets(sources []media.Source) (map[string]string, error) {
 			}
 			fmt.Fprintf(os.Stderr, "%s: ", pp.Prompt)
 			if pp.Secret {
+				//nolint:gosec // os.Stdin.Fd() is a small OS file descriptor; no overflow.
 				pw, readErr := term.ReadPassword(int(os.Stdin.Fd()))
 				fmt.Fprintln(os.Stderr)
 				if readErr != nil {

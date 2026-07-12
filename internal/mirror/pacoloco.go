@@ -51,7 +51,7 @@ func EnsureBinary(ctx context.Context, p *Paths) (string, error) {
 	if _, err := os.Stat(p.BinPath); err == nil {
 		return p.BinPath, nil
 	}
-	if err := os.MkdirAll(p.BinDir, 0o755); err != nil {
+	if err := os.MkdirAll(p.BinDir, 0o750); err != nil {
 		return "", fmt.Errorf("mkdir %s: %w", p.BinDir, err)
 	}
 
@@ -71,7 +71,8 @@ func EnsureBinary(ctx context.Context, p *Paths) (string, error) {
 	if err := extractPacolocoBinary(tarPath, p.BinPath); err != nil {
 		return "", fmt.Errorf("extract pacoloco: %w", err)
 	}
-	if err := os.Chmod(p.BinPath, 0o755); err != nil {
+	//nolint:gosec // G302: pacoloco is an executable; the owner exec bit is required to run it. Owner-only 0o700.
+	if err := os.Chmod(p.BinPath, 0o700); err != nil {
 		return "", fmt.Errorf("chmod pacoloco: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "pacoloco installed: %s\n", p.BinPath)
@@ -92,6 +93,7 @@ func downloadFile(ctx context.Context, dst, url string) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("HTTP %d fetching %s", resp.StatusCode, url)
 	}
+	//nolint:gosec // G304: dst is an internally-derived temp path, not user input.
 	f, err := os.Create(dst)
 	if err != nil {
 		return err
@@ -104,6 +106,7 @@ func downloadFile(ctx context.Context, dst, url string) error {
 // extractPacolocoBinary opens a .tar.gz at src and writes the "pacoloco" entry
 // to dst.
 func extractPacolocoBinary(src, dst string) error {
+	//nolint:gosec // G304: src is an internally-derived temp path, not user input.
 	f, err := os.Open(src)
 	if err != nil {
 		return err
@@ -128,13 +131,22 @@ func extractPacolocoBinary(src, dst string) error {
 		if filepath.Base(hdr.Name) != "pacoloco" {
 			continue
 		}
+		//nolint:gosec // G304: dst is an internally-derived install path, not user input.
 		out, err := os.Create(dst)
 		if err != nil {
 			return err
 		}
-		if _, err := io.Copy(out, tr); err != nil {
+		// Cap the copy to guard against a decompression bomb (gosec G110). The
+		// pacoloco binary is a few tens of MB; 512 MiB is a generous ceiling.
+		const maxBinarySize = 512 << 20
+		n, err := io.Copy(out, io.LimitReader(tr, maxBinarySize))
+		if err != nil {
 			_ = out.Close()
 			return err
+		}
+		if n == maxBinarySize {
+			_ = out.Close()
+			return fmt.Errorf("pacoloco binary exceeds %d bytes limit", int64(maxBinarySize))
 		}
 		return out.Close()
 	}

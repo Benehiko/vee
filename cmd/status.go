@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -9,9 +10,10 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/Benehiko/vee/internal/qemu"
 	"github.com/Benehiko/vee/internal/vm"
-	"github.com/spf13/cobra"
 )
 
 var (
@@ -79,16 +81,16 @@ var statusCmd = &cobra.Command{
 		if entry.State.Running && entry.State.InstallState == vm.InstallStatePending {
 			fmt.Println()
 			if statusWatch {
-				return watchCloudInitProgress(entry.Config, entry.State)
+				return watchCloudInitProgress(cmd.Context(), entry.Config, entry.State)
 			}
-			printCloudInitProgress(entry.Config, entry.State)
+			printCloudInitProgress(cmd.Context(), entry.Config, entry.State)
 			return nil
 		}
 
 		// QGA section — only if VM is running and has a QGA socket.
 		if entry.State.Running && entry.State.QGASocket != "" {
 			fmt.Println()
-			client, closeClient, qgaErr := openQGAClient(entry.State.QGASocket, 3*time.Second)
+			client, closeClient, qgaErr := openQGAClient(cmd.Context(), entry.State.QGASocket, 3*time.Second)
 			if qgaErr != nil {
 				fmt.Printf("guest-agent: unavailable (%v)\n", qgaErr)
 			} else {
@@ -196,8 +198,8 @@ type cloudInitStatus struct {
 	} `json:"v1"`
 }
 
-func sshRunQuiet(cfg *vm.VMConfig, state *vm.VMState, command string) (string, error) {
-	ip, err := resolveVMIP(cfg, state)
+func sshRunQuiet(ctx context.Context, cfg *vm.VMConfig, state *vm.VMState, command string) (string, error) {
+	ip, err := resolveVMIP(ctx, cfg, state)
 	if err != nil {
 		return "", err
 	}
@@ -221,32 +223,33 @@ func sshRunQuiet(cfg *vm.VMConfig, state *vm.VMState, command string) (string, e
 		user + "@" + ip,
 		command,
 	}
+	//nolint:gosec,noctx // ssh subprocess from vetted VM config; short guest-status query, no ctx in this call chain.
 	out, err := exec.Command("ssh", args...).Output()
 	return strings.TrimSpace(string(out)), err
 }
 
-func resolveVMIP(cfg *vm.VMConfig, state *vm.VMState) (string, error) {
+func resolveVMIP(ctx context.Context, cfg *vm.VMConfig, state *vm.VMState) (string, error) {
 	if cfg.NIC.MAC != "" {
 		if ip, err := vm.ResolveIPFromMAC(cfg.NIC.MAC); err == nil {
 			return ip, nil
 		}
 	}
 	if state.QGASocket != "" {
-		return vm.ResolveIPFromQGA(state.QGASocket)
+		return vm.ResolveIPFromQGA(ctx, state.QGASocket)
 	}
 	return "", fmt.Errorf("cannot resolve VM IP")
 }
 
-func fetchCloudInitStatus(cfg *vm.VMConfig, state *vm.VMState) (*cloudInitStatus, error) {
+func fetchCloudInitStatus(ctx context.Context, cfg *vm.VMConfig, state *vm.VMState) (*cloudInitStatus, error) {
 	// Prefer the guest agent — it works before networking is up and before
 	// cloud-init has installed any host SSH keys. Fall back to SSH for guests
 	// without QGA (GuestAgent=false in the VM config).
 	if state.QGASocket != "" {
-		if s, err := fetchCloudInitStatusViaQGA(state); err == nil {
+		if s, err := fetchCloudInitStatusViaQGA(ctx, state); err == nil {
 			return s, nil
 		}
 	}
-	out, err := sshRunQuiet(cfg, state, "cat /run/cloud-init/status.json 2>/dev/null || echo '{}'")
+	out, err := sshRunQuiet(ctx, cfg, state, "cat /run/cloud-init/status.json 2>/dev/null || echo '{}'")
 	if err != nil {
 		return nil, err
 	}
@@ -257,8 +260,8 @@ func fetchCloudInitStatus(cfg *vm.VMConfig, state *vm.VMState) (*cloudInitStatus
 	return &s, nil
 }
 
-func fetchCloudInitStatusViaQGA(state *vm.VMState) (*cloudInitStatus, error) {
-	client, err := qemu.NewQGAClient(state.QGASocket, 3*time.Second)
+func fetchCloudInitStatusViaQGA(ctx context.Context, state *vm.VMState) (*cloudInitStatus, error) {
+	client, err := qemu.NewQGAClient(ctx, state.QGASocket, 3*time.Second)
 	if err != nil {
 		return nil, err
 	}
@@ -277,8 +280,8 @@ func fetchCloudInitStatusViaQGA(state *vm.VMState) (*cloudInitStatus, error) {
 	return &s, nil
 }
 
-func printCloudInitProgress(cfg *vm.VMConfig, state *vm.VMState) {
-	s, err := fetchCloudInitStatus(cfg, state)
+func printCloudInitProgress(ctx context.Context, cfg *vm.VMConfig, state *vm.VMState) {
+	s, err := fetchCloudInitStatus(ctx, cfg, state)
 	if err != nil {
 		fmt.Printf("cloud-init: unreachable (%v)\n", err)
 		fmt.Println("  VM may still be booting — check the SPICE console")
@@ -309,7 +312,7 @@ func printCloudInitProgress(cfg *vm.VMConfig, state *vm.VMState) {
 	}
 }
 
-func watchCloudInitProgress(cfg *vm.VMConfig, state *vm.VMState) error {
+func watchCloudInitProgress(ctx context.Context, cfg *vm.VMConfig, state *vm.VMState) error {
 	fmt.Println("watching cloud-init progress (Ctrl+C to stop)…")
 	fmt.Println()
 	ticker := time.NewTicker(5 * time.Second)
@@ -317,10 +320,10 @@ func watchCloudInitProgress(cfg *vm.VMConfig, state *vm.VMState) error {
 	for {
 		// Clear previous output with ANSI escape (4 lines up).
 		fmt.Print("\033[4A\033[J")
-		printCloudInitProgress(cfg, state)
+		printCloudInitProgress(ctx, cfg, state)
 
 		// Check if done.
-		out, err := sshRunQuiet(cfg, state, "cloud-init status 2>/dev/null")
+		out, err := sshRunQuiet(ctx, cfg, state, "cloud-init status 2>/dev/null")
 		if err == nil && strings.Contains(out, "done") {
 			fmt.Println("\ncloud-init: complete")
 			return nil

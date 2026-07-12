@@ -204,7 +204,7 @@ func isArchDistro(cfg *vm.VMConfig) bool {
 func loadSSHKeys(path string) ([]string, error) {
 	var keys []string
 	if path != "" {
-		data, err := os.ReadFile(path)
+		data, err := os.ReadFile(path) //nolint:gosec // G304: path is the user's own --ssh-keys file, intentionally caller-supplied.
 		if err != nil {
 			return nil, fmt.Errorf("read SSH key file: %w", err)
 		}

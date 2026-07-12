@@ -11,8 +11,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/Benehiko/vee/provider"
 	"go.uber.org/zap"
+
+	"github.com/Benehiko/vee/provider"
 )
 
 type DiskFormat string
@@ -177,7 +178,7 @@ func WithBootIndex(idx int) DiskOptions {
 
 // NewDisk creates a new Disk with the given path and index
 // index is used for boot order
-// default format is qcow2
+// default format is qcow2.
 func NewDisk(provider provider.Provider, machine Machine, opts ...DiskOptions) *Disk {
 	conf := provider.Config()
 
@@ -206,8 +207,9 @@ func NewDisk(provider provider.Provider, machine Machine, opts ...DiskOptions) *
 // file by running qemu-img info. Falls back to "raw" on error.
 // detectImageFormat returns the format of an image file using qemu-img info.
 // It parses the human-readable "file format:" line which appears once at the top level.
-func detectImageFormat(path string) (string, error) {
-	out, err := exec.Command("qemu-img", "info", path).Output()
+func detectImageFormat(ctx context.Context, path string) (string, error) {
+	//nolint:gosec // qemu-img is a fixed binary; path is a VM-owned disk image path, not user shell input.
+	out, err := exec.CommandContext(ctx, "qemu-img", "info", path).Output()
 	if err != nil {
 		return "raw", fmt.Errorf("qemu-img info: %w", err)
 	}
@@ -237,7 +239,7 @@ func (q *Disk) Create(ctx context.Context) error {
 		}
 	}
 
-	if err := os.MkdirAll(filepath.Dir(q.AbsolutePath()), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(q.AbsolutePath()), 0o750); err != nil {
 		return err
 	}
 
@@ -249,10 +251,11 @@ func (q *Disk) Create(ctx context.Context) error {
 	var cmd *exec.Cmd
 	if q.BackingFile != "" {
 		// Detect the backing file format so the overlay is created correctly.
-		backingFmt, err := detectImageFormat(q.BackingFile)
+		backingFmt, err := detectImageFormat(ctx, q.BackingFile)
 		if err != nil {
 			return fmt.Errorf("detect backing file format: %w", err)
 		}
+		//nolint:gosec // qemu-img is a fixed binary; args are VM-owned disk paths/sizes, not user shell input.
 		cmd = exec.CommandContext(ctx, "qemu-img", "create",
 			"-f", string(q.Format),
 			"-b", q.BackingFile,
@@ -261,6 +264,7 @@ func (q *Disk) Create(ctx context.Context) error {
 			q.Size,
 		)
 	} else {
+		//nolint:gosec // qemu-img is a fixed binary; args are VM-owned disk paths/sizes, not user shell input.
 		cmd = exec.CommandContext(ctx, "qemu-img", "create", "-f", string(q.Format), q.AbsolutePath(), q.Size)
 	}
 	reader, writer := io.Pipe()
@@ -285,7 +289,10 @@ func (q *Disk) Delete() error {
 		return errors.New("iso disks should be deleted by the images package")
 	}
 	if _, err := os.Stat(q.AbsolutePath()); err != nil {
-		return nil
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
 	}
 	return os.Remove(q.AbsolutePath())
 }

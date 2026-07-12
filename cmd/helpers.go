@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"time"
@@ -68,8 +69,8 @@ func isInstalling(mgr *vm.Manager, name string) bool {
 
 // openQGAClient connects to the guest agent socket and returns the client plus
 // a cleanup function. The caller must invoke close() when done.
-func openQGAClient(socket string, timeout time.Duration) (*qemu.QGAClient, func(), error) {
-	client, err := qemu.NewQGAClient(socket, timeout)
+func openQGAClient(ctx context.Context, socket string, timeout time.Duration) (*qemu.QGAClient, func(), error) {
+	client, err := qemu.NewQGAClient(ctx, socket, timeout)
 	if err != nil {
 		return nil, nil, fmt.Errorf("connect to guest agent: %w", err)
 	}
@@ -102,7 +103,8 @@ func localIP() string {
 
 // freeLocalPort finds a free TCP port on localhost and returns it.
 func freeLocalPort() (int, error) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	var lc net.ListenConfig
+	ln, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		return 0, err
 	}

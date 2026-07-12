@@ -2,6 +2,7 @@ package backup
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os/exec"
 	"sort"
@@ -60,7 +61,8 @@ const findCmd = "find ~ -mindepth 1 -type d ! -path '*/proc/*' ! -path '*/sys/*'
 // EnumerateHome lists all directories under the guest home dir via SSH find.
 // Returns a flat list sorted by path.
 func EnumerateHome(conn SSHConn) ([]*DirEntry, error) {
-	c := exec.Command("ssh", conn.args(findCmd)...)
+	//nolint:gosec // ssh args are built from operator-supplied SSHConn fields (host/port/identity), not untrusted input; running ssh with them is the intended behavior.
+	c := exec.CommandContext(context.Background(), "ssh", conn.args(findCmd)...)
 	var stderr strings.Builder
 	c.Stderr = &stderr
 	out, err := c.Output()
@@ -86,7 +88,8 @@ func EnumerateHome(conn SSHConn) ([]*DirEntry, error) {
 // EnumerateHomeStream runs find over SSH and sends entries line-by-line to ch.
 // Closes ch when done. Send errors to errCh (buffered 1). Caller owns both channels.
 func EnumerateHomeStream(conn SSHConn, ch chan<- *DirEntry, errCh chan<- error) {
-	c := exec.Command("ssh", conn.args(findCmd)...)
+	//nolint:gosec // ssh args are built from operator-supplied SSHConn fields (host/port/identity), not untrusted input; running ssh with them is the intended behavior.
+	c := exec.CommandContext(context.Background(), "ssh", conn.args(findCmd)...)
 	stdout, err := c.StdoutPipe()
 	if err != nil {
 		errCh <- fmt.Errorf("stdout pipe: %w", err)
@@ -141,7 +144,8 @@ func RunRsync(conn SSHConn, guestPath, localDest string) error {
 		localDest + "/",
 	}
 
-	cmd := exec.Command(rsync, args...)
+	//nolint:gosec // rsync path resolved via LookPath; args derive from operator-supplied SSHConn and backup paths, not untrusted input.
+	cmd := exec.CommandContext(context.Background(), rsync, args...)
 	cmd.Stdout = nil // caller sets these
 	cmd.Stderr = nil
 	return cmd.Run()
@@ -177,5 +181,6 @@ func RunRsyncCmd(conn SSHConn, guestPath, localDest string) (*exec.Cmd, error) {
 		localDest + "/",
 	}
 
-	return exec.Command(rsync, args...), nil
+	//nolint:gosec // rsync path resolved via LookPath; args derive from operator-supplied SSHConn and backup paths, not untrusted input.
+	return exec.CommandContext(context.Background(), rsync, args...), nil
 }

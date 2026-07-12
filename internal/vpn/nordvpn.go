@@ -1,6 +1,7 @@
 package vpn
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -85,7 +86,11 @@ func ValidateToken(token string) error {
 		return fmt.Errorf("NordVPN access token is empty")
 	}
 	hc := &http.Client{Timeout: nordAPITimeout}
-	resp, err := hc.Get(nordAPI + "/servers/countries")
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, nordAPI+"/servers/countries", nil)
+	if err != nil {
+		return fmt.Errorf("build NordVPN request: %w", err)
+	}
+	resp, err := hc.Do(req)
 	if err != nil {
 		return fmt.Errorf("NordVPN API unreachable: %w", err)
 	}
@@ -97,7 +102,11 @@ func ValidateToken(token string) error {
 // Countries returns country names that have NordVPN servers, sorted alphabetically.
 func Countries() ([]string, error) {
 	hc := &http.Client{Timeout: nordAPITimeout}
-	resp, err := hc.Get(nordAPI + "/servers/countries")
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, nordAPI+"/servers/countries", nil)
+	if err != nil {
+		return nil, fmt.Errorf("build NordVPN request: %w", err)
+	}
+	resp, err := hc.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetch countries: %w", err)
 	}

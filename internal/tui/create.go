@@ -405,7 +405,6 @@ func (m createModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
-
 	case tea.KeyMsg:
 		if m.submitting {
 			return m, nil

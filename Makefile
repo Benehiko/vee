@@ -20,16 +20,21 @@ LDFLAGS     := -s -w \
 CONTAINER_RUNTIME := $(shell command -v nerdctl 2>/dev/null || command -v docker 2>/dev/null)
 HUGO_IMAGE        := hugomods/hugo:go-git-0.147.0
 
-.PHONY: all build install clean e2e site lint test hooks licenses
+.PHONY: all build install clean e2e site lint fmt test hooks licenses
 
 all: build
 
 build:
 	$(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BINARY) .
 
-# Mirror the CI lint job locally.
+# Mirror the CI lint job locally: format check (gofumpt + goimports) then lint.
 lint:
+	golangci-lint fmt --diff
 	golangci-lint run --timeout=5m ./...
+
+# Apply formatters in place (gofumpt + goimports).
+fmt:
+	golangci-lint fmt
 
 test:
 	$(GO) test $(GOFLAGS) -race ./...

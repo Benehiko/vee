@@ -6,10 +6,11 @@ import (
 	"os"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/Benehiko/vee/internal/runnercreds"
 	"github.com/Benehiko/vee/internal/runnerssh"
 	"github.com/Benehiko/vee/internal/vm"
-	"github.com/spf13/cobra"
 )
 
 var runnerCmd = &cobra.Command{

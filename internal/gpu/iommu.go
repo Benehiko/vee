@@ -87,7 +87,7 @@ func readPCIDevice(addr string) PCIDevice {
 }
 
 func readSysFile(path string) string {
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(path) //nolint:gosec // path is a fixed /sys/bus/pci sysfs entry built from a normalized PCI address, not user input
 	if err != nil {
 		return ""
 	}

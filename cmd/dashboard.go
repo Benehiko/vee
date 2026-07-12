@@ -4,9 +4,10 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	veeserver "github.com/Benehiko/vee/internal/server"
 	"github.com/Benehiko/vee/internal/vm"
-	"github.com/spf13/cobra"
 )
 
 var dashboardAddr string

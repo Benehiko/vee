@@ -64,6 +64,7 @@ func LoadOrCreateIdentity() (*age.X25519Identity, error) {
 		return nil, err
 	}
 
+	//nolint:gosec // path is ~/.vee/age/identity.txt, derived from os.UserHomeDir and fixed names, not user input.
 	data, err := os.ReadFile(path)
 	if err == nil {
 		id, perr := age.ParseX25519Identity(string(trimNewline(data)))
@@ -103,6 +104,7 @@ func writeSecret(dst string, data []byte) (string, error) {
 		return "", fmt.Errorf("temp nonce: %w", err)
 	}
 	tmp := filepath.Join(dir, fmt.Sprintf(".%x.tmp", nonce))
+	//nolint:gosec // tmp is a random name under dst's dir (both internally derived); O_EXCL prevents following any pre-existing path.
 	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return "", fmt.Errorf("create secret temp: %w", err)

@@ -5,8 +5,9 @@ import (
 	"os"
 	"text/tabwriter"
 
-	"github.com/Benehiko/vee/internal/vm"
 	"github.com/spf13/cobra"
+
+	"github.com/Benehiko/vee/internal/vm"
 )
 
 var checkCmd = &cobra.Command{
