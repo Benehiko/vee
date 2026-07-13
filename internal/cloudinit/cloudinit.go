@@ -294,6 +294,12 @@ func buildISOHdiutil(isoPath, udPath, mdPath string) error {
 	// makehybrid writes exactly to -o (no extension munging) and sets the ISO9660
 	// volume name via -default-volume-name; -joliet preserves the lowercase
 	// filenames the guest kernel needs to find user-data/meta-data.
+	//
+	// Unlike xorriso/genisoimage (built above with -joliet -rock), hdiutil emits
+	// no Rock Ridge extension — Joliet only. That is fine for a NoCloud seed:
+	// the guest reads the filenames from the Joliet descriptor and cloud-init
+	// uses the files' contents, not their on-ISO POSIX perms/ownership (which is
+	// all Rock Ridge would add here). See docs/macos.md for the full comparison.
 	args := []string{
 		"makehybrid", "-iso", "-joliet",
 		"-default-volume-name", "cidata",

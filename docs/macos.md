@@ -24,10 +24,31 @@ brew install qemu      # qemu-system-aarch64 + edk2 ARM firmware (HVF-enabled)
 (`cidata.iso`). vee builds it with `xorriso` (preferred) or `genisoimage` when
 one is on `PATH`, and otherwise falls back to **`hdiutil`**, which ships with
 macOS — so a stock Mac needs no extra package. If you already have `xorriso`
-installed (`brew install xorriso`) it is used automatically; there is no
-functional difference in the resulting seed. For **GPU-accelerated** display you
-additionally need a virgl-capable QEMU — see "The QEMU binary" below; stock
-Homebrew QEMU renders in software.
+installed (`brew install xorriso`) it is used automatically.
+
+### xorriso vs. hdiutil: what differs
+
+The two builders produce slightly different ISO9660 images, but both are valid
+NoCloud seeds and cloud-init consumes them identically (verified end-to-end on a
+Fedora guest under HVF):
+
+| | `xorriso` / `genisoimage` | `hdiutil makehybrid` |
+|---|---|---|
+| Command | `-as mkisofs -joliet -rock …` | `-iso -joliet -default-volume-name cidata …` |
+| Volume label | `cidata` | `cidata` (matched case-insensitively) |
+| Long filenames | Joliet **and** Rock Ridge | Joliet only |
+| POSIX perms/ownership in the image | Rock Ridge preserves them | not recorded |
+
+The only real difference is that hdiutil omits the **Rock Ridge** extension. That
+does not affect the seed: the guest kernel reads the lowercase `user-data` /
+`meta-data` names from the **Joliet** descriptor regardless, and cloud-init reads
+those files' *contents* — it never relies on their on-ISO permissions or
+ownership (the guest mounts the read-only seed itself). So the resulting seed is
+functionally equivalent for provisioning; the choice of builder is purely about
+which tool happens to be installed.
+
+For **GPU-accelerated** display you additionally need a virgl-capable QEMU — see
+"The QEMU binary" below; stock Homebrew QEMU renders in software.
 
 ## How vee adapts to a macOS host
 
