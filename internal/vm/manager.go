@@ -200,11 +200,19 @@ func (m *Manager) Create(ctx context.Context, cfg *VMConfig) error {
 		if err != nil {
 			return fmt.Errorf("cloud-init: %w", err)
 		}
-		// Append cidata ISO as an extra disk entry stored in the config.
-		// Must use ide so OVMF can read cloud-init on the first install boot.
+		// Append cidata ISO as an extra disk entry stored in the config. On x86
+		// the seed rides the IDE bus (OVMF reads it on an install boot). The
+		// aarch64 "virt" machine has no IDE controller, so an ide cdrom never
+		// presents to the guest and cloud-init's NoCloud datasource finds no
+		// seed; attach it via virtio there (cloud-init locates the "cidata"
+		// volume on any block device).
+		cidataInterface := "ide"
+		if platform.HostArch() == "arm64" {
+			cidataInterface = "virtio"
+		}
 		cfg.Disks = append(cfg.Disks, DiskConfig{
 			Path:       isoPath,
-			Interface:  "ide",
+			Interface:  cidataInterface,
 			Media:      "cdrom",
 			Cache:      "none",
 			Readonly:   true,
