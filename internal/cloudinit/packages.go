@@ -18,6 +18,10 @@ const (
 	CategoryTorrent       PackageCategory = "torrent"
 	CategoryDevbox        PackageCategory = "devbox"
 	CategoryServer        PackageCategory = "server"
+	// CategoryDesktop holds the GL/Vulkan userspace drivers a graphical guest
+	// needs for accelerated virtio-gpu (virgl). The desktop environment itself
+	// is installed via the desktop template's runcmd (group install), not here.
+	CategoryDesktop PackageCategory = "desktop"
 )
 
 var packageMap = map[Distro]map[PackageCategory][]string{
@@ -64,6 +68,12 @@ var packageMap = map[Distro]map[PackageCategory][]string{
 			"wget",
 			"unattended-upgrades",
 		},
+		CategoryDesktop: {
+			"mesa-utils",
+			"libgl1-mesa-dri",
+			"mesa-vulkan-drivers",
+			"vulkan-tools",
+		},
 	},
 	Fedora: {
 		CategoryGaming: {
@@ -96,6 +106,14 @@ var packageMap = map[Distro]map[PackageCategory][]string{
 			"htop",
 			"curl",
 			"wget",
+		},
+		CategoryDesktop: {
+			"mesa-dri-drivers",
+			"mesa-vulkan-drivers",
+			"mesa-libGL",
+			"mesa-libEGL",
+			"vulkan-tools",
+			"glx-utils",
 		},
 	},
 	Arch: {

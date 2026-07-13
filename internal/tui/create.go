@@ -29,6 +29,7 @@ var templateNames = []string{
 	"ubuntu-server",
 	"devbox",
 	"server",
+	"desktop",
 	"docker",
 	"torrent",
 	"gaming-arch",
@@ -41,8 +42,9 @@ var templateNames = []string{
 
 // distroAwareTemplates are templates that support --distro selection.
 var distroAwareTemplates = map[string]bool{
-	"devbox": true,
-	"server": true,
+	"devbox":  true,
+	"server":  true,
+	"desktop": true,
 }
 
 // createField identifies which form field is focused.

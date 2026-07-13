@@ -64,6 +64,27 @@ download quarantine and (re-)applies an ad-hoc signature with the entitlement
 entitlement for ad-hoc signatures, so no Apple Developer certificate is needed.
 Homebrew/UTM binaries are already signed.
 
+#### Building vee-qemu locally
+
+You don't need to wait for a published release — you can build the bundle on your
+own Apple Silicon Mac and have vee use it immediately. The build script signs the
+binary with the hypervisor entitlement itself, and `INSTALL_LOCAL=1` extracts the
+result into `~/.vee` (which vee's resolver prefers over Homebrew):
+
+```sh
+QEMU_VERSION=10.0.2 INSTALL_LOCAL=1 ./scripts/build-qemu-macos.sh
+```
+
+This produces `~/.vee/bin/qemu-system-aarch64` plus its bundled `lib/` and
+`share/` — no GitHub release, no checksum, no `version.go` edit. vee picks it up
+on the next `vee start`. (Without `INSTALL_LOCAL`, the script just leaves the
+`dist/*.tar.gz` asset for publishing.)
+
+The load-bearing, hard-to-test step is the virglrenderer + ANGLE build (the
+`knazarov/qemu-virgl` Homebrew tap). If that tap is unavailable the script falls
+back to a plain virglrenderer with **no macOS GL acceleration** and warns — so
+check the build log for that warning if the guest reports an `llvmpipe` renderer.
+
 ## GPU acceleration: what works per guest
 
 | Guest | Path | Status |
@@ -116,16 +137,29 @@ clearly otherwise:
 
 | Distro / template | arm64 on Apple Silicon |
 |-------------------|------------------------|
-| **Ubuntu** (cloud image: `server`, `devbox --distro ubuntu`, `jellyfin`, `runner`, `torrent`) | ✅ arm64 cloud image |
+| **Ubuntu** (cloud image: `server`, `devbox --distro ubuntu`, `desktop --distro ubuntu`, `jellyfin`, `runner`, `torrent`) | ✅ arm64 cloud image |
+| **Fedora** (Cloud Base qcow2: `server --distro fedora`, `devbox --distro fedora`, `desktop`) | ✅ arm64 cloud image |
 | `ubuntu-server` (live-server ISO) | ❌ x86-only ISO — use a cloud-image Ubuntu template |
 | Arch / `gaming-arch` | ❌ official ISO is x86-only |
 | Bazzite / `gaming-bazzite` | ❌ x86-only |
-| Fedora, Alpine / `docker` | ❌ not yet wired for arm64 (planned) |
+| Alpine / `docker` | ❌ not yet wired for arm64 (planned) |
 | TrueNAS | ❌ x86-only |
 | Windows | ❌ no ARM image pipeline; no GPU 3D on macOS regardless |
 
-For a GPU-accelerated Linux desktop on Apple Silicon, use an **Ubuntu arm64**
-guest (cloud image) with `gpu.mode: virtio`.
+### GPU-accelerated desktop (the `desktop` template)
+
+For a graphical, GPU-accelerated Linux desktop on Apple Silicon, use the
+`desktop` template — it boots the distro's arm64 cloud image, installs a minimal
+GNOME desktop plus the Mesa GL/Vulkan drivers via cloud-init, and runs with
+`gpu.mode: virtio` (→ `virtio-gpu-gl-pci` + Cocoa window):
+
+```sh
+vee create box --template desktop                 # Fedora (default)
+vee create box --template desktop --distro ubuntu # Ubuntu arm64
+```
+
+Acceleration requires a virgl-capable QEMU (see "The vee-qemu bundle" below);
+with stock/Homebrew QEMU the desktop still renders, but in software (llvmpipe).
 
 ## Limitations summary
 

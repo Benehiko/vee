@@ -132,7 +132,21 @@ mkdir -p "$OUT"
 ( cd "$BUNDLE" && tar czf "$OUT/$ASSET.tar.gz" bin lib share )
 ( cd "$OUT" && shasum -a 256 "$ASSET.tar.gz" | tee "$ASSET.tar.gz.sha256" )
 
+# INSTALL_LOCAL=1 drops the freshly built bundle straight into ~/.vee so vee
+# uses it immediately — no GitHub release, no version.go edit. qemubin's
+# resolveSystemQemu prefers the non-versioned ~/.vee/bin/<binary> over Homebrew,
+# so this is the fast path for testing a local build on the same machine.
+if [[ "${INSTALL_LOCAL:-0}" == "1" ]]; then
+  VEE_ROOT="${VEE_ROOT:-$HOME/.vee}"
+  echo "==> Installing locally into $VEE_ROOT (INSTALL_LOCAL=1)"
+  mkdir -p "$VEE_ROOT"
+  ( cd "$VEE_ROOT" && tar xzf "$OUT/$ASSET.tar.gz" )
+  echo "    Installed $VEE_ROOT/bin/qemu-system-aarch64 — vee will pick it up automatically."
+fi
+
 echo "==> Done. Asset: $OUT/$ASSET.tar.gz"
-echo "    Update internal/qemubin/version.go:"
+echo "    For a one-machine local install, re-run with INSTALL_LOCAL=1 (drops the"
+echo "    bundle into ~/.vee; no release needed)."
+echo "    To publish for all users, update internal/qemubin/version.go:"
 echo "      PinnedVersion = \"qemu-${QEMU_VERSION}-${VEE_SUFFIX}\""
 echo "      Checksums[\"darwin-arm64\"] = \"$(cut -d' ' -f1 "$OUT/$ASSET.tar.gz.sha256")\""
