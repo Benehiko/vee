@@ -4,11 +4,12 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/Benehiko/vee/internal/platform"
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/providers/structs"
 	"github.com/knadh/koanf/v2"
+
+	"github.com/Benehiko/vee/internal/platform"
 )
 
 // firstExisting returns the first path in candidates that exists on disk, or

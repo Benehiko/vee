@@ -37,7 +37,7 @@ func makeTarGz(t *testing.T, path string, entries map[string]string) {
 	if err := gz.Close(); err != nil {
 		t.Fatalf("close gzip: %v", err)
 	}
-	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
+	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
 		t.Fatalf("write tar.gz: %v", err)
 	}
 }

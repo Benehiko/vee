@@ -156,16 +156,6 @@ func WithArchitecture(arch string) QemuOptions {
 	}
 }
 
-// WithMachineType overrides the QEMU machine type (e.g. "virt", "q35",
-// "vmapple"). Empty leaves the provider default chosen in NewEmptyMachine.
-func WithMachineType(machineType string) QemuOptions {
-	return func(q *BaseMachine) {
-		if machineType != "" {
-			q.machineType = machineType
-		}
-	}
-}
-
 func WithNIC(nic *NIC) QemuOptions {
 	return func(q *BaseMachine) {
 		q.nics = append(q.nics, nic)

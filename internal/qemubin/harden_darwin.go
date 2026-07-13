@@ -31,6 +31,7 @@ func hardenBinary(binPath string) error {
 
 	// Best-effort quarantine removal (ignore errors: the xattr may be absent).
 	if _, err := exec.LookPath("xattr"); err == nil {
+		//nolint:gosec,noctx // fixed "xattr" binary; veeRoot is derived from binPath (UserHomeDir + fixed names), not user input. Best-effort cleanup.
 		_ = exec.Command("xattr", "-dr", "com.apple.quarantine", veeRoot).Run()
 	}
 
@@ -53,6 +54,7 @@ func hardenBinary(binPath string) error {
 		return err
 	}
 
+	//nolint:gosec,noctx // codesign is a LookPath-resolved absolute path; entitlements/binPath are package-derived temp/install paths, not user input.
 	out, err := exec.Command(codesign,
 		"--force", "--sign", "-",
 		"--entitlements", tmp.Name(),

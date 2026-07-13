@@ -9,11 +9,12 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/codingsince1985/checksum"
+	"go.uber.org/zap"
+
 	"github.com/Benehiko/vee/internal/platform"
 	"github.com/Benehiko/vee/internal/utils"
 	"github.com/Benehiko/vee/provider"
-	"github.com/codingsince1985/checksum"
-	"go.uber.org/zap"
 )
 
 // fedoraReleasesBase is the Fedora mirror-redirect base for released images.

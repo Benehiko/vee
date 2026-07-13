@@ -6,8 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Benehiko/vee/internal/platform"
 	"go.uber.org/goleak"
+
+	"github.com/Benehiko/vee/internal/platform"
 )
 
 func TestMain(m *testing.M) {
