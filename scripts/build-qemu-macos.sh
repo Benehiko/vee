@@ -44,8 +44,15 @@ brew install meson ninja pkg-config glib pixman dtc capstone libslirp \
 # qemu-virgl tap, which carries Akihiko Odaki's not-yet-upstream macOS GL patches.
 # MoltenVK provides host Vulkan for the Venus path.
 brew tap knazarov/qemu-virgl || true
+# Homebrew >= 6 requires explicit trust for third-party taps before it will load
+# their formulae — and while an untrusted tap is present it also refuses to
+# resolve the plain-core fallback below. Trust this specific tap (scoped, not the
+# broad HOMEBREW_NO_REQUIRE_TAP_TRUST); a no-op on older Homebrew without trust.
+brew trust knazarov/qemu-virgl 2>/dev/null || true
+# The tap's patched libepoxy is named "libepoxy-angle" (it carries the ANGLE
+# GLES->Metal patches), not "libepoxy".
 brew install knazarov/qemu-virgl/libangle \
-  knazarov/qemu-virgl/libepoxy \
+  knazarov/qemu-virgl/libepoxy-angle \
   knazarov/qemu-virgl/virglrenderer || {
     echo "warning: qemu-virgl tap formulae unavailable; falling back to plain libepoxy/virglrenderer (NO macOS GL accel)" >&2
     brew install libepoxy virglrenderer
@@ -55,11 +62,18 @@ brew install molten-vk vulkan-headers || true
 BREW_PREFIX="$(brew --prefix)"
 # Collect pkg-config paths for the (possibly cellar-pinned) GL deps.
 PKGS="$BREW_PREFIX/lib/pkgconfig:$BREW_PREFIX/share/pkgconfig"
-for f in libangle libepoxy virglrenderer; do
+for f in libangle libepoxy-angle virglrenderer; do
   p="$(brew --prefix "$f" 2>/dev/null || true)"
   [[ -n "$p" ]] && PKGS="$p/lib/pkgconfig:$PKGS"
 done
 export PKG_CONFIG_PATH="$PKGS"
+
+# QEMU's configure creates a Python venv (mkvenv) that needs "distlib" to build
+# console-script wrappers. Some python.org framework builds ship pip without a
+# usable standalone distlib, which makes configure abort with "found no usable
+# distlib". Ensure it up front against the same python3 configure will pick
+# (harmless if already present).
+python3 -m pip install --user distlib >/dev/null 2>&1 || true
 
 echo "==> Fetching QEMU $QEMU_VERSION"
 mkdir -p "$WORK" && cd "$WORK"
@@ -69,6 +83,23 @@ tar xf qemu.tar.xz
 cd "qemu-${QEMU_VERSION}"
 
 echo "==> Configuring QEMU (cocoa + opengl + virglrenderer + hvf, aarch64-softmmu)"
+# libangle ships no pkg-config file, and libepoxy-angle's headers #include
+# <EGL/...> from libangle, so PKG_CONFIG_PATH alone leaves QEMU unable to find
+# EGL/eglplatform.h. QEMU 10.x also does not thread configure's --extra-cflags
+# through to its ui/egl-*.c objects, so pass the ANGLE/epoxy/virgl include and
+# lib dirs through CPATH/LIBRARY_PATH (which clang always honors) — plus the
+# matching --extra-* flags, mirroring the knazarov qemu-virgl formula.
+GLFLAGS=""
+for f in libangle libepoxy-angle virglrenderer; do
+  p="$(brew --prefix "$f" 2>/dev/null || true)"
+  [[ -z "$p" ]] && continue
+  GLFLAGS="$GLFLAGS --extra-cflags=-I$p/include --extra-ldflags=-L$p/lib"
+  CPATH="${CPATH:+$CPATH:}$p/include"
+  LIBRARY_PATH="${LIBRARY_PATH:+$LIBRARY_PATH:}$p/lib"
+done
+export CPATH LIBRARY_PATH
+# Homebrew prefixes contain no spaces, so word-splitting $GLFLAGS is intentional.
+# shellcheck disable=SC2086
 ./configure \
   --prefix=/usr/local \
   --target-list=aarch64-softmmu \
@@ -79,7 +110,8 @@ echo "==> Configuring QEMU (cocoa + opengl + virglrenderer + hvf, aarch64-softmm
   --enable-slirp \
   --enable-curl \
   --disable-docs \
-  --disable-debug-info
+  --disable-debug-info \
+  $GLFLAGS
 
 echo "==> Building"
 make -j"$JOBS"
