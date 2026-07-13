@@ -1,0 +1,131 @@
+name: Release
+
+# Cut a release when a v* tag is pushed. Builds the vee binary for every
+# supported host (linux + macOS, amd64 + arm64), then publishes a GitHub
+# Release whose body lists the commits since the previous tag.
+#
+# Windows is intentionally absent: vee is a host-side hypervisor driver that
+# relies on vsock, VFIO and POSIX syscalls (syscall.Setsid), so it only builds
+# on linux/darwin today. Windows support is tracked separately.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build vee (${{ matrix.goos }}/${{ matrix.goarch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            runner: ubuntu-latest
+          - goos: linux
+            goarch: arm64
+            runner: ubuntu-latest
+          - goos: darwin
+            goarch: amd64
+            runner: macos-15
+          - goos: darwin
+            goarch: arm64
+            runner: macos-15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+          VERSION: ${{ github.ref_name }}
+        run: |
+          COMMIT="$(git rev-parse --short HEAD)"
+          DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          PKG="github.com/Benehiko/vee/cmd"
+          LDFLAGS="-s -w \
+            -X ${PKG}.version=${VERSION} \
+            -X ${PKG}.commit=${COMMIT} \
+            -X ${PKG}.date=${DATE}"
+          go build -mod=vendor -trimpath -ldflags "${LDFLAGS}" -o vee .
+
+      - name: Package binary
+        id: package
+        run: |
+          mkdir -p dist
+          ASSET="vee-${{ github.ref_name }}-${{ matrix.goos }}-${{ matrix.goarch }}"
+          tar czf "dist/${ASSET}.tar.gz" vee LICENSE README.md THIRD_PARTY_LICENSES
+          ( cd dist && shasum -a 256 "${ASSET}.tar.gz" > "${ASSET}.tar.gz.sha256" )
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vee-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Full history so we can diff against the previous tag for the changelog.
+          fetch-depth: 0
+
+      - name: Build changelog
+        id: changelog
+        run: |
+          TAG="${{ github.ref_name }}"
+          PREV="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+          {
+            echo "## What's changed"
+            echo
+            if [ -n "${PREV}" ]; then
+              echo "Commits since \`${PREV}\`:"
+              echo
+              git log --no-merges --pretty='- %s (%h)' "${PREV}..${TAG}"
+              RANGE="${PREV}...${TAG}"
+            else
+              echo "Commits in this release:"
+              echo
+              git log --no-merges --pretty='- %s (%h)' "${TAG}"
+              RANGE=""
+            fi
+            echo
+            if [ -n "${RANGE}" ]; then
+              echo "**Full changelog:** https://github.com/${{ github.repository }}/compare/${RANGE}"
+            fi
+          } > body.md
+          cat body.md
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create release
+        uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8 # v2.3.2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: body.md
+          files: dist/*
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}

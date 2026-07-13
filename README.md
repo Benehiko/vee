@@ -244,6 +244,28 @@ are staged: it runs the format check, lint, and build. Enable it once per clone
 with `make hooks`; bypass a single commit with `git commit --no-verify`. CI
 (lint + format + build + test) reads the Go version from `go.mod`.
 
+## Releases
+
+Pushing a `v*` tag triggers the release workflow
+([.github/workflows/release.yml](.github/workflows/release.yml)):
+
+```sh
+git tag v0.4.0
+git push origin v0.4.0
+```
+
+It cross-compiles the `vee` binary for every supported host — `linux/amd64`,
+`linux/arm64`, `darwin/amd64`, `darwin/arm64` — with the tag, commit, and build
+date injected via `-ldflags` (so `vee version` reports the release identity). Each
+build is packaged as a `.tar.gz` (binary + `LICENSE` + `README.md` +
+`THIRD_PARTY_LICENSES`) alongside a `.sha256` checksum, and a GitHub Release is
+published whose body lists the commits since the previous tag. Tags containing a
+hyphen (e.g. `v0.4.0-rc1`) are marked as pre-releases.
+
+Windows binaries are not produced yet: vee is a host-side hypervisor driver that
+depends on vsock, VFIO, and POSIX syscalls, so it currently only builds on Linux
+and macOS.
+
 ## Docs
 
 - [docs/prerequisites.md](docs/prerequisites.md) — system setup, groups, bridge networking, OVMF
