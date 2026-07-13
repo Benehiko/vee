@@ -8,16 +8,27 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"go.uber.org/zap"
-	"golang.org/x/sys/unix"
 
+	"github.com/Benehiko/vee/internal/platform"
 	"github.com/Benehiko/vee/internal/utils"
 	"github.com/Benehiko/vee/provider"
+)
+
+// Accelerator selects the QEMU acceleration backend emitted as -accel.
+type Accelerator string
+
+const (
+	// AccelKVM is the Linux Kernel-based Virtual Machine accelerator.
+	AccelKVM Accelerator = "kvm"
+	// AccelHVF is the macOS Hypervisor.framework accelerator.
+	AccelHVF Accelerator = "hvf"
+	// AccelTCG is the pure-software Tiny Code Generator (no hardware accel).
+	AccelTCG Accelerator = "tcg"
 )
 
 type VGA string
@@ -38,6 +49,7 @@ type BaseMachine struct {
 	basePath     string
 	name         string
 	architecture string
+	accelerator  Accelerator
 	cpu          *CPU
 	machineType  string
 	memory       string
@@ -125,6 +137,22 @@ func WithMemory(memory string) QemuOptions {
 func WithCPU(cpu *CPU) QemuOptions {
 	return func(q *BaseMachine) {
 		q.cpu = cpu
+	}
+}
+
+// WithAccelerator overrides the acceleration backend (e.g. AccelHVF on macOS,
+// AccelKVM on Linux). Empty leaves the host-derived default chosen in
+// NewEmptyMachine.
+func WithAccelerator(accel Accelerator) QemuOptions {
+	return func(q *BaseMachine) {
+		q.accelerator = accel
+	}
+}
+
+// WithArchitecture overrides the guest architecture (e.g. "aarch64", "x86_64").
+func WithArchitecture(arch string) QemuOptions {
+	return func(q *BaseMachine) {
+		q.architecture = arch
 	}
 }
 
@@ -233,7 +261,8 @@ func NewEmptyMachine(provider provider.Provider) (*BaseMachine, error) {
 		name:         utils.GeneratePetname(),
 		memory:       provider.Config().DefaultMemory,
 		machineType:  provider.Config().DefaultMachineType,
-		architecture: "x86_64",
+		architecture: platform.DefaultGuestArch(),
+		accelerator:  Accelerator(platform.DefaultAccelerator()),
 		cpu:          NewCPU(provider),
 	}, nil
 }
@@ -255,11 +284,28 @@ func (q *BaseMachine) Validate() error {
 	return nil
 }
 
+// effectiveMachineType augments the base machine type with arch-specific
+// options. The aarch64 "virt" board requires an explicit GIC version; under HVF
+// on Apple Silicon that is GICv3, and gic-version=max resolves to the host's
+// version. The option is only added when not already present so explicit
+// machine-type configuration is respected.
+func (q *BaseMachine) effectiveMachineType() string {
+	mt := q.machineType
+	if (q.architecture == "aarch64" || q.architecture == "arm64") &&
+		strings.HasPrefix(mt, "virt") && !strings.Contains(mt, "gic-version") {
+		mt += ",gic-version=max"
+	}
+	return mt
+}
+
 func (q *BaseMachine) Args() []string {
 	var args []string
-	args = append(args, "-machine", q.machineType)
+	args = append(args, "-machine", q.effectiveMachineType())
 	for _, g := range q.globals {
 		args = append(args, "-global", g)
+	}
+	if q.accelerator != "" {
+		args = append(args, "-accel", string(q.accelerator))
 	}
 	args = append(args, "-m", q.memory)
 
@@ -504,114 +550,10 @@ func (q *BaseMachine) start(ctx context.Context, detach bool) (*StartResult, err
 	return &StartResult{PID: pid}, nil
 }
 
-// applyVFIOLimits raises RLIMIT_MEMLOCK on the child process when VFIO devices
-// are configured. VFIO DMA-maps the entire guest RAM into the IOMMU; without
-// sufficient locked-memory headroom vfio_container_dma_map returns ENOMEM.
-//
-// Raising Max beyond the inherited hard limit requires CAP_SYS_RESOURCE. To
-// avoid that requirement, configure unlimited memlock system-wide:
-//
-//	/etc/security/limits.d/vee-vfio.conf:
-//	  * - memlock unlimited
-func (q *BaseMachine) applyVFIOLimits(pid int) error {
-	if len(q.vfioDevices) == 0 {
-		return nil
-	}
-	var before unix.Rlimit
-	if err := unix.Prlimit(pid, unix.RLIMIT_MEMLOCK, nil, &before); err != nil {
-		return fmt.Errorf("get memlock rlimit: %w", err)
-	}
-	q.provider.Logger().Info("VFIO memlock before",
-		zap.String("machine", q.name),
-		zap.Int("pid", pid),
-		zap.Uint64("soft_bytes", before.Cur),
-		zap.Uint64("hard_bytes", before.Max),
-	)
-
-	// Try to raise both soft and hard limits to infinity (requires CAP_SYS_RESOURCE
-	// or a pre-configured unlimited hard limit via /etc/security/limits.d/).
-	want := unix.Rlimit{Cur: unix.RLIM_INFINITY, Max: unix.RLIM_INFINITY}
-	if err := unix.Prlimit(pid, unix.RLIMIT_MEMLOCK, &want, nil); err != nil {
-		// Fall back to raising soft limit to the current hard limit.
-		fallback := unix.Rlimit{Cur: before.Max, Max: before.Max}
-		if err2 := unix.Prlimit(pid, unix.RLIMIT_MEMLOCK, &fallback, nil); err2 != nil {
-			return fmt.Errorf("set memlock rlimit: %w", err2)
-		}
-		q.provider.Logger().Warn("memlock hard limit capped — VFIO DMA map may fail; set 'memlock unlimited' in /etc/security/limits.d/vee-vfio.conf",
-			zap.String("machine", q.name),
-			zap.Uint64("hard_limit_bytes", before.Max),
-		)
-	} else {
-		q.provider.Logger().Info("VFIO memlock raised to unlimited",
-			zap.String("machine", q.name),
-			zap.Int("pid", pid),
-		)
-	}
-	return nil
-}
-
-// applyCPUPinning pins the QEMU process and all its threads to the configured
-// host CPU indices using taskset. It reads /proc/<pid>/task/ to discover vCPU
-// threads that QEMU spawns after start.
-//
-// This is a best-effort operation: failures are logged but not fatal. The host
-// kernel can still schedule other work onto the pinned cores; for full isolation
-// add isolcpus=<range> to the host kernel cmdline.
-func (q *BaseMachine) applyCPUPinning(pid int) {
-	if len(q.cpuPinning) == 0 {
-		return
-	}
-
-	taskset, err := exec.LookPath("taskset")
-	if err != nil {
-		q.provider.Logger().Warn("taskset not found — CPU pinning skipped",
-			zap.String("machine", q.name))
-		return
-	}
-
-	// Build comma-separated CPU list: "4,5,6,7"
-	cpuList := make([]string, len(q.cpuPinning))
-	for i, c := range q.cpuPinning {
-		cpuList[i] = strconv.Itoa(c)
-	}
-	mask := strings.Join(cpuList, ",")
-
-	// Brief pause so QEMU has time to spawn its vCPU threads.
-	time.Sleep(200 * time.Millisecond)
-
-	// Collect all thread IDs from /proc/<pid>/task/.
-	taskDir := fmt.Sprintf("/proc/%d/task", pid)
-	entries, err := os.ReadDir(taskDir)
-	if err != nil {
-		q.provider.Logger().Warn("CPU pinning: cannot read task dir",
-			zap.String("machine", q.name),
-			zap.Int("pid", pid),
-			zap.Error(err))
-		return
-	}
-
-	pinned := 0
-	for _, e := range entries {
-		tid := e.Name()
-		//nolint:gosec,noctx // taskset is a resolved binary; mask/tid are internally derived CPU indices/PIDs. Best-effort post-start pinning; no ctx in scope.
-		out, err := exec.Command(taskset, "-cp", mask, tid).CombinedOutput()
-		if err != nil {
-			q.provider.Logger().Warn("CPU pinning: taskset failed for thread",
-				zap.String("machine", q.name),
-				zap.String("tid", tid),
-				zap.String("output", strings.TrimSpace(string(out))),
-				zap.Error(err))
-			continue
-		}
-		pinned++
-	}
-
-	q.provider.Logger().Info("CPU pinning applied",
-		zap.String("machine", q.name),
-		zap.Int("pid", pid),
-		zap.String("cpus", mask),
-		zap.Int("threads_pinned", pinned))
-}
+// applyVFIOLimits and applyCPUPinning are host-platform specific. VFIO memlock
+// raising (RLIMIT_MEMLOCK) and vCPU pinning (taskset + /proc) are Linux-only;
+// see machine_linux.go for the real implementations and machine_darwin.go for
+// the no-op fallbacks used on macOS.
 
 // checkAlive returns true if the process with the given PID is still running.
 func checkAlive(pid int) bool {

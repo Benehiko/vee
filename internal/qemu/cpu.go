@@ -53,13 +53,12 @@ var GamingCPUFlags = []string{
 }
 
 type CPU struct {
-	CPU       CPUModel
-	Flags     []string
-	SMP       int
-	Sockets   int
-	Threads   int
-	Cores     int
-	EnableKVM bool
+	CPU     CPUModel
+	Flags   []string
+	SMP     int
+	Sockets int
+	Threads int
+	Cores   int
 }
 
 var _ Builder = &CPU{}
@@ -87,19 +86,12 @@ func WithSMP(smp, sockets, threads, cores int) func(*CPU) {
 	}
 }
 
-func WithEnableKVM(enableKVM bool) func(*CPU) {
-	return func(c *CPU) {
-		c.EnableKVM = enableKVM
-	}
-}
-
 func NewCPU(provider provider.Provider, opts ...CPUOption) *CPU {
 	conf := provider.Config()
 
 	cpu := &CPU{
-		CPU:       CPUModel(conf.DefaultCPUModel),
-		SMP:       conf.DefaultCPUs,
-		EnableKVM: true,
+		CPU: CPUModel(conf.DefaultCPUModel),
+		SMP: conf.DefaultCPUs,
 	}
 
 	for _, opt := range opts {
@@ -133,8 +125,7 @@ func (q *CPU) Args() []string {
 		smp += "," + strings.Join(smpArgs, ",")
 	}
 	args = append(args, "-smp", smp)
-	if q.EnableKVM {
-		args = append(args, "-enable-kvm")
-	}
+	// Acceleration is selected at the machine level via -accel (see
+	// BaseMachine.accelerator); the CPU model only contributes -cpu/-smp.
 	return args
 }

@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       qemu_version:
-        description: "QEMU upstream version (e.g. 9.2.3)"
+        description: "QEMU upstream version (e.g. 10.0.2)"
         required: true
-        default: "9.2.3"
+        default: "10.0.2"
       vee_suffix:
         description: "vee build suffix (e.g. vee1)"
         required: true
@@ -80,13 +80,13 @@ jobs:
 
       - name: Package binary
         run: |
-          mkdir -p dist
+          # Bundle layout (bin/) matches what vee's qemubin extracts into ~/.vee.
+          mkdir -p dist bundle/bin
           ASSET="qemu-system-x86_64-linux-${{ matrix.goarch }}"
-          cp build/qemu-system-x86_64 dist/qemu-system-x86_64
-          chmod +x dist/qemu-system-x86_64
-          cd dist
-          tar czf "${ASSET}.tar.gz" qemu-system-x86_64
-          sha256sum "${ASSET}.tar.gz" > "${ASSET}.tar.gz.sha256"
+          cp build/qemu-system-x86_64 bundle/bin/qemu-system-x86_64
+          chmod +x bundle/bin/qemu-system-x86_64
+          ( cd bundle && tar czf "../dist/${ASSET}.tar.gz" bin )
+          ( cd dist && sha256sum "${ASSET}.tar.gz" > "${ASSET}.tar.gz.sha256" )
           echo "asset=${ASSET}.tar.gz" >> "$GITHUB_OUTPUT"
         id: package
 
@@ -98,9 +98,33 @@ jobs:
             dist/*.tar.gz
             dist/*.sha256
 
+  build-macos:
+    name: Build vee-qemu (darwin-arm64)
+    # Apple Silicon runner: HVF + cocoa + virglrenderer/ANGLE are arm64/macOS only.
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Build virgl-capable QEMU bundle
+        env:
+          QEMU_VERSION: ${{ inputs.qemu_version }}
+          VEE_SUFFIX: ${{ inputs.vee_suffix }}
+        run: bash scripts/build-qemu-macos.sh
+
+      - name: Show checksum
+        run: cat dist/*.sha256 >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-darwin-arm64
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+
   release:
     name: Create GitHub Release
-    needs: build
+    needs: [build, build-macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -122,17 +146,21 @@ jobs:
           tag_name: ${{ steps.tag.outputs.tag }}
           name: "vee-qemu ${{ inputs.qemu_version }}-${{ inputs.vee_suffix }}"
           body: |
-            Custom QEMU ${{ inputs.qemu_version }} build for vee gaming VMs.
+            Custom QEMU ${{ inputs.qemu_version }} build for vee.
 
-            **Enabled features:** OpenGL · virglrenderer · SDL2 · GTK3 · SPICE · USB redir · KVM · slirp
+            **Linux (x86_64):** OpenGL · virglrenderer · SDL2 · GTK3 · SPICE · USB redir · KVM · slirp
+            **macOS (aarch64, Apple Silicon):** self-contained bundle with cocoa · OpenGL · virglrenderer (ANGLE/Metal) · MoltenVK (Venus) · HVF, code-signed with the hypervisor entitlement
+
+            Assets are bundles (bin/, lib/, share/) extracted into ~/.vee by vee's qemubin package.
 
             After publishing this release, update `internal/qemubin/version.go`:
             ```go
             const PinnedVersion = "${{ steps.tag.outputs.tag }}"
 
             var Checksums = map[string]string{
-                "linux-amd64": "<sha256 from qemu-system-x86_64-linux-amd64.tar.gz.sha256>",
-                "linux-arm64": "<sha256 from qemu-system-x86_64-linux-arm64.tar.gz.sha256>",
+                "linux-amd64":  "<sha256 from qemu-system-x86_64-linux-amd64.tar.gz.sha256>",
+                "linux-arm64":  "<sha256 from qemu-system-x86_64-linux-arm64.tar.gz.sha256>",
+                "darwin-arm64": "<sha256 from qemu-system-aarch64-darwin-arm64.tar.gz.sha256>",
             }
             ```
           files: dist/*

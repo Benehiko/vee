@@ -21,7 +21,7 @@ func qgaReadLine(conn net.Conn) string {
 }
 
 func TestQGADial(t *testing.T) {
-	sockPath := filepath.Join(t.TempDir(), "qga.sock")
+	sockPath := filepath.Join(shortSockDir(t), "qga.sock")
 	cleanup := mockSocketServer(t, sockPath, func(conn net.Conn) {
 		defer func() { _ = conn.Close() }()
 		buf := make([]byte, 1)
@@ -37,7 +37,7 @@ func TestQGADial(t *testing.T) {
 }
 
 func TestQGAGuestPing(t *testing.T) {
-	sockPath := filepath.Join(t.TempDir(), "qga.sock")
+	sockPath := filepath.Join(shortSockDir(t), "qga.sock")
 	cleanup := mockSocketServer(t, sockPath, func(conn net.Conn) {
 		defer func() { _ = conn.Close() }()
 		line := qgaReadLine(conn)
@@ -60,7 +60,7 @@ func TestQGAGuestPing(t *testing.T) {
 }
 
 func TestQGAGuestExec(t *testing.T) {
-	sockPath := filepath.Join(t.TempDir(), "qga.sock")
+	sockPath := filepath.Join(shortSockDir(t), "qga.sock")
 	cleanup := mockSocketServer(t, sockPath, func(conn net.Conn) {
 		defer func() { _ = conn.Close() }()
 		line := qgaReadLine(conn)
@@ -91,7 +91,7 @@ func TestQGAGuestExec(t *testing.T) {
 
 func TestQGAGuestExecStatus(t *testing.T) {
 	encoded := base64.StdEncoding.EncodeToString([]byte("hello"))
-	sockPath := filepath.Join(t.TempDir(), "qga.sock")
+	sockPath := filepath.Join(shortSockDir(t), "qga.sock")
 	cleanup := mockSocketServer(t, sockPath, func(conn net.Conn) {
 		defer func() { _ = conn.Close() }()
 		qgaReadLine(conn)
@@ -122,7 +122,7 @@ func TestQGAGuestExecStatus(t *testing.T) {
 
 func TestQGARunCommand(t *testing.T) {
 	outEncoded := base64.StdEncoding.EncodeToString([]byte("output text\n"))
-	sockPath := filepath.Join(t.TempDir(), "qga.sock")
+	sockPath := filepath.Join(shortSockDir(t), "qga.sock")
 	cleanup := mockSocketServer(t, sockPath, func(conn net.Conn) {
 		defer func() { _ = conn.Close() }()
 		// guest-exec
@@ -158,7 +158,7 @@ func TestQGAGuestNetworkGetInterfaces(t *testing.T) {
 		`{"name":"lo","hardware-address":"00:00:00:00:00:00","ip-addresses":[{"ip-address":"127.0.0.1","ip-address-type":"ipv4","prefix":8}]}` +
 		`]}`
 
-	sockPath := filepath.Join(t.TempDir(), "qga.sock")
+	sockPath := filepath.Join(shortSockDir(t), "qga.sock")
 	cleanup := mockSocketServer(t, sockPath, func(conn net.Conn) {
 		defer func() { _ = conn.Close() }()
 		qgaReadLine(conn)

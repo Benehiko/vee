@@ -106,11 +106,17 @@ created_at: 2026-01-01T00:00:00Z
 
 | Field | Description |
 |-------|-------------|
-| `mode` | `passthrough` |
-| `pci_addr` | Primary GPU PCI address, e.g. `0000:08:00.0` |
-| `extra_vfio_addrs` | Additional IOMMU group peer addresses |
+| `mode` | `none`, `virtio` (accelerated virtio-gpu), `passthrough` (VFIO, Linux host only), or `apple-gfx` (macOS guest, macOS host) |
+| `pci_addr` | Primary GPU PCI address, e.g. `0000:08:00.0` (passthrough) |
+| `extra_vfio_addrs` | Additional IOMMU group peer addresses (passthrough) |
 | `rom_file` | Path to VBIOS dump (required for AMD Navi) |
 | `anti_detect` | Hide virtualization artifacts from anti-cheat |
+| `gl_backend` | Host GL backend for `virtio` mode: `es` (ANGLE/Metal, macOS default, stable), `core` (native, unstable), `on` (Linux EGL). Empty picks the host default. |
+| `venus` | Enable Vulkan-over-virtio (Venus) on the virtio-gpu-gl device. Experimental; needs a Venus-capable QEMU and a host Vulkan driver (MoltenVK on macOS). |
+| `host_mem` | Host memory window for Venus blob resources, e.g. `8G` (only with `venus: true`). |
+
+On a macOS host, `mode: virtio` emits `virtio-gpu-gl-pci` with `-display cocoa,gl=es`;
+`mode: passthrough` is rejected (VFIO is Linux-only). See [docs/macos.md](../../../docs/macos.md).
 
 ### uefi
 

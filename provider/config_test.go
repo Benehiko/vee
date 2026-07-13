@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"go.uber.org/goleak"
+
+	"github.com/Benehiko/vee/internal/platform"
 )
 
 func TestMain(m *testing.M) {
@@ -37,8 +39,11 @@ func TestNewDefaultConfigDefaults(t *testing.T) {
 	if cfg.DefaultCPUModel != "host" {
 		t.Errorf("DefaultCPUModel: got %q, want host", cfg.DefaultCPUModel)
 	}
-	if cfg.DefaultMachineType != "q35" {
-		t.Errorf("DefaultMachineType: got %q, want q35", cfg.DefaultMachineType)
+	// DefaultMachineType is host-arch derived: "virt" for aarch64 hosts (Apple
+	// Silicon), "q35" for x86_64.
+	wantMachine := platform.DefaultMachineType()
+	if cfg.DefaultMachineType != wantMachine {
+		t.Errorf("DefaultMachineType: got %q, want %q", cfg.DefaultMachineType, wantMachine)
 	}
 	if cfg.RecreateDisks {
 		t.Error("RecreateDisks should default to false")

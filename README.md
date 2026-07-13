@@ -20,6 +20,8 @@ vee stop myvm      # graceful shutdown
 ```
 
 > **Prerequisites:** KVM access, bridge networking, disk group membership, and OVMF firmware. See [docs/prerequisites.md](docs/prerequisites.md).
+>
+> **macOS (Apple Silicon):** vee also runs on Apple Silicon Macs via Hypervisor.framework (HVF) with aarch64 guests and accelerated virtio-gpu. See [docs/macos.md](docs/macos.md) for setup, the per-guest GPU matrix, and limitations.
 
 ## Templates
 
@@ -30,6 +32,7 @@ Templates apply sane defaults (memory, CPUs, disks, networking, cloud-init) auto
 | `ubuntu-server` | Ubuntu 24.04 LTS · UEFI · user-mode NIC (default) |
 | `devbox` | Docker + zsh via cloud-init · `--distro` flag (ubuntu/arch/fedora) |
 | `server` | openssh + ufw + fail2ban via cloud-init · `--distro` flag |
+| `desktop` | GNOME + Mesa · accelerated virtio-gpu (virgl) · `--distro` flag (fedora/ubuntu) · Apple Silicon |
 | `gaming-arch` | Arch Linux + KDE Plasma + Steam · 16G / 8 CPUs · virgl or GPU passthrough |
 | `gaming-bazzite` | Bazzite (Fedora Atomic) gaming ISO · 16G / 8 CPUs · KDE Plasma |
 | `gaming` | Legacy alias for `gaming-arch` with passthrough |
@@ -67,7 +70,7 @@ Both the distro and `distro-version` forms shell-complete from the built-in list
 |--------|-------|
 | `ubuntu` | Cloud image (cloud-init ready) — 24.04, 22.04, 20.04 |
 | `arch` | Bootstrap image |
-| `fedora` | Cloud image — 42, 41, 40 |
+| `fedora` | Cloud image (cloud-init ready) — 42, 41 · aarch64 + x86_64 |
 | `alpine` | Cloud image |
 | `bazzite` | Fedora Atomic gaming ISO |
 | `truenas` | TrueNAS SCALE installer ISO |

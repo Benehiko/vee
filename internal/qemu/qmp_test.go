@@ -36,7 +36,7 @@ func qmpHandshake(t *testing.T, conn net.Conn) {
 }
 
 func TestQMPGreetingAndCapabilities(t *testing.T) {
-	sockPath := filepath.Join(t.TempDir(), "qmp.sock")
+	sockPath := filepath.Join(shortSockDir(t), "qmp.sock")
 	cleanup := mockSocketServer(t, sockPath, func(conn net.Conn) {
 		defer func() { _ = conn.Close() }()
 		qmpHandshake(t, conn)
@@ -54,7 +54,7 @@ func TestQMPGreetingAndCapabilities(t *testing.T) {
 }
 
 func TestQMPCommandSerialization(t *testing.T) {
-	sockPath := filepath.Join(t.TempDir(), "qmp.sock")
+	sockPath := filepath.Join(shortSockDir(t), "qmp.sock")
 	cleanup := mockSocketServer(t, sockPath, func(conn net.Conn) {
 		defer func() { _ = conn.Close() }()
 		qmpHandshake(t, conn)
@@ -81,7 +81,7 @@ func TestQMPCommandSerialization(t *testing.T) {
 }
 
 func TestQMPQueryStatus(t *testing.T) {
-	sockPath := filepath.Join(t.TempDir(), "qmp.sock")
+	sockPath := filepath.Join(shortSockDir(t), "qmp.sock")
 	cleanup := mockSocketServer(t, sockPath, func(conn net.Conn) {
 		defer func() { _ = conn.Close() }()
 		qmpHandshake(t, conn)
@@ -108,7 +108,7 @@ func TestQMPQueryStatus(t *testing.T) {
 }
 
 func TestQMPErrorResponse(t *testing.T) {
-	sockPath := filepath.Join(t.TempDir(), "qmp.sock")
+	sockPath := filepath.Join(shortSockDir(t), "qmp.sock")
 	cleanup := mockSocketServer(t, sockPath, func(conn net.Conn) {
 		defer func() { _ = conn.Close() }()
 		qmpHandshake(t, conn)
@@ -142,7 +142,7 @@ func TestQMPDialTimeout(t *testing.T) {
 }
 
 func TestQMPQueryRaw(t *testing.T) {
-	sockPath := filepath.Join(t.TempDir(), "qmp.sock")
+	sockPath := filepath.Join(shortSockDir(t), "qmp.sock")
 	cleanup := mockSocketServer(t, sockPath, func(conn net.Conn) {
 		defer func() { _ = conn.Close() }()
 		qmpHandshake(t, conn)

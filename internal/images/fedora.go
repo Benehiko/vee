@@ -12,139 +12,121 @@ import (
 	"github.com/codingsince1985/checksum"
 	"go.uber.org/zap"
 
+	"github.com/Benehiko/vee/internal/platform"
 	"github.com/Benehiko/vee/internal/utils"
 	"github.com/Benehiko/vee/provider"
 )
 
-const (
-	// FedoraReleaseDirURL is the per-release ISO directory. The exact ISO and
-	// CHECKSUM filenames (which embed a per-release build number such as "1.1"
-	// or "1.4") are discovered by scraping this listing rather than hardcoded.
-	FedoraReleaseDirURL = "https://download.fedoraproject.org/pub/fedora/linux/releases/%s/Server/x86_64/iso/"
-)
+// fedoraReleasesBase is the Fedora mirror-redirect base for released images.
+const fedoraReleasesBase = "https://download.fedoraproject.org/pub/fedora/linux/releases"
 
 // FedoraVersion is a Fedora release number like "42".
 type FedoraVersion string
 
-// KnownFedoraVersions lists supported Fedora versions, newest first.
-// Only releases still served under /releases/ are listed; older releases are
-// moved to archives.fedoraproject.org under a different URL.
+// KnownFedoraVersions lists supported Fedora versions, newest first. Only
+// releases whose cloud image follows the modern "Fedora-Cloud-Base-Generic"
+// naming are listed; older releases used a different scheme and are omitted.
 var KnownFedoraVersions = []FedoraVersion{
 	"42",
 	"41",
 }
 
-type FedoraImage struct {
+// fedoraCompose maps a Fedora release to its cloud-image "compose" suffix. The
+// suffix is part of the published filename (e.g. the "1.1" in
+// Fedora-Cloud-Base-Generic-42-1.1.aarch64.qcow2) and is bumped per respin, so
+// it must be tracked alongside the release number.
+var fedoraCompose = map[FedoraVersion]string{
+	"42": "1.1",
+	"41": "1.4",
+}
+
+// FedoraCloudImage is the pre-installed Fedora Cloud Base qcow2 image. It boots
+// with cloud-init via the NoCloud datasource (same as the Ubuntu cloud image),
+// so the devbox/server/desktop templates can drive it with standard user-data.
+//
+// The earlier Server DVD ISO was unusable as a qcow2 backing file (which every
+// cloud-init template requires), so this replaces it. The qcow2 is published
+// for both aarch64 and x86_64, which is what enables Fedora guests on Apple
+// Silicon.
+type FedoraCloudImage struct {
 	*BaseImage
 	version FedoraVersion
-
-	// isoName is the ISO filename resolved from the release listing at download
-	// time (e.g. "Fedora-Server-dvd-x86_64-42-1.1.iso"). Empty until resolved.
-	isoName string
+	// arch is the Fedora arch slug ("aarch64" or "x86_64").
+	arch string
 }
 
-func NewFedoraImage(p provider.Provider, version FedoraVersion) *FedoraImage {
-	return &FedoraImage{
+// NewFedoraCloudImage builds the cloud image for a release on the host's native
+// guest architecture. hostArch is a Go GOARCH value ("arm64"/"amd64"); it is
+// mapped to the Fedora arch slug internally.
+func NewFedoraCloudImage(p provider.Provider, version FedoraVersion, hostArch string) *FedoraCloudImage {
+	return &FedoraCloudImage{
 		BaseImage: NewBaseImage(p),
 		version:   version,
+		arch:      platform.GuestArchForHostArch(hostArch),
 	}
 }
 
-func (f *FedoraImage) Distro() string  { return "fedora" }
-func (f *FedoraImage) Version() string { return string(f.version) }
+func (f *FedoraCloudImage) Distro() string  { return "fedora" }
+func (f *FedoraCloudImage) Version() string { return string(f.version) }
 
-// Name returns the resolved ISO filename once known, otherwise a stable
-// placeholder scoped to the version so the cache path is deterministic.
-func (fi *FedoraImage) Name() string {
-	if fi.isoName != "" {
-		return fi.isoName
-	}
-	return fmt.Sprintf("Fedora-Server-dvd-x86_64-%s.iso", fi.version)
+func (f *FedoraCloudImage) compose() string { return fedoraCompose[f.version] }
+
+func (f *FedoraCloudImage) Name() string {
+	return fmt.Sprintf("Fedora-Cloud-Base-Generic-%s-%s.%s.qcow2", f.version, f.compose(), f.arch)
 }
 
-func (fi *FedoraImage) AbsolutePath() string {
-	return filepath.Join(fi.basePath, fi.Name())
+func (f *FedoraCloudImage) AbsolutePath() string {
+	return filepath.Join(f.basePath, f.Name())
 }
 
-func (fi *FedoraImage) Delete() error {
-	if _, err := os.Stat(fi.AbsolutePath()); os.IsNotExist(err) {
+func (f *FedoraCloudImage) imageURL() string {
+	return fmt.Sprintf("%s/%s/Cloud/%s/images/%s", fedoraReleasesBase, f.version, f.arch, f.Name())
+}
+
+func (f *FedoraCloudImage) checksumURL() string {
+	return fmt.Sprintf("%s/%s/Cloud/%s/images/Fedora-Cloud-%s-%s-%s-CHECKSUM",
+		fedoraReleasesBase, f.version, f.arch, f.version, f.compose(), f.arch)
+}
+
+func (f *FedoraCloudImage) Delete() error {
+	if _, err := os.Stat(f.AbsolutePath()); os.IsNotExist(err) {
 		return nil
 	}
-	return os.Remove(fi.AbsolutePath())
+	return os.Remove(f.AbsolutePath())
 }
 
-func (fi *FedoraImage) checksum() (string, error) {
-	return checksum.SHA256sum(fi.AbsolutePath())
+func (f *FedoraCloudImage) checksum() (string, error) {
+	return checksum.SHA256sum(f.AbsolutePath())
 }
 
-// resolveNames scrapes the release ISO directory and returns the DVD ISO and
-// CHECKSUM filenames for this version.
-func (fi *FedoraImage) resolveNames(ctx context.Context, client *http.Client) (isoName, checksumName string, err error) {
-	dirURL := fmt.Sprintf(FedoraReleaseDirURL, fi.version)
-	req, err := http.NewRequestWithContext(ctx, "GET", dirURL, nil)
-	if err != nil {
-		return "", "", err
+func (f *FedoraCloudImage) Download(ctx context.Context) error {
+	if _, ok := fedoraCompose[f.version]; !ok {
+		return fmt.Errorf("unsupported Fedora version %q (known: %v)", f.version, KnownFedoraVersions)
 	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", "", err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return "", "", fmt.Errorf("fedora: list %s: HTTP %d", dirURL, resp.StatusCode)
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", "", err
-	}
-	for _, href := range hrefsIn(string(body)) {
-		switch {
-		case strings.HasPrefix(href, "Fedora-Server-dvd-x86_64-") && strings.HasSuffix(href, ".iso"):
-			isoName = href
-		case strings.HasPrefix(href, "Fedora-Server-") && strings.HasSuffix(href, "-x86_64-CHECKSUM"):
-			checksumName = href
-		}
-	}
-	if isoName == "" || checksumName == "" {
-		return "", "", fmt.Errorf("fedora: could not find ISO/CHECKSUM in %s", dirURL)
-	}
-	return isoName, checksumName, nil
-}
 
-func (fi *FedoraImage) Download(ctx context.Context) error {
-	fi.provider.Logger().Info("downloading", zap.String("distro", "fedora"), zap.String("version", string(fi.version)))
+	f.provider.Logger().Info("downloading", zap.String("file", f.Name()))
 
 	httpClient := utils.DirectHTTPClient()
-	dirURL := fmt.Sprintf(FedoraReleaseDirURL, fi.version)
-
-	isoName, checksumName, err := fi.resolveNames(ctx, httpClient)
+	req, err := http.NewRequestWithContext(ctx, "GET", f.checksumURL(), nil)
 	if err != nil {
 		return err
 	}
-	fi.isoName = isoName
 
-	// Fetch the CHECKSUM file.
-	req, err := http.NewRequestWithContext(ctx, "GET", dirURL+checksumName, nil)
-	if err != nil {
-		return err
-	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("fedora: fetch checksum %s: HTTP %d", dirURL+checksumName, resp.StatusCode)
-	}
+
 	b, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return err
 	}
 
-	// CHECKSUM file format: SHA256 (filename) = hash
+	// CHECKSUM file is BSD-style: "SHA256 (filename) = hash".
 	var targetChecksum string
 	for line := range strings.SplitSeq(string(b), "\n") {
-		if strings.Contains(line, isoName) && strings.HasPrefix(strings.TrimSpace(line), "SHA256") {
+		if strings.Contains(line, f.Name()) && strings.HasPrefix(strings.TrimSpace(line), "SHA256") {
 			parts := strings.Split(line, "=")
 			if len(parts) == 2 {
 				targetChecksum = strings.TrimSpace(parts[1])
@@ -153,63 +135,61 @@ func (fi *FedoraImage) Download(ctx context.Context) error {
 		}
 	}
 	if targetChecksum == "" {
-		return fmt.Errorf("checksum not found for %s", isoName)
+		return fmt.Errorf("checksum not found for %s", f.Name())
 	}
 
-	if _, err := os.Stat(fi.AbsolutePath()); err == nil {
-		sha256, err := fi.checksum()
+	if _, err := os.Stat(f.AbsolutePath()); err == nil {
+		sha256, err := f.checksum()
 		if err != nil {
 			return err
 		}
 		if sha256 == targetChecksum {
-			fi.provider.Logger().Info("skipping download",
-				zap.String("file", fi.AbsolutePath()),
+			f.provider.Logger().Info("skipping download",
+				zap.String("file", f.AbsolutePath()),
 				zap.String("reason", "already downloaded"))
 			return nil
 		}
-		fi.provider.Logger().Warn("removing file due to checksum mismatch",
-			zap.String("file", fi.AbsolutePath()),
+		f.provider.Logger().Warn("removing file due to checksum mismatch",
+			zap.String("file", f.AbsolutePath()),
 			zap.String("expected", targetChecksum),
 			zap.String("actual", sha256))
-		if err := os.Remove(fi.AbsolutePath()); err != nil {
+		if err := os.Remove(f.AbsolutePath()); err != nil {
 			return err
 		}
 	}
 
-	req, err = http.NewRequestWithContext(ctx, "GET", dirURL+isoName, nil)
+	req, err = http.NewRequestWithContext(ctx, "GET", f.imageURL(), nil)
 	if err != nil {
 		return err
 	}
+
 	resp, err = httpClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("fedora: fetch ISO %s: HTTP %d", dirURL+isoName, resp.StatusCode)
-	}
 
-	if err := os.MkdirAll(fi.basePath, 0o750); err != nil {
+	if err := os.MkdirAll(f.basePath, 0o750); err != nil {
 		return err
 	}
 
-	f, err := os.Create(fi.AbsolutePath())
+	out, err := os.Create(f.AbsolutePath())
 	if err != nil {
 		return err
 	}
-	defer func() { _ = f.Close() }()
+	defer func() { _ = out.Close() }()
 
-	if err := fi.CreateImage(f, resp.Body, resp.ContentLength); err != nil {
+	if err := f.CreateImage(out, resp.Body, resp.ContentLength); err != nil {
 		return err
 	}
 
-	sha256, err := fi.checksum()
+	sha256, err := f.checksum()
 	if err != nil {
 		return err
 	}
 	if sha256 != targetChecksum {
-		fi.provider.Logger().Error("checksum mismatch",
-			zap.String("file", fi.AbsolutePath()),
+		f.provider.Logger().Error("checksum mismatch",
+			zap.String("file", f.AbsolutePath()),
 			zap.String("expected", targetChecksum),
 			zap.String("actual", sha256))
 		return fmt.Errorf("checksum mismatch: expected %s, got %s", targetChecksum, sha256)

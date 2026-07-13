@@ -279,6 +279,8 @@ func configFromTemplate(ctx context.Context, prov provider.Provider, opts Opts, 
 		return templates.NewDevboxConfig(ctx, prov, opts.Name, sshKeys, opts.Distro, opts.DistroVersion)
 	case "server":
 		return templates.NewServerConfig(ctx, prov, opts.Name, sshKeys, opts.Distro, opts.DistroVersion)
+	case "desktop":
+		return templates.NewDesktopConfig(ctx, prov, opts.Name, sshKeys, opts.Distro, opts.DistroVersion)
 	case "truenas":
 		spicePort := 0
 		if opts.SPICEPort != nil {

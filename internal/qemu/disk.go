@@ -13,8 +13,20 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/Benehiko/vee/internal/platform"
 	"github.com/Benehiko/vee/provider"
 )
+
+// diskAIO returns the QEMU -drive aio backend. "io_uring" and "native" are
+// Linux-only kernel AIO interfaces; on any non-Linux host (notably macOS, where
+// QEMU rejects them with "invalid aio option") only the portable thread-pool
+// backend works. Pass the preferred Linux backend; it is used only on Linux.
+func diskAIO(linuxPreferred string) string {
+	if platform.IsLinux() {
+		return linuxPreferred
+	}
+	return "threads"
+}
 
 type DiskFormat string
 
@@ -347,7 +359,7 @@ func (q *Disk) Args() []string {
 			"id=" + id,
 			"format=" + string(q.Format),
 			"cache=" + string(q.Cache),
-			"aio=native",
+			"aio=" + diskAIO("native"),
 			"discard=unmap",
 		}
 		deviceArgs := []string{
@@ -372,7 +384,7 @@ func (q *Disk) Args() []string {
 			"if=none",
 			"id=" + id,
 			"cache=none",
-			"aio=native",
+			"aio=" + diskAIO("native"),
 		}
 		deviceArgs := []string{
 			"virtio-blk-pci",
@@ -409,7 +421,7 @@ func (q *Disk) Args() []string {
 			}
 			driveArgs = append(driveArgs,
 				"cache="+string(cache),
-				"aio=io_uring",
+				"aio="+diskAIO("io_uring"),
 				"discard=unmap",
 			)
 		} else if q.Cache != "" {

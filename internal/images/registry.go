@@ -3,6 +3,7 @@ package images
 import (
 	"fmt"
 
+	"github.com/Benehiko/vee/internal/platform"
 	"github.com/Benehiko/vee/provider"
 )
 
@@ -98,14 +99,27 @@ func NewImage(p provider.Provider, distro, version string) (Image, error) {
 		version = versions[0]
 	}
 
+	// On aarch64 hosts (Apple Silicon), only some distros have a wired-up arm64
+	// image. Ubuntu (cloud image) and Fedora (Cloud Base qcow2) publish aarch64
+	// builds vee can boot under HVF. The rest (Arch/Bazzite/TrueNAS official
+	// media, the Alpine x86 URL) are x86_64-only and would not boot, so refuse
+	// clearly rather than fetch an unbootable image.
+	hostArch := platform.HostArch()
+	if hostArch == "arm64" && distro != DistroUbuntu && distro != DistroFedora {
+		return nil, fmt.Errorf("distro %q is not yet available for arm64 (aarch64) guests; "+
+			"Ubuntu and Fedora are the supported arm64 guests on Apple Silicon — "+
+			"use --distro ubuntu or --distro fedora", distro)
+	}
+
 	switch distro {
 	case DistroUbuntu:
 		// Cloud image: pre-installed, cloud-init-ready. Used by devbox/server templates.
-		return NewUbuntuCloudImage(p, UbuntuVersion(version)), nil
+		return NewUbuntuCloudImage(p, UbuntuVersion(version), hostArch), nil
 	case DistroArch:
 		return NewArchImage(p, ArchVersion(version)), nil
 	case DistroFedora:
-		return NewFedoraImage(p, FedoraVersion(version)), nil
+		// Cloud Base qcow2 (cloud-init ready); aarch64 or x86_64 per host.
+		return NewFedoraCloudImage(p, FedoraVersion(version), hostArch), nil
 	case DistroTrueNAS:
 		return NewTrueNASImage(p, TrueNASVersion(version)), nil
 	case DistroWindows:
