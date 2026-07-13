@@ -101,6 +101,44 @@ The load-bearing, hard-to-test step is the virglrenderer + ANGLE build (the
 back to a plain virglrenderer with **no macOS GL acceleration** and warns — so
 check the build log for that warning if the guest reports an `llvmpipe` renderer.
 
+#### Known limitations of the virgl bundle
+
+The accelerated bundle is **not yet buildable from a stock toolchain** as of this
+writing — the pinned QEMU and the only macOS-patched virglrenderer are from
+different eras and do not compile together. This is the biggest open item in the
+macOS port; the notes below are for whoever picks it up.
+
+- **QEMU ↔ virglrenderer version mismatch (the blocker).** The build pins
+  **QEMU 10.0.2** (needed for `apple-gfx` / `ParavirtualizedGraphics`), but the
+  only macOS-patched virglrenderer with the ANGLE (GLES→Metal) stack is the
+  `knazarov/qemu-virgl` tap's `virglrenderer 20211212.1` — a **December 2021**
+  build (~QEMU 6.2 era). QEMU 10.2's `hw/display/virtio-gpu-virgl.c` calls
+  `virgl_renderer_resource_get_info()` / `struct virgl_renderer_resource_info`,
+  which do not exist in that renderer, so the build fails to compile. The tap's
+  own `qemu-virgl` formula sidesteps this by building QEMU from a matching 2021
+  git revision. Resolving it requires one of: a newer macOS-patched
+  virglrenderer, a QEMU-side shim for the old renderer API, or dropping the QEMU
+  version (which loses `apple-gfx`). Until then there is **no published
+  `darwin-arm64` asset** and `Checksums["darwin-arm64"]` in
+  `internal/qemubin/version.go` stays empty.
+
+- **Toolchain fix-ups the script now handles (but which pin it to a moving
+  target).** On current Homebrew the dependency step needs: the tap formula named
+  `libepoxy-angle` (not `libepoxy`); `brew trust knazarov/qemu-virgl` (Homebrew ≥
+  6 refuses untrusted taps); a Python `distlib` for QEMU's `configure` venv; and
+  the ANGLE/epoxy/virgl include+lib dirs exported via `CPATH`/`LIBRARY_PATH`
+  (QEMU 10.x does not thread `--extra-cflags` to its `ui/egl-*.c` objects). These
+  are environment-sensitive and may drift again as Homebrew and the tap change.
+
+- **No acceleration without the bundle.** When no virgl-capable QEMU is resolved,
+  vee runs on stock/Homebrew QEMU, where `gpu.mode: virtio` renders in **software
+  (llvmpipe)** — the VM is fully usable but the desktop is not GPU-accelerated. A
+  guest that reports an `llvmpipe` (not `virgl`) renderer is on this path.
+
+- **Venus/Vulkan is doubly experimental here** — it needs both a working virgl
+  bundle *and* MoltenVK, and desktop Vulkan compositing is unreliable; prefer
+  virgl OpenGL.
+
 ## GPU acceleration: what works per guest
 
 | Guest | Path | Status |
@@ -183,4 +221,7 @@ with stock/Homebrew QEMU the desktop still renders, but in software (llvmpipe).
 - No virtiofs shares, vhost-vsock SSH-share, swtpm TPM, or bridge networking.
 - x86 guests run under slow TCG emulation; use aarch64 guests.
 - Accelerated `gpu.mode: virtio` needs a virgl-capable QEMU; stock QEMU = software GL.
+- The accelerated **vee-qemu bundle is not currently buildable** (QEMU 10.x vs the
+  2021-era macOS virglrenderer); no `darwin-arm64` asset is published yet. See
+  "Known limitations of the virgl bundle" above.
 - Venus/Vulkan and apple-gfx are experimental.
