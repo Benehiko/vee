@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -44,7 +45,8 @@ type Config struct {
 }
 
 // Generate writes a cloud-init cidata ISO to vmDir/cidata.iso.
-// The ISO is built with xorriso (preferred) or genisoimage.
+// The ISO is built with xorriso (preferred) or genisoimage; on macOS, where
+// neither ships by default, it falls back to hdiutil (part of the base OS).
 // Returns the absolute path to the ISO file.
 func Generate(vmDir string, cfg *Config) (string, error) {
 	if err := os.MkdirAll(vmDir, 0o750); err != nil {
@@ -223,17 +225,24 @@ func renderMetaData(cfg *Config) string {
 
 func buildISO(isoPath, udPath, mdPath string) error {
 	// Prefer xorriso, fall back to genisoimage.
-	tool, args := isoTool(isoPath, udPath, mdPath)
-	//nolint:gosec,noctx // tool is a fixed literal ("xorriso"/"genisoimage") and args are internally-built ISO paths, not user-controlled shell input; buildISO/Generate take no ctx and threading one requires an exported-signature change plus an out-of-package caller edit for a short-lived local ISO build.
-	cmd := exec.Command(tool, args...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%s: %w\n%s", tool, err, out)
+	if tool, args, ok := mkisofsTool(isoPath, udPath, mdPath); ok {
+		return runISOTool(tool, args)
 	}
-	return nil
+	// macOS ships neither xorriso nor genisoimage, but hdiutil (part of the base
+	// OS) can build the same ISO9660/Joliet image, so use it as a fallback there.
+	if runtime.GOOS == "darwin" {
+		if _, err := exec.LookPath("hdiutil"); err == nil {
+			return buildISOHdiutil(isoPath, udPath, mdPath)
+		}
+	}
+	return fmt.Errorf("no ISO build tool found: install xorriso or genisoimage " +
+		"(on macOS, hdiutil is used automatically)")
 }
 
-func isoTool(isoPath, udPath, mdPath string) (string, []string) {
+// mkisofsTool returns the first available mkisofs-compatible tool and its args,
+// or ok=false when none is on PATH. xorriso is preferred; genisoimage is the
+// fallback. Both accept the seed files as explicit path arguments.
+func mkisofsTool(isoPath, udPath, mdPath string) (string, []string, bool) {
 	if _, err := exec.LookPath("xorriso"); err == nil {
 		return "xorriso", []string{
 			"-as", "mkisofs",
@@ -241,13 +250,71 @@ func isoTool(isoPath, udPath, mdPath string) (string, []string) {
 			"-volid", "cidata",
 			"-joliet", "-rock",
 			udPath, mdPath,
+		}, true
+	}
+	if _, err := exec.LookPath("genisoimage"); err == nil {
+		return "genisoimage", []string{
+			"-output", isoPath,
+			"-volid", "cidata",
+			"-joliet", "-rock",
+			udPath, mdPath,
+		}, true
+	}
+	return "", nil, false
+}
+
+// buildISOHdiutil builds the cidata ISO with macOS's hdiutil. Unlike
+// xorriso/genisoimage, hdiutil images a whole directory, so the seed files are
+// staged into a temporary directory that contains nothing else — otherwise
+// stray files in the VM directory (the ISO itself, disk images) would leak into
+// the seed and cloud-init's NoCloud datasource could read the wrong data.
+func buildISOHdiutil(isoPath, udPath, mdPath string) error {
+	seedDir, err := os.MkdirTemp("", "vee-cidata-")
+	if err != nil {
+		return fmt.Errorf("hdiutil seed dir: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(seedDir) }()
+
+	for _, f := range []struct{ src, name string }{
+		{udPath, "user-data"},
+		{mdPath, "meta-data"},
+	} {
+		data, err := os.ReadFile(f.src) //nolint:gosec // src is an internally-built path under the VM directory, not user-controlled.
+		if err != nil {
+			return fmt.Errorf("hdiutil seed %s: %w", f.name, err)
+		}
+		// seedDir is an os.MkdirTemp result and f.name is one of two fixed
+		// literals ("user-data"/"meta-data"); neither is user-controlled.
+		dst := filepath.Join(seedDir, f.name)
+		if err := os.WriteFile(dst, data, 0o600); err != nil { //nolint:gosec // dst is derived only from a temp dir and fixed literals; no path traversal is possible.
+			return fmt.Errorf("hdiutil seed %s: %w", f.name, err)
 		}
 	}
-	// genisoimage fallback
-	return "genisoimage", []string{
-		"-output", isoPath,
-		"-volid", "cidata",
-		"-joliet", "-rock",
-		udPath, mdPath,
+
+	// makehybrid writes exactly to -o (no extension munging) and sets the ISO9660
+	// volume name via -default-volume-name; -joliet preserves the lowercase
+	// filenames the guest kernel needs to find user-data/meta-data.
+	//
+	// Unlike xorriso/genisoimage (built above with -joliet -rock), hdiutil emits
+	// no Rock Ridge extension — Joliet only. That is fine for a NoCloud seed:
+	// the guest reads the filenames from the Joliet descriptor and cloud-init
+	// uses the files' contents, not their on-ISO POSIX perms/ownership (which is
+	// all Rock Ridge would add here). See docs/macos.md for the full comparison.
+	args := []string{
+		"makehybrid", "-iso", "-joliet",
+		"-default-volume-name", "cidata",
+		"-o", isoPath,
+		seedDir,
 	}
+	return runISOTool("hdiutil", args)
+}
+
+func runISOTool(tool string, args []string) error {
+	//nolint:gosec,noctx // tool is a fixed literal ("xorriso"/"genisoimage"/"hdiutil") and args are internally-built ISO paths, not user-controlled shell input; buildISO/Generate take no ctx and threading one requires an exported-signature change plus an out-of-package caller edit for a short-lived local ISO build.
+	cmd := exec.Command(tool, args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s: %w\n%s", tool, err, out)
+	}
+	return nil
 }
