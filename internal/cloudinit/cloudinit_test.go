@@ -1,6 +1,7 @@
 package cloudinit_test
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -151,5 +152,39 @@ func TestMetaDataDefaultHostname(t *testing.T) {
 	md := cloudinit.RenderMetaData(&cloudinit.Config{})
 	if !strings.Contains(md, "local-hostname: vee-vm") {
 		t.Errorf("default hostname missing: %q", md)
+	}
+}
+
+// TestGenerateISO builds a real cidata seed with whichever ISO tool is present
+// (xorriso/genisoimage on Linux, hdiutil on macOS) and validates it is a
+// ISO9660 image labelled "cidata" — the two things cloud-init's NoCloud
+// datasource keys on. Skips when no tool is available (e.g. a bare CI runner).
+func TestGenerateISO(t *testing.T) {
+	dir := t.TempDir()
+	isoPath, err := cloudinit.Generate(dir, &cloudinit.Config{Hostname: "veetest"})
+	if err != nil {
+		if strings.Contains(err.Error(), "no ISO build tool found") {
+			t.Skip("no ISO build tool available on this host")
+		}
+		t.Fatalf("Generate: %v", err)
+	}
+
+	data, err := os.ReadFile(isoPath) //nolint:gosec // isoPath is returned by Generate for a path under the test's own TempDir.
+	if err != nil {
+		t.Fatalf("read iso: %v", err)
+	}
+	if len(data) == 0 {
+		t.Fatal("cidata.iso is empty")
+	}
+
+	// The ISO9660 primary volume descriptor starts at sector 16 with "CD001".
+	const magicOff = 16*2048 + 1
+	if len(data) < magicOff+5 || string(data[magicOff:magicOff+5]) != "CD001" {
+		t.Fatalf("missing ISO9660 CD001 signature at offset %d", magicOff)
+	}
+	// The volume identifier must read as "cidata" (case-insensitive: xorriso
+	// upcases it, hdiutil keeps it lowercase; cloud-init accepts either).
+	if !strings.Contains(strings.ToLower(string(data)), "cidata") {
+		t.Fatal("cidata volume label not found in ISO")
 	}
 }

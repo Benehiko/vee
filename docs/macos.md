@@ -13,19 +13,21 @@ limitations of each path.
 
 ## Host prerequisites
 
-Install these with Homebrew before creating a VM:
+Install this with Homebrew before creating a VM:
 
 ```sh
 brew install qemu      # qemu-system-aarch64 + edk2 ARM firmware (HVF-enabled)
-brew install xorriso   # builds the cloud-init NoCloud seed ISO (cidata.iso)
 ```
 
-`xorriso` is required by every cloud-init template (`server`, `devbox`,
-`desktop`, `jellyfin`, `github-runner`, …): vee builds the guest's `cidata.iso`
-with `xorriso` (preferred) or `genisoimage`, and neither ships with macOS, so VM
-creation aborts with `genisoimage: executable file not found` if neither is on
-`PATH`. For **GPU-accelerated** display you additionally need a virgl-capable
-QEMU — see "The QEMU binary" below; stock Homebrew QEMU renders in software.
+**No ISO tooling is required.** Every cloud-init template (`server`, `devbox`,
+`desktop`, `jellyfin`, `github-runner`, …) needs a NoCloud seed ISO
+(`cidata.iso`). vee builds it with `xorriso` (preferred) or `genisoimage` when
+one is on `PATH`, and otherwise falls back to **`hdiutil`**, which ships with
+macOS — so a stock Mac needs no extra package. If you already have `xorriso`
+installed (`brew install xorriso`) it is used automatically; there is no
+functional difference in the resulting seed. For **GPU-accelerated** display you
+additionally need a virgl-capable QEMU — see "The QEMU binary" below; stock
+Homebrew QEMU renders in software.
 
 ## How vee adapts to a macOS host
 
