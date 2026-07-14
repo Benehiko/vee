@@ -92,6 +92,12 @@ vee pull windows server2025        # Windows Server 2025
 vee create winvm --template windows   # pulls automatically if not cached
 ```
 
+> **Windows-guest status:** `win10` (22H2) installs end-to-end. `win11` (24H2)
+> media boots into Windows Setup but the unattended install does not yet complete
+> (a 24H2 "OneSettings" Setup limitation). See
+> [docs/windows-guests.md](docs/windows-guests.md) for the ISO pipeline, the
+> `boot.wim` handling, and this limitation in detail.
+
 **Requirements:** `nerdctl` or `docker` on `PATH` (the ISO is assembled in a
 container; no host tooling is installed) and ~15 GB of free scratch space, which
 vee allocates next to the ISO cache (under `~/.vee/iso/`) so the build works even
