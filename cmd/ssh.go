@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
-	"syscall"
 
 	"github.com/spf13/cobra"
 
@@ -120,9 +119,10 @@ Examples:
 			return fmt.Errorf("ssh not found in PATH: %w", err)
 		}
 
-		// Replace the current process with ssh so signals flow naturally.
-		//nolint:gosec // sshBin resolved via LookPath; args built from vetted VM config for an interactive SSH session.
-		return syscall.Exec(sshBin, append([]string{"ssh"}, sshArgs...), os.Environ())
+		// Hand off to ssh. On unix this replaces the current process (execve) so
+		// signals flow naturally; on Windows it spawns ssh as a child and waits.
+		// See ssh_exec_unix.go / ssh_exec_windows.go.
+		return execSSH(sshBin, sshArgs, os.Environ())
 	},
 }
 

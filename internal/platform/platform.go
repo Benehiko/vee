@@ -23,6 +23,9 @@ func IsMacOS() bool { return runtime.GOOS == "darwin" }
 // IsLinux reports whether vee is running on a Linux host.
 func IsLinux() bool { return runtime.GOOS == "linux" }
 
+// IsWindows reports whether vee is running on a Windows host.
+func IsWindows() bool { return runtime.GOOS == "windows" }
+
 // DefaultGuestArch returns the QEMU guest architecture that runs natively
 // (hardware-accelerated) on this host — i.e. the host's own architecture
 // expressed in QEMU's naming. Cross-architecture guests are possible but fall
@@ -45,13 +48,17 @@ func GuestArchForHostArch(goarch string) string {
 }
 
 // DefaultAccelerator returns the native hypervisor accelerator for this host:
-// "kvm" on Linux, "hvf" (Hypervisor.framework) on macOS, "tcg" otherwise.
+// "kvm" on Linux, "hvf" (Hypervisor.framework) on macOS, "whpx" (Windows
+// Hypervisor Platform) on Windows, "tcg" otherwise. WHPX requires the "Windows
+// Hypervisor Platform" (and Hyper-V) features to be enabled on the host.
 func DefaultAccelerator() string {
 	switch runtime.GOOS {
 	case "darwin":
 		return "hvf"
 	case "linux":
 		return "kvm"
+	case "windows":
+		return "whpx"
 	default:
 		return "tcg"
 	}

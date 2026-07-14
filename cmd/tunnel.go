@@ -12,7 +12,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -371,7 +370,7 @@ func runTCPProxy(ctx context.Context, vmName string, localPort int, vmIP string,
 	fmt.Println("press Ctrl+C to close")
 
 	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(quit, stopSignals()...)
 	go func() {
 		<-quit
 		_ = ln.Close()
@@ -454,7 +453,7 @@ func runSSHTunnel(vmName string, localPort int, sshHost string, sshPort, remoteP
 	_ = vmName
 
 	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(quit, stopSignals()...)
 	<-quit
 	fmt.Println("\nclosing tunnel")
 	//nolint:gosec,noctx // sshBin from LookPath; closes the previously-opened SSH control socket, no ctx here.
