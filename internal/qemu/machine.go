@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"go.uber.org/zap"
@@ -27,6 +26,8 @@ const (
 	AccelKVM Accelerator = "kvm"
 	// AccelHVF is the macOS Hypervisor.framework accelerator.
 	AccelHVF Accelerator = "hvf"
+	// AccelWHPX is the Windows Hypervisor Platform accelerator.
+	AccelWHPX Accelerator = "whpx"
 	// AccelTCG is the pure-software Tiny Code Generator (no hardware accel).
 	AccelTCG Accelerator = "tcg"
 )
@@ -380,7 +381,7 @@ func (q *BaseMachine) Args() []string {
 	}
 
 	if q.qmpSocket != "" {
-		args = append(args, "-qmp", fmt.Sprintf("unix:%s,server,nowait", q.qmpSocket))
+		args = append(args, "-qmp", qmpArg(q.qmpSocket))
 	}
 
 	// Capture the guest serial console (firmware POST, bootloader, kernel,
@@ -392,7 +393,7 @@ func (q *BaseMachine) Args() []string {
 
 	if q.qgaSocket != "" {
 		args = append(args, "-device", "virtio-serial-pci,id=virtio-serial0")
-		args = append(args, "-chardev", fmt.Sprintf("socket,path=%s,server=on,wait=off,id=qga0", q.qgaSocket))
+		args = append(args, "-chardev", qgaChardevArg(q.qgaSocket))
 		args = append(args, "-device", "virtserialport,chardev=qga0,name=org.qemu.guest_agent.0")
 	}
 
@@ -441,7 +442,7 @@ func (q *BaseMachine) start(ctx context.Context, detach bool) (*StartResult, err
 	cmd := exec.CommandContext(ctx, binary, args...)
 
 	if detach {
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		setDetachAttrs(cmd)
 		// Redirect output to a log file so it is not lost.
 		logPath := filepath.Join(q.AbsolutePath(), "qemu.log")
 		if err := os.MkdirAll(q.AbsolutePath(), 0o750); err != nil {
@@ -478,16 +479,18 @@ func (q *BaseMachine) start(ctx context.Context, detach bool) (*StartResult, err
 
 		pid := cmd.Process.Pid
 
-		// If a QMP socket was configured, wait for it to appear.
+		// If a QMP socket was configured, wait for the control endpoint to
+		// become reachable (a socket file on unix; a bound loopback TCP port on
+		// Windows — see control_unix.go / control_windows.go).
 		if q.qmpSocket != "" {
 			deadline := time.Now().Add(10 * time.Second)
 			for time.Now().Before(deadline) {
-				if _, err := os.Stat(q.qmpSocket); err == nil {
+				if controlReady(q.qmpSocket) {
 					break
 				}
 				time.Sleep(200 * time.Millisecond)
 			}
-			if _, err := os.Stat(q.qmpSocket); err != nil {
+			if !controlReady(q.qmpSocket) {
 				q.provider.Logger().Warn("QMP socket did not appear — QEMU may have crashed; check qemu.log",
 					zap.String("machine", q.name),
 					zap.String("qmp_socket", q.qmpSocket),
@@ -556,13 +559,10 @@ func (q *BaseMachine) start(ctx context.Context, detach bool) (*StartResult, err
 // the no-op fallbacks used on macOS.
 
 // checkAlive returns true if the process with the given PID is still running.
+// The platform-specific existence check lives in processAlive (see
+// procattr_unix.go / procattr_windows.go).
 func checkAlive(pid int) bool {
-	p, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	// Signal 0 checks existence without disturbing the process.
-	return p.Signal(syscall.Signal(0)) == nil
+	return processAlive(pid)
 }
 
 func (q *BaseMachine) AbsolutePath() string {

@@ -20,6 +20,11 @@ var Checksums = map[string]string{
 	"linux-amd64":  "",
 	"linux-arm64":  "",
 	"darwin-arm64": "",
+	// windows-amd64 has no published bundle yet, so Ensure falls back to a
+	// system QEMU on PATH (which must be a WHPX-capable build, i.e. QEMU for
+	// Windows with --enable-whpx). Populate this when a signed vee-qemu
+	// windows-amd64 asset is released.
+	"windows-amd64": "",
 }
 
 // AssetName returns the release asset filename for the given os/arch pair. The

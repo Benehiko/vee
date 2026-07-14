@@ -235,8 +235,12 @@ func buildISO(isoPath, udPath, mdPath string) error {
 			return buildISOHdiutil(isoPath, udPath, mdPath)
 		}
 	}
-	return fmt.Errorf("no ISO build tool found: install xorriso or genisoimage " +
-		"(on macOS, hdiutil is used automatically)")
+	// Windows ships none of the above external ISO tools. Fall back to vee's
+	// built-in pure-Go ISO9660/Joliet writer, which produces exactly the
+	// two-file "cidata" seed cloud-init's NoCloud datasource needs. This has no
+	// external dependency, so it also serves as a last-resort fallback on any
+	// host where no ISO tool is installed.
+	return buildISONative(isoPath, udPath, mdPath)
 }
 
 // mkisofsTool returns the first available mkisofs-compatible tool and its args,

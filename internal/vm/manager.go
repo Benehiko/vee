@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"go.uber.org/zap"
@@ -915,7 +914,7 @@ func (m *Manager) stopWithReason(ctx context.Context, name, reason string) error
 	if isAlive(state.PID) {
 		proc, err := os.FindProcess(state.PID)
 		if err == nil {
-			_ = proc.Signal(syscall.SIGKILL)
+			_ = proc.Kill()
 		}
 	}
 
@@ -923,7 +922,7 @@ func (m *Manager) stopWithReason(ctx context.Context, name, reason string) error
 		if pid > 0 && isAlive(pid) {
 			proc, err := os.FindProcess(pid)
 			if err == nil {
-				_ = proc.Signal(syscall.SIGTERM)
+				_ = terminateProcess(proc)
 			}
 		}
 	}
@@ -980,13 +979,13 @@ func (m *Manager) forceStopWithReason(_ context.Context, name, reason string) er
 
 	if isAlive(state.PID) {
 		if proc, err := os.FindProcess(state.PID); err == nil {
-			_ = proc.Signal(syscall.SIGKILL)
+			_ = proc.Kill()
 		}
 	}
 	for _, pid := range state.VirtiofsdPIDs {
 		if pid > 0 && isAlive(pid) {
 			if proc, err := os.FindProcess(pid); err == nil {
-				_ = proc.Signal(syscall.SIGKILL)
+				_ = proc.Kill()
 			}
 		}
 	}
@@ -1496,13 +1495,19 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 		opts = append(opts, qemu.WithSpice(spice))
 	}
 
-	// QMP socket
-	qmpSock := filepath.Join(m.vmDir(cfg.Name), "qmp.sock")
+	// QMP control channel (unix socket on unix hosts, loopback TCP on Windows).
+	qmpSock, err := controlSocketAddr(m.vmDir(cfg.Name), "qmp")
+	if err != nil {
+		return nil, nil, err
+	}
 	opts = append(opts, qemu.WithQMPSocket(qmpSock))
 
-	// QGA socket
+	// QGA control channel (guest agent), same transport rules as QMP.
 	if cfg.GuestAgent {
-		qgaSock := filepath.Join(m.vmDir(cfg.Name), "qga.sock")
+		qgaSock, qgaErr := controlSocketAddr(m.vmDir(cfg.Name), "qga")
+		if qgaErr != nil {
+			return nil, nil, qgaErr
+		}
 		opts = append(opts, qemu.WithQGASocket(qgaSock))
 	}
 
@@ -1694,11 +1699,7 @@ func isAlive(pid int) bool {
 	if pid <= 0 {
 		return false
 	}
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	return proc.Signal(syscall.Signal(0)) == nil
+	return processAlive(pid)
 }
 
 func copyFile(src, dst string) error {

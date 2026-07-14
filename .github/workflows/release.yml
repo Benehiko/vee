@@ -1,12 +1,13 @@
 name: Release
 
 # Cut a release when a v* tag is pushed. Builds the vee binary for every
-# supported host (linux + macOS, amd64 + arm64), then publishes a GitHub
-# Release whose body lists the commits since the previous tag.
+# supported host (linux + macOS + windows), then publishes a GitHub Release
+# whose body lists the commits since the previous tag.
 #
-# Windows is intentionally absent: vee is a host-side hypervisor driver that
-# relies on vsock, VFIO and POSIX syscalls (syscall.Setsid), so it only builds
-# on linux/darwin today. Windows support is tracked separately.
+# Windows (windows/amd64) uses the WHPX accelerator and a build-tag split that
+# swaps POSIX-only paths (vsock, VFIO, setsid, unix control sockets) for Windows
+# equivalents or no-ops. Linux-only features (VFIO passthrough, virtiofsd,
+# swtpm, the systemd daemon) degrade gracefully there.
 on:
   push:
     tags:
@@ -35,6 +36,9 @@ jobs:
           - goos: darwin
             goarch: arm64
             runner: macos-15
+          - goos: windows
+            goarch: amd64
+            runner: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -57,14 +61,18 @@ jobs:
             -X ${PKG}.version=${VERSION} \
             -X ${PKG}.commit=${COMMIT} \
             -X ${PKG}.date=${DATE}"
-          go build -mod=vendor -trimpath -ldflags "${LDFLAGS}" -o vee .
+          BIN=vee
+          if [ "${GOOS}" = "windows" ]; then BIN=vee.exe; fi
+          go build -mod=vendor -trimpath -ldflags "${LDFLAGS}" -o "${BIN}" .
 
       - name: Package binary
         id: package
         run: |
           mkdir -p dist
           ASSET="vee-${{ github.ref_name }}-${{ matrix.goos }}-${{ matrix.goarch }}"
-          tar czf "dist/${ASSET}.tar.gz" vee LICENSE README.md THIRD_PARTY_LICENSES
+          BIN=vee
+          if [ "${{ matrix.goos }}" = "windows" ]; then BIN=vee.exe; fi
+          tar czf "dist/${ASSET}.tar.gz" "${BIN}" LICENSE README.md THIRD_PARTY_LICENSES
           ( cd dist && shasum -a 256 "${ASSET}.tar.gz" > "${ASSET}.tar.gz.sha256" )
 
       - name: Upload artifact

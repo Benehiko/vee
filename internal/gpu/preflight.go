@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-
-	"golang.org/x/sys/unix"
 )
 
 // PreflightResult holds the outcome of every VFIO readiness check for one PCI device.
@@ -139,10 +137,9 @@ func PreflightCheck(addr, memoryStr string) *PreflightResult {
 	}
 
 	// 4. Memlock limit.
-	var rLimit unix.Rlimit
-	if err := unix.Getrlimit(unix.RLIMIT_MEMLOCK, &rLimit); err == nil {
-		r.MemlockSoftBytes = rLimit.Cur
-		r.MemlockHardBytes = rLimit.Max
+	if soft, hard, ok := readMemlockLimits(); ok {
+		r.MemlockSoftBytes = soft
+		r.MemlockHardBytes = hard
 	}
 	if memoryStr != "" {
 		if bytes, err := parseMemoryBytes(memoryStr); err == nil {

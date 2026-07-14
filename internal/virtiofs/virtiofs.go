@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"syscall"
 
 	"github.com/Benehiko/vee/internal/utils"
 	"github.com/Benehiko/vee/provider"
@@ -101,7 +100,7 @@ func (v *Virtiofsd) StartDetached(ctx context.Context) (int, error) {
 	binary := v.provider.Config().VirtiofsdPath
 	//nolint:gosec // G204: binary is the operator-configured virtiofsd path and args are built from validated struct fields, not untrusted input.
 	cmd := exec.CommandContext(ctx, binary, v.args()...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	setDetachAttrs(cmd)
 	if err := cmd.Start(); err != nil {
 		return 0, err
 	}

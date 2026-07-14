@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"syscall"
 
 	"github.com/spf13/cobra"
 
@@ -70,7 +69,7 @@ cloud-init RunCmd (installed automatically on devbox/server templates):
 		fmt.Printf("Press Ctrl-C to stop.\n")
 
 		stop := make(chan os.Signal, 1)
-		signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+		signal.Notify(stop, stopSignals()...)
 
 		errCh := make(chan error, 1)
 		go func() { errCh <- proxy.Serve() }()

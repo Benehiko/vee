@@ -55,3 +55,26 @@ jobs:
         run: go build -mod=vendor ./...
       - name: Test
         run: go test -mod=vendor -race ./...
+
+  build-windows:
+    # Windows (WHPX/x86_64) port: cross-compile from Linux so the windows/amd64
+    # build-tag split (loopback-TCP control channel, no-op VFIO/vsock/pinning,
+    # native ISO writer) keeps compiling. This gate prevents the Windows port
+    # from silently rotting; runtime tests still run on ubuntu/macos above.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build (windows/amd64)
+        env:
+          GOOS: windows
+          GOARCH: amd64
+        run: go build -mod=vendor ./...
+      - name: Vet (windows/amd64)
+        env:
+          GOOS: windows
+          GOARCH: amd64
+        run: go vet -mod=vendor ./...

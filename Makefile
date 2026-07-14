@@ -20,12 +20,18 @@ LDFLAGS     := -s -w \
 CONTAINER_RUNTIME := $(shell command -v nerdctl 2>/dev/null || command -v docker 2>/dev/null)
 HUGO_IMAGE        := hugomods/hugo:go-git-0.147.0
 
-.PHONY: all build install clean e2e site lint fmt test hooks licenses
+.PHONY: all build build-windows install clean e2e site lint fmt test hooks licenses
 
 all: build
 
 build:
 	$(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BINARY) .
+
+# Cross-compile the Windows (WHPX/x86_64) binary. This is a build-only target —
+# the `install` target below is POSIX-shell and unix-only, so Windows users run
+# the produced vee.exe directly. Runs from any host with the Go toolchain.
+build-windows:
+	GOOS=windows GOARCH=amd64 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BINARY).exe .
 
 # Mirror the CI lint job locally: format check (gofumpt + goimports) then lint.
 lint:

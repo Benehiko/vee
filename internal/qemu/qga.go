@@ -38,7 +38,7 @@ func NewQGAClient(ctx context.Context, socketPath string, timeout time.Duration)
 	var conn net.Conn
 	var err error
 	for time.Now().Before(deadline) {
-		conn, err = dialer.DialContext(ctx, "unix", socketPath)
+		conn, err = dialer.DialContext(ctx, controlNetwork(), socketPath)
 		if err == nil {
 			return &QGAClient{conn: conn, rd: bufio.NewReader(conn)}, nil
 		}
