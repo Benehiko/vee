@@ -375,6 +375,41 @@ REFGLOB="/work/ref/*"
 wimlib-imagex apply "$INSTALL_ESD" 1 /work/iso --ref="$REFGLOB" --no-acls 2>/dev/null
 mkdir -p /work/iso/sources
 
+# Create sources/boot.wim — the WinPE image the DVD boots into to run Setup.
+# Without it the firmware loads bootmgr but WinPE cannot start and Windows Boot
+# Manager fails with 0xc000000f ("a required device isn't connected"). Applying
+# the setup media above lays down an EMPTY /sources, so boot.wim must be exported
+# here.
+#
+# The image must be a *Setup* WinPE (one whose \Windows\System32 auto-launches
+# setup.exe), NOT the Recovery Environment — WinRE boots into the "Choose an
+# option / Troubleshoot" recovery menu instead of running Setup, so recovery-only
+# media looks bootable but never installs. Match a Setup/PE image by NAME (index
+# numbering is not stable across UUP sets) and explicitly EXCLUDE the Recovery
+# Environment and the "Setup Media" ISO tree.
+BOOT_IDX=$(wimlib-imagex info "$INSTALL_ESD" 2>/dev/null | awk '
+    tolower($0) ~ /^index:/ {idx=$2}
+    tolower($0) ~ /^name:/ && tolower($0) !~ /setup media/ && tolower($0) !~ /recovery environment/ &&
+        (tolower($0) ~ /windows pe/ || tolower($0) ~ /windows setup/) {
+        print idx; exit
+    }')
+if [ -z "$BOOT_IDX" ]; then
+    # This UUP set exposes no Setup WinPE in its metadata ESD (only WinRE and the
+    # OS image). Producing WinRE-as-boot.wim would yield recovery-only media that
+    # never installs, so fail loudly with the available image list rather than
+    # ship silently-broken media. Reconstructing a Setup WinPE from the
+    # Microsoft-Windows-WinPE-* component packages (as uup-converter-wimlib does)
+    # is not yet implemented here.
+    echo "ERROR: this UUP set has no Setup WinPE image in its metadata ESD (only WinRE/OS);" >&2
+    echo "       cannot build install-capable sources/boot.wim. Available images:" >&2
+    wimlib-imagex info "$INSTALL_ESD" | grep -iE '^(index|name):' >&2
+    exit 1
+fi
+# Export the Setup WinPE as boot.wim, marked bootable — the image Windows Boot
+# Manager launches to start Setup.
+wimlib-imagex export "$INSTALL_ESD" "$BOOT_IDX" /work/iso/sources/boot.wim \
+    --ref="$REFGLOB" --compress=LZX --boot 2>/dev/null
+
 # Export the OS install image (index 3) into install.wim, resolving blobs across
 # the whole reference set (base ESDs + captured CAB ESDs).
 wimlib-imagex export "$INSTALL_ESD" 3 /work/iso/sources/install.wim \
@@ -382,6 +417,10 @@ wimlib-imagex export "$INSTALL_ESD" 3 /work/iso/sources/install.wim \
 
 if [ ! -f /work/iso/boot/etfsboot.com ] || [ ! -f /work/iso/efi/microsoft/boot/efisys_noprompt.bin ]; then
     echo "ERROR: boot files missing after applying setup media" >&2
+    exit 1
+fi
+if [ ! -f /work/iso/sources/boot.wim ]; then
+    echo "ERROR: sources/boot.wim was not produced — media would be unbootable" >&2
     exit 1
 fi
 
