@@ -159,6 +159,16 @@ codesign --force --sign - --entitlements "$ENTITLEMENTS" --timestamp=none \
   "$BUNDLE/bin/qemu-system-aarch64"
 codesign --verify --verbose "$BUNDLE/bin/qemu-system-aarch64"
 
+echo "==> Writing GPLv2 compliance files (COPYING + SOURCE.txt)"
+# QEMU is GPLv2-only; publishing this bundle distributes QEMU binaries, so ship
+# the license text and a corresponding-source pointer. This build patches QEMU's
+# GL stack via the knazarov/qemu-virgl tap, so flag it as patched.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+QEMU_PATCHES="virglrenderer + ANGLE (GLES->Metal) GL patches from the knazarov/qemu-virgl Homebrew tap" \
+  bash "$SCRIPT_DIR/qemu-bundle-license.sh" "$BUNDLE" "$WORK/qemu-${QEMU_VERSION}" "$QEMU_VERSION" \
+    --target-list=aarch64-softmmu --enable-cocoa --enable-opengl --enable-virglrenderer \
+    --enable-hvf --enable-slirp --enable-curl --disable-docs --disable-debug-info
+
 echo "==> Packaging $ASSET.tar.gz"
 mkdir -p "$OUT"
 ( cd "$BUNDLE" && tar czf "$OUT/$ASSET.tar.gz" bin lib share )

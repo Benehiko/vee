@@ -30,9 +30,15 @@ import (
 )
 
 // qemuBinaryName returns the qemu-system binary name for the host's native
-// guest architecture (e.g. qemu-system-aarch64 on Apple Silicon).
+// guest architecture (e.g. qemu-system-aarch64 on Apple Silicon,
+// qemu-system-x86_64.exe on Windows). The Windows bundle ships the .exe, and
+// exec.LookPath needs the extension to resolve a system fallback too.
 func qemuBinaryName() string {
-	return platform.DefaultQemuBinaryName()
+	name := platform.DefaultQemuBinaryName()
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	return name
 }
 
 // BinPath returns the expected install path for the managed QEMU binary.
