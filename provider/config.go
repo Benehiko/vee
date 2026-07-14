@@ -3,6 +3,7 @@ package provider
 import (
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/file"
@@ -189,5 +190,36 @@ func loadConfig(defaults *Config) (*Config, error) {
 	if err := k.Unmarshal("", &c); err != nil {
 		return nil, err
 	}
+
+	// Anchor every path-type field to an absolute location. A config file may
+	// override these with a relative value (e.g. storage_path: vms), which would
+	// otherwise resolve against the process working directory — so a VM created
+	// from an arbitrary pwd would land its disk there instead of under ~/.vee.
+	// Relative paths are rooted at ~/.vee; absolute paths are left untouched.
+	veeRoot := filepath.Join(home, ".vee")
+	c.StoragePath = absUnderRoot(veeRoot, c.StoragePath)
+	c.ISOCachePath = absUnderRoot(veeRoot, c.ISOCachePath)
+	c.LogPath = absUnderRoot(veeRoot, c.LogPath)
+	c.VirtiofsdPath = absUnderRoot(veeRoot, c.VirtiofsdPath)
+	c.BridgeHelperPath = absUnderRoot(veeRoot, c.BridgeHelperPath)
+	c.OVMFCodePath = absUnderRoot(veeRoot, c.OVMFCodePath)
+	c.OVMFVarsPath = absUnderRoot(veeRoot, c.OVMFVarsPath)
+	c.OVMFSecbootCodePath = absUnderRoot(veeRoot, c.OVMFSecbootCodePath)
+	// QemuBinaryPath may legitimately be a bare binary name resolved via $PATH
+	// (e.g. "qemu-system-x86_64"); only anchor it when it looks like a path.
+	if strings.ContainsRune(c.QemuBinaryPath, os.PathSeparator) {
+		c.QemuBinaryPath = absUnderRoot(veeRoot, c.QemuBinaryPath)
+	}
+
 	return &c, nil
+}
+
+// absUnderRoot returns p unchanged when empty or already absolute; otherwise it
+// resolves the relative path against root so config never depends on the caller's
+// working directory.
+func absUnderRoot(root, p string) string {
+	if p == "" || filepath.IsAbs(p) {
+		return p
+	}
+	return filepath.Join(root, p)
 }

@@ -99,6 +99,67 @@ default_cpus: 4
 	}
 }
 
+func TestLoadConfigAbsolutizesRelativePaths(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	veeDir := filepath.Join(tmp, ".vee")
+	if err := os.MkdirAll(veeDir, 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// Relative path values must not resolve against the process working
+	// directory — a VM's disk would otherwise be written under whatever pwd
+	// `vee create` was run from instead of ~/.vee.
+	yaml := `storage_path: vms
+iso_cache_path: ./iso
+log_path: logs
+`
+	if err := os.WriteFile(filepath.Join(veeDir, "config.yaml"), []byte(yaml), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := NewConfig()
+	if err != nil {
+		t.Fatalf("NewConfig: %v", err)
+	}
+
+	wantStorage := filepath.Join(veeDir, "vms")
+	if cfg.StoragePath != wantStorage {
+		t.Errorf("StoragePath: got %q, want %q", cfg.StoragePath, wantStorage)
+	}
+	wantISO := filepath.Join(veeDir, "iso")
+	if cfg.ISOCachePath != wantISO {
+		t.Errorf("ISOCachePath: got %q, want %q", cfg.ISOCachePath, wantISO)
+	}
+	wantLog := filepath.Join(veeDir, "logs")
+	if cfg.LogPath != wantLog {
+		t.Errorf("LogPath: got %q, want %q", cfg.LogPath, wantLog)
+	}
+}
+
+func TestLoadConfigKeepsAbsolutePaths(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	veeDir := filepath.Join(tmp, ".vee")
+	if err := os.MkdirAll(veeDir, 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	abs := filepath.Join(tmp, "custom-vms")
+	yaml := "storage_path: " + abs + "\n"
+	if err := os.WriteFile(filepath.Join(veeDir, "config.yaml"), []byte(yaml), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := NewConfig()
+	if err != nil {
+		t.Fatalf("NewConfig: %v", err)
+	}
+	if cfg.StoragePath != abs {
+		t.Errorf("absolute StoragePath should be untouched: got %q, want %q", cfg.StoragePath, abs)
+	}
+}
+
 func TestLoadConfigMissingFile(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
