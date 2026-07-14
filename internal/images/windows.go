@@ -381,34 +381,55 @@ mkdir -p /work/iso/sources
 # the setup media above lays down an EMPTY /sources, so boot.wim must be exported
 # here.
 #
-# The image must be a *Setup* WinPE (one whose \Windows\System32 auto-launches
-# setup.exe), NOT the Recovery Environment — WinRE boots into the "Choose an
-# option / Troubleshoot" recovery menu instead of running Setup, so recovery-only
-# media looks bootable but never installs. Match a Setup/PE image by NAME (index
-# numbering is not stable across UUP sets) and explicitly EXCLUDE the Recovery
-# Environment and the "Setup Media" ISO tree.
+# Preferred source is a dedicated *Setup* WinPE image (one that already launches
+# setup.exe). Current win11 24H2 UUP sets, however, ship no such image in the
+# metadata ESD — only "Windows Setup Media" (the ISO tree), the "Recovery
+# Environment" (WinRE), and the OS editions. WinRE by itself boots into the
+# "Choose an option / Troubleshoot" recovery menu (its winpeshl.ini launches
+# X:\sources\recovery\recenv.exe), so it must be TRANSFORMED into a Setup boot
+# environment before use. Match the boot image by NAME (index numbering is not
+# stable across sets), preferring a real Setup/PE image and falling back to WinRE.
 BOOT_IDX=$(wimlib-imagex info "$INSTALL_ESD" 2>/dev/null | awk '
     tolower($0) ~ /^index:/ {idx=$2}
-    tolower($0) ~ /^name:/ && tolower($0) !~ /setup media/ && tolower($0) !~ /recovery environment/ &&
+    tolower($0) ~ /^name:/ && tolower($0) !~ /setup media/ &&
         (tolower($0) ~ /windows pe/ || tolower($0) ~ /windows setup/) {
         print idx; exit
     }')
+IS_WINRE=0
 if [ -z "$BOOT_IDX" ]; then
-    # This UUP set exposes no Setup WinPE in its metadata ESD (only WinRE and the
-    # OS image). Producing WinRE-as-boot.wim would yield recovery-only media that
-    # never installs, so fail loudly with the available image list rather than
-    # ship silently-broken media. Reconstructing a Setup WinPE from the
-    # Microsoft-Windows-WinPE-* component packages (as uup-converter-wimlib does)
-    # is not yet implemented here.
-    echo "ERROR: this UUP set has no Setup WinPE image in its metadata ESD (only WinRE/OS);" >&2
-    echo "       cannot build install-capable sources/boot.wim. Available images:" >&2
+    # Fall back to the Recovery Environment image and convert it to Setup below.
+    BOOT_IDX=$(wimlib-imagex info "$INSTALL_ESD" 2>/dev/null | awk '
+        tolower($0) ~ /^index:/ {idx=$2}
+        tolower($0) ~ /^name:/ && tolower($0) ~ /recovery environment/ {print idx; exit}')
+    IS_WINRE=1
+fi
+if [ -z "$BOOT_IDX" ]; then
+    echo "ERROR: no WinPE/Setup/Recovery image found in the metadata ESD; cannot build boot.wim" >&2
     wimlib-imagex info "$INSTALL_ESD" | grep -iE '^(index|name):' >&2
     exit 1
 fi
-# Export the Setup WinPE as boot.wim, marked bootable — the image Windows Boot
-# Manager launches to start Setup.
+# Export the chosen image as boot.wim, marked bootable — the image Windows Boot
+# Manager launches.
 wimlib-imagex export "$INSTALL_ESD" "$BOOT_IDX" /work/iso/sources/boot.wim \
     --ref="$REFGLOB" --compress=LZX --boot 2>/dev/null
+
+if [ "$IS_WINRE" = "1" ]; then
+    # Transform WinRE into a Windows Setup boot environment. WinRE's winpeshl.ini
+    # hard-launches the recovery shell (recenv.exe); remove it and install a
+    # startnet.cmd that runs wpeinit then launches setup.exe from whichever drive
+    # the install media mounted as (the DVD letter is assigned at boot and is not
+    # knowable ahead of time, so scan all drives). This is the same result a
+    # native Setup boot.wim produces — verified end-to-end: the guest boots
+    # straight into "Windows Setup — Select language settings".
+    cat > /tmp/startnet.cmd <<'STARTNET'
+wpeinit
+for %%d in (C D E F G H I J K L M N O P Q R S T U V W X Y Z) do if exist %%d:\setup.exe start "" /wait %%d:\setup.exe
+STARTNET
+    wimlib-imagex update /work/iso/sources/boot.wim 1 \
+        --command="delete --force /Windows/System32/winpeshl.ini" >/dev/null 2>&1 || true
+    wimlib-imagex update /work/iso/sources/boot.wim 1 \
+        --command="add /tmp/startnet.cmd /Windows/System32/startnet.cmd" >/dev/null 2>&1
+fi
 
 # Export the OS install image (index 3) into install.wim, resolving blobs across
 # the whole reference set (base ESDs + captured CAB ESDs).
