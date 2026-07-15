@@ -15,16 +15,29 @@ on:
 jobs:
   build:
     name: Build vee-qemu (${{ matrix.arch }})
-    runs-on: ubuntu-latest
+    # Each arch builds on a native runner so the QEMU compile is not emulated:
+    # amd64 on the x86_64 ubuntu runner, arm64 on the native ARM64 runner. This
+    # avoids the very slow (and binfmt-fragile) emulated cross-arch container.
+    runs-on: ${{ matrix.runner }}
     strategy:
+      # One leg failing must not cancel the others — each platform bundle is an
+      # independent release asset.
+      fail-fast: false
       matrix:
         include:
+          # qemu_bin is the emulator binary that target-list produces; vee names
+          # its bundle after the guest arch native to the host arch (x86_64 on
+          # amd64, aarch64 on arm64).
           - arch: amd64
             goarch: amd64
+            runner: ubuntu-latest
             qemu_target: x86_64-softmmu
+            qemu_bin: qemu-system-x86_64
           - arch: arm64
             goarch: arm64
-            qemu_target: x86_64-softmmu
+            runner: ubuntu-24.04-arm
+            qemu_target: aarch64-softmmu
+            qemu_bin: qemu-system-aarch64
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -75,16 +88,17 @@ jobs:
               make install DESTDIR=/tmp/qemu-install
 
               mkdir -p /output
-              cp /tmp/qemu-install/usr/local/bin/qemu-system-x86_64 /output/
-              # Copy the QEMU datadir (pc-bios incl. the bz2-compressed edk2
-              # x86_64 firmware) out of the container to the bind-mounted /output.
-              # make install writes it inside the container FS; only /output
-              # survives. The host runner stages + decompresses it below.
+              cp "/tmp/qemu-install/usr/local/bin/${{ matrix.qemu_bin }}" /output/
+              # Copy the QEMU datadir (pc-bios incl. the edk2 UEFI firmware) out
+              # of the container to the bind-mounted /output. make install writes
+              # it inside the container FS; only /output survives. The host runner
+              # stages + decompresses it below.
               cp -R /tmp/qemu-install/usr/local/share/qemu /output/qemu-share
               # Copy the GPLv2 license text (and per-component summary) out of the
               # source tree so the host can ship it in the bundle (GPLv2 §1/§3).
-              cp "qemu-${QEMU_VER}/COPYING" /output/COPYING
-              [ -f "qemu-${QEMU_VER}/LICENSE" ] && cp "qemu-${QEMU_VER}/LICENSE" /output/LICENSE || true
+              # CWD is already the extracted qemu-${QEMU_VER} source dir.
+              cp COPYING /output/COPYING
+              [ -f LICENSE ] && cp LICENSE /output/LICENSE || true
             '
 
       - name: Package binary
@@ -96,16 +110,25 @@ jobs:
             --disable-debug-info
         run: |
           # Bundle layout (bin/, share/qemu) matches what vee's qemubin extracts
-          # into ~/.vee.
-          mkdir -p dist bundle/bin
-          ASSET="qemu-system-x86_64-linux-${{ matrix.goarch }}"
-          cp build/qemu-system-x86_64 bundle/bin/qemu-system-x86_64
-          chmod +x bundle/bin/qemu-system-x86_64
+          # into ~/.vee. The asset name must match qemubin.AssetName():
+          # <qemu-system-arch>-linux-<goarch>.tar.gz.
+          QEMU_BIN="${{ matrix.qemu_bin }}"
+          mkdir -p dist bundle/bin bundle/share
+          ASSET="${QEMU_BIN}-linux-${{ matrix.goarch }}"
+          cp "build/${QEMU_BIN}" "bundle/bin/${QEMU_BIN}"
+          chmod +x "bundle/bin/${QEMU_BIN}"
           # Ship the QEMU datadir so vee needs no distro OVMF package. Decompress
-          # the edk2 x86_64 firmware vee probes for (bz2 -> plain .fd); vee's
-          # runtime extractBundle does not handle bz2, so it must be plain here.
+          # the edk2 firmware vee probes for (bz2 -> plain .fd); vee's runtime
+          # extractBundle does not handle bz2, so it must be plain here. Firmware
+          # names differ by guest arch (x86_64 has a Secure Boot variant; aarch64
+          # does not).
           cp -R build/qemu-share bundle/share/qemu
-          for fw in edk2-x86_64-code edk2-x86_64-secure-code edk2-i386-vars; do
+          case "${{ matrix.goarch }}" in
+            amd64) FIRMWARES="edk2-x86_64-code edk2-x86_64-secure-code edk2-i386-vars" ;;
+            arm64) FIRMWARES="edk2-aarch64-code edk2-arm-vars" ;;
+            *)     FIRMWARES="" ;;
+          esac
+          for fw in $FIRMWARES; do
             if [ -f "bundle/share/qemu/${fw}.fd.bz2" ] && [ ! -f "bundle/share/qemu/${fw}.fd" ]; then
               bunzip2 -k "bundle/share/qemu/${fw}.fd.bz2"
             fi
@@ -157,7 +180,10 @@ jobs:
   build-windows:
     name: Build vee-qemu (windows-amd64)
     # Cross-compiled from Linux with MinGW-w64; --enable-whpx targets the Windows
-    # Hypervisor Platform. No Windows runner needed.
+    # Hypervisor Platform. No Windows runner needed. Built inside a Fedora
+    # container: Fedora ships the full mingw64-* stack (glib2, pixman, SDL2, …)
+    # that Ubuntu/Debian lack, and it is what QEMU's own upstream CI uses to
+    # cross-build the Windows binary.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -166,7 +192,7 @@ jobs:
         run: |
           docker run --rm \
             -v "$PWD:/src" -w /src \
-            ubuntu:24.04 bash -c '
+            fedora:43 bash -c '
               set -euo pipefail
               QEMU_VERSION="${{ inputs.qemu_version }}" \
               VEE_SUFFIX="${{ inputs.vee_suffix }}" \

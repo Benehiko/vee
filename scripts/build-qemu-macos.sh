@@ -28,6 +28,10 @@ WORK="${WORK:-$(pwd)/qemu-build}"
 OUT="${OUT:-$(pwd)/dist}"
 ASSET="qemu-system-aarch64-darwin-arm64"
 JOBS="$(sysctl -n hw.ncpu)"
+# Resolve script/repo paths up front, before any cd, so the entitlements plist
+# and the license helper are found regardless of the working directory later.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
   echo "error: this script must run on an Apple Silicon (arm64) macOS host" >&2
@@ -40,40 +44,69 @@ brew update
 brew install meson ninja pkg-config glib pixman dtc capstone libslirp \
   jpeg-turbo libpng curl ncurses dylibbundler bzip2
 
-# virglrenderer + ANGLE (GLES->Metal) + patched libepoxy come from the
-# qemu-virgl tap, which carries Akihiko Odaki's not-yet-upstream macOS GL patches.
-# MoltenVK provides host Vulkan for the Venus path.
-brew tap knazarov/qemu-virgl || true
-# Homebrew >= 6 requires explicit trust for third-party taps before it will load
-# their formulae — and while an untrusted tap is present it also refuses to
-# resolve the plain-core fallback below. Trust this specific tap (scoped, not the
-# broad HOMEBREW_NO_REQUIRE_TAP_TRUST); a no-op on older Homebrew without trust.
-brew trust knazarov/qemu-virgl 2>/dev/null || true
-# The tap's patched libepoxy is named "libepoxy-angle" (it carries the ANGLE
-# GLES->Metal patches), not "libepoxy".
-brew install knazarov/qemu-virgl/libangle \
-  knazarov/qemu-virgl/libepoxy-angle \
-  knazarov/qemu-virgl/virglrenderer || {
-    echo "warning: qemu-virgl tap formulae unavailable; falling back to plain libepoxy/virglrenderer (NO macOS GL accel)" >&2
-    brew install libepoxy virglrenderer
-  }
+# virglrenderer >= 1.0 + ANGLE (GLES->Metal) + patched libepoxy for accelerated
+# virtio-gpu. QEMU 10.x's virtio-gpu-virgl.c requires VIRGL_VERSION_MAJOR >= 1
+# (virglrenderer 1.0.0, Oct 2023); the old knazarov/qemu-virgl tap is abandoned
+# (last commit 2021) and pins a pre-1.0 virglrenderer, so QEMU 10.x fails to
+# compile against it. The maintained successor is the startergo tap family,
+# which carries Akihiko Odaki's macOS ANGLE/Metal patches on top of
+# virglrenderer 1.x. MoltenVK provides host Vulkan for the Venus path.
+#
+# If the tap is unavailable we fall back to Homebrew core's virglrenderer, which
+# is now >= 1.0 and therefore still COMPILES with QEMU 10.x — but without ANGLE
+# it renders in software (no Metal acceleration). We warn in that case.
+GL_ACCEL=1
+# startergo/virglrenderer/virglrenderer transitively depends (per its formula)
+# on startergo/angle/angle, startergo/libepoxy/libepoxy and molten-vk; angle in
+# turn build-depends on startergo/gn/gn. So we only need to install the
+# virglrenderer formula and Homebrew pulls the rest — but all four taps must be
+# tapped and trusted first. Homebrew >= 6 requires explicit per-tap trust before
+# it will load third-party formulae, and while an untrusted tap is merely
+# *present* it refuses to resolve even core formulae. Trust these four specific
+# taps (scoped, not a global trust bypass); a no-op on older Homebrew.
+GL_TAPS=(startergo/virglrenderer startergo/angle startergo/gn startergo/libepoxy)
+for t in "${GL_TAPS[@]}"; do
+  brew tap "$t" 2>/dev/null || true
+  brew trust "$t" 2>/dev/null || true
+done
+if ! brew install startergo/virglrenderer/virglrenderer; then
+  # No macOS Homebrew-core virglrenderer exists to fall back to, so build a plain
+  # HVF QEMU without accelerated virtio-gpu (2D still works; guests run fast
+  # under HVF). Untap the third-party taps so they don't poison core resolution.
+  echo "warning: startergo virglrenderer tap unavailable; building WITHOUT accelerated virtio-gpu (HVF + 2D only)" >&2
+  brew untap "${GL_TAPS[@]}" 2>/dev/null || true
+  brew install libepoxy || true
+  GL_ACCEL=0
+fi
 brew install molten-vk vulkan-headers || true
 
 BREW_PREFIX="$(brew --prefix)"
-# Collect pkg-config paths for the (possibly cellar-pinned) GL deps.
+# Collect pkg-config paths for the (possibly cellar-pinned) GL deps. Probe both
+# the ANGLE-tap formula names and the core fallbacks; missing ones are skipped.
 PKGS="$BREW_PREFIX/lib/pkgconfig:$BREW_PREFIX/share/pkgconfig"
-for f in libangle libepoxy-angle virglrenderer; do
+for f in angle libangle libepoxy-angle libepoxy virglrenderer; do
   p="$(brew --prefix "$f" 2>/dev/null || true)"
   [[ -n "$p" ]] && PKGS="$p/lib/pkgconfig:$PKGS"
 done
 export PKG_CONFIG_PATH="$PKGS"
 
 # QEMU's configure creates a Python venv (mkvenv) that needs "distlib" to build
-# console-script wrappers. Some python.org framework builds ship pip without a
-# usable standalone distlib, which makes configure abort with "found no usable
-# distlib". Ensure it up front against the same python3 configure will pick
-# (harmless if already present).
-python3 -m pip install --user distlib >/dev/null 2>&1 || true
+# console-script wrappers. Newer runner Pythons (3.12+, incl. Homebrew's 3.14)
+# are PEP 668 "externally managed", so a bare `pip install --user distlib`
+# fails (and previously did so silently), leaving configure to abort with
+# "found no usable distlib". Install it into the exact python3 configure will
+# pick, tolerating the externally-managed marker. Try the ordinary path first,
+# then fall back to --break-system-packages.
+PYBIN="$(command -v python3)"
+echo "==> Ensuring distlib for $PYBIN ($("$PYBIN" --version 2>&1))"
+if ! "$PYBIN" -c 'import distlib' >/dev/null 2>&1; then
+  "$PYBIN" -m pip install --user distlib >/dev/null 2>&1 ||
+    "$PYBIN" -m pip install --break-system-packages distlib >/dev/null 2>&1 ||
+    "$PYBIN" -m pip install --user --break-system-packages distlib >/dev/null 2>&1 ||
+    true
+fi
+"$PYBIN" -c 'import distlib; print("distlib", distlib.__version__)' ||
+  echo "warning: distlib still unavailable for $PYBIN; QEMU mkvenv may fail" >&2
 
 echo "==> Fetching QEMU $QEMU_VERSION"
 mkdir -p "$WORK" && cd "$WORK"
@@ -83,14 +116,14 @@ tar xf qemu.tar.xz
 cd "qemu-${QEMU_VERSION}"
 
 echo "==> Configuring QEMU (cocoa + opengl + virglrenderer + hvf, aarch64-softmmu)"
-# libangle ships no pkg-config file, and libepoxy-angle's headers #include
-# <EGL/...> from libangle, so PKG_CONFIG_PATH alone leaves QEMU unable to find
+# ANGLE ships no pkg-config file, and the patched libepoxy's headers #include
+# <EGL/...> from ANGLE, so PKG_CONFIG_PATH alone leaves QEMU unable to find
 # EGL/eglplatform.h. QEMU 10.x also does not thread configure's --extra-cflags
 # through to its ui/egl-*.c objects, so pass the ANGLE/epoxy/virgl include and
 # lib dirs through CPATH/LIBRARY_PATH (which clang always honors) — plus the
-# matching --extra-* flags, mirroring the knazarov qemu-virgl formula.
+# matching --extra-* flags. Probe both tap and core formula names.
 GLFLAGS=""
-for f in libangle libepoxy-angle virglrenderer; do
+for f in angle libangle libepoxy-angle libepoxy virglrenderer; do
   p="$(brew --prefix "$f" 2>/dev/null || true)"
   [[ -z "$p" ]] && continue
   GLFLAGS="$GLFLAGS --extra-cflags=-I$p/include --extra-ldflags=-L$p/lib"
@@ -98,14 +131,24 @@ for f in libangle libepoxy-angle virglrenderer; do
   LIBRARY_PATH="${LIBRARY_PATH:+$LIBRARY_PATH:}$p/lib"
 done
 export CPATH LIBRARY_PATH
+# Only enable the GL/virgl stack when accelerated virglrenderer is available.
+# Without it (GL_ACCEL=0) build a plain HVF QEMU — enabling virglrenderer with no
+# usable virglrenderer would fail configure.
+if [[ "$GL_ACCEL" == "1" ]]; then
+  echo "==> Building with ANGLE-accelerated virglrenderer (Metal-backed virtio-gpu)"
+  GL_CONFIGURE=(--enable-opengl --enable-virglrenderer)
+else
+  echo "==> Building WITHOUT accelerated virtio-gpu (HVF + 2D only)"
+  GL_CONFIGURE=(--disable-virglrenderer)
+  GLFLAGS=""
+fi
 # Homebrew prefixes contain no spaces, so word-splitting $GLFLAGS is intentional.
 # shellcheck disable=SC2086
 ./configure \
   --prefix=/usr/local \
   --target-list=aarch64-softmmu \
   --enable-cocoa \
-  --enable-opengl \
-  --enable-virglrenderer \
+  "${GL_CONFIGURE[@]}" \
   --enable-hvf \
   --enable-slirp \
   --enable-curl \
@@ -152,7 +195,7 @@ JSON
 fi
 
 echo "==> Code signing (ad-hoc) with hypervisor entitlement"
-ENTITLEMENTS="$(cd "$(dirname "$0")/.." && pwd)/internal/qemubin/qemu-entitlements.plist"
+ENTITLEMENTS="$REPO_ROOT/internal/qemubin/qemu-entitlements.plist"
 # Sign dylibs first, then the main binary last (so its signature stays valid).
 find "$BUNDLE/lib" -name '*.dylib' -exec codesign --force --sign - --timestamp=none {} \;
 codesign --force --sign - --entitlements "$ENTITLEMENTS" --timestamp=none \
@@ -161,10 +204,10 @@ codesign --verify --verbose "$BUNDLE/bin/qemu-system-aarch64"
 
 echo "==> Writing GPLv2 compliance files (COPYING + SOURCE.txt)"
 # QEMU is GPLv2-only; publishing this bundle distributes QEMU binaries, so ship
-# the license text and a corresponding-source pointer. This build patches QEMU's
-# GL stack via the knazarov/qemu-virgl tap, so flag it as patched.
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-QEMU_PATCHES="virglrenderer + ANGLE (GLES->Metal) GL patches from the knazarov/qemu-virgl Homebrew tap" \
+# the license text and a corresponding-source pointer. This build links QEMU's
+# GL stack against the startergo tap's virglrenderer 1.x + ANGLE (Metal); QEMU
+# itself is unmodified upstream, but note the GL dependency provenance.
+QEMU_PATCHES="links against virglrenderer 1.x + ANGLE (GLES->Metal) from the startergo Homebrew taps for accelerated virtio-gpu on macOS" \
   bash "$SCRIPT_DIR/qemu-bundle-license.sh" "$BUNDLE" "$WORK/qemu-${QEMU_VERSION}" "$QEMU_VERSION" \
     --target-list=aarch64-softmmu --enable-cocoa --enable-opengl --enable-virglrenderer \
     --enable-hvf --enable-slirp --enable-curl --disable-docs --disable-debug-info
