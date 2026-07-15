@@ -80,6 +80,7 @@ unix-socket path, scoped to the local machine.
 |---------|--------------|
 | Boot / lifecycle (create, start, stop, status) | ✅ |
 | WHPX acceleration for x86-64 guests | ✅ (with WHPX enabled) |
+| Nested acceleration (Windows host is itself a VM) | ❌ WHPX can't deliver interrupts to the inner guest |
 | QMP / guest-agent control | ✅ (loopback TCP) |
 | cloud-init NoCloud seed | ✅ (built-in ISO writer) |
 | Serial / SPICE console | ✅ |
@@ -110,12 +111,45 @@ produced `vee.exe` directly. CI cross-compiles and vets `windows/amd64` on every
 change (the `build-windows` job) so the port cannot silently regress, and the
 release workflow publishes a `windows-amd64` asset.
 
+## Nested virtualization: a Windows *guest* cannot accelerate its own guests
+
+WHPX needs real hardware virtualization. If the Windows host is itself a virtual
+machine (for example a Windows guest running under KVM/QEMU on a Linux box), vee
+can create and start a guest under `-accel whpx`, but that inner guest **cannot
+receive interrupts** and dies shortly after boot. The symptom is:
+
+```
+whpx: injection failed, MSI (...) ... lost (c0350005)
+WHPX: Unexpected VP exit code 4
+```
+
+`c0350005` is `WHV_E_UNKNOWN_CAPABILITY`: WHPX is reporting that the APIC /
+interrupt-virtualization capability it needs does not exist. It is absent because
+the **outer** hypervisor (the L0 — e.g. KVM) does not expose nested APIC
+virtualization (APICv / virtual-interrupt-delivery / posted-interrupts) across
+the nested boundary to the L1 Windows guest. KVM does not implement nested APIC
+virtualization, and there is no switch for it — not in Windows (no setting or
+registry edit can present a CPU capability the layer below withheld), not in
+WHPX, and not in QEMU (whose interrupt requests are well-formed but rejected by
+the platform). Any guest that needs interrupt delivery — effectively any real
+guest — is affected; it is not specific to a particular guest OS or workload.
+
+There is no vee-side fix: vee cannot manufacture a hypervisor capability the host
+does not have. When vee runs inside a VM, run it on a **bare-metal** Windows host
+instead, where WHPX has full hardware access and this limitation does not apply.
+(`vee logs <name>` surfaces the QEMU output above, so the case is recognisable
+rather than an unexplained early exit.)
+
 ## Limitations summary
 
 - Requires the **Windows Hypervisor Platform** feature enabled (plus Hyper-V and
   firmware virtualization); otherwise guests run under slow TCG emulation.
 - Requires a WHPX-capable `qemu-system-x86_64.exe` on `PATH`; vee does not yet
   publish its own `windows-amd64` QEMU bundle.
+- **No nested virtualization:** a Windows host that is itself a VM cannot
+  hardware-accelerate guests under WHPX — the inner guest fails with `c0350005` /
+  `Unexpected VP exit code 4` because the outer hypervisor does not expose nested
+  APIC virtualization. See the section above.
 - No VFIO passthrough, virtiofs, vhost-vsock, bridge networking, CPU pinning, or
   swtpm (all Linux-host features).
 - No Windows service / daemon installer yet — `vee daemon install` targets
