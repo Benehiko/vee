@@ -15,11 +15,13 @@ on:
 jobs:
   build:
     name: Build vee-qemu (${{ matrix.arch }})
-    runs-on: ubuntu-latest
+    # Each arch builds on a native runner so the QEMU compile is not emulated:
+    # amd64 on the x86_64 ubuntu runner, arm64 on the native ARM64 runner. This
+    # avoids the very slow (and binfmt-fragile) emulated cross-arch container.
+    runs-on: ${{ matrix.runner }}
     strategy:
       # One leg failing must not cancel the others — each platform bundle is an
-      # independent release asset. (The linux-arm64 leg is not yet fixed; keeping
-      # fail-fast off lets the working linux-amd64 leg finish and publish.)
+      # independent release asset.
       fail-fast: false
       matrix:
         include:
@@ -28,23 +30,17 @@ jobs:
           # amd64, aarch64 on arm64).
           - arch: amd64
             goarch: amd64
+            runner: ubuntu-latest
             qemu_target: x86_64-softmmu
             qemu_bin: qemu-system-x86_64
           - arch: arm64
             goarch: arm64
+            runner: ubuntu-24.04-arm
             qemu_target: aarch64-softmmu
             qemu_bin: qemu-system-aarch64
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      # The arm64 leg runs an emulated linux/arm64 container on the amd64 runner;
-      # register the binfmt_misc handlers so `docker run --platform linux/arm64`
-      # can exec arm64 binaries (otherwise: "exec /usr/bin/bash: exec format
-      # error"). A no-op for the native amd64 leg.
-      - name: Set up QEMU (binfmt) for cross-arch containers
-        if: matrix.arch != 'amd64'
-        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
 
       - name: Set release tag
         id: tag
