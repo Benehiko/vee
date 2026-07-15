@@ -50,9 +50,37 @@ func defaultFirmware(home string) (code, vars, secboot string) {
 		// aarch64 edk2 has no separate Secure Boot code variant; reuse code.
 		return code, vars, code
 	}
-	return "/usr/share/OVMF/x64/OVMF_CODE.4m.fd",
-		"/usr/share/OVMF/x64/OVMF_VARS.4m.fd",
-		"/usr/share/OVMF/x64/OVMF_CODE.secboot.4m.fd"
+	// x86_64: OVMF ships under different names and directories per distro, so
+	// probe the known layouts rather than assuming one. A vee-managed bundle
+	// under ~/.vee/share wins if present, then Arch (x64/*.4m.fd), then
+	// Debian/Ubuntu/Mint (*_4M.fd), then Fedora/RHEL (edk2/ovmf/*.fd), then the
+	// pre-4M legacy names. A user override in ~/.vee/config.yaml still wins.
+	veeCode := filepath.Join(home, ".vee", "share", "qemu", "edk2-x86_64-code.fd")
+	veeVars := filepath.Join(home, ".vee", "share", "qemu", "edk2-i386-vars.fd")
+	code = firstExisting("/usr/share/OVMF/x64/OVMF_CODE.4m.fd",
+		veeCode,
+		"/usr/share/OVMF/x64/OVMF_CODE.4m.fd",     // Arch (edk2-ovmf)
+		"/usr/share/OVMF/OVMF_CODE_4M.fd",         // Debian/Ubuntu/Mint (ovmf)
+		"/usr/share/edk2/ovmf/OVMF_CODE.fd",       // Fedora/RHEL (edk2-ovmf)
+		"/usr/share/qemu/ovmf-x86_64-4m-code.bin", // openSUSE (qemu-ovmf-x86_64)
+		"/usr/share/OVMF/OVMF_CODE.fd",            // legacy 2M
+	)
+	vars = firstExisting("/usr/share/OVMF/x64/OVMF_VARS.4m.fd",
+		veeVars,
+		"/usr/share/OVMF/x64/OVMF_VARS.4m.fd",     // Arch
+		"/usr/share/OVMF/OVMF_VARS_4M.fd",         // Debian/Ubuntu/Mint
+		"/usr/share/edk2/ovmf/OVMF_VARS.fd",       // Fedora/RHEL
+		"/usr/share/qemu/ovmf-x86_64-4m-vars.bin", // openSUSE
+		"/usr/share/OVMF/OVMF_VARS.fd",            // legacy 2M
+	)
+	secboot = firstExisting("/usr/share/OVMF/x64/OVMF_CODE.secboot.4m.fd",
+		"/usr/share/OVMF/x64/OVMF_CODE.secboot.4m.fd", // Arch
+		"/usr/share/OVMF/OVMF_CODE_4M.ms.fd",          // Debian/Ubuntu/Mint (signed)
+		"/usr/share/OVMF/OVMF_CODE_4M.secboot.fd",     // Debian/Ubuntu (alt name)
+		"/usr/share/edk2/ovmf/OVMF_CODE.secboot.fd",   // Fedora/RHEL
+		code, // fall back to non-secboot code
+	)
+	return code, vars, secboot
 }
 
 type Config struct {
