@@ -55,8 +55,14 @@ func defaultFirmware(home string) (code, vars, secboot string) {
 	// under ~/.vee/share wins if present, then Arch (x64/*.4m.fd), then
 	// Debian/Ubuntu/Mint (*_4M.fd), then Fedora/RHEL (edk2/ovmf/*.fd), then the
 	// pre-4M legacy names. A user override in ~/.vee/config.yaml still wins.
+	//
+	// The vee-managed bundle names match QEMU's own datadir firmware
+	// (edk2-x86_64-code.fd, edk2-i386-vars.fd, edk2-x86_64-secure-code.fd for
+	// the SMM/Secure Boot variant), which vee's qemubin bundle ships under
+	// ~/.vee/share/qemu so no distro OVMF package is required.
 	veeCode := filepath.Join(home, ".vee", "share", "qemu", "edk2-x86_64-code.fd")
 	veeVars := filepath.Join(home, ".vee", "share", "qemu", "edk2-i386-vars.fd")
+	veeSecboot := filepath.Join(home, ".vee", "share", "qemu", "edk2-x86_64-secure-code.fd")
 	code = firstExisting("/usr/share/OVMF/x64/OVMF_CODE.4m.fd",
 		veeCode,
 		"/usr/share/OVMF/x64/OVMF_CODE.4m.fd",     // Arch (edk2-ovmf)
@@ -74,6 +80,7 @@ func defaultFirmware(home string) (code, vars, secboot string) {
 		"/usr/share/OVMF/OVMF_VARS.fd",            // legacy 2M
 	)
 	secboot = firstExisting("/usr/share/OVMF/x64/OVMF_CODE.secboot.4m.fd",
+		veeSecboot, // vee-managed bundle
 		"/usr/share/OVMF/x64/OVMF_CODE.secboot.4m.fd", // Arch
 		"/usr/share/OVMF/OVMF_CODE_4M.ms.fd",          // Debian/Ubuntu/Mint (signed)
 		"/usr/share/OVMF/OVMF_CODE_4M.secboot.fd",     // Debian/Ubuntu (alt name)

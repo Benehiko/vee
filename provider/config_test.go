@@ -212,3 +212,39 @@ func TestDefaultFirmwareFallsBackToArchDefault(t *testing.T) {
 		t.Errorf("x86_64 code fallback should reference OVMF: %s", code)
 	}
 }
+
+// A vee-managed QEMU bundle drops firmware under ~/.vee/share/qemu. When those
+// files exist, defaultFirmware must prefer them over any system OVMF so users
+// need no distro firmware package. Only meaningful on x86_64 hosts, where the
+// bundle names are edk2-x86_64-code.fd / edk2-i386-vars.fd /
+// edk2-x86_64-secure-code.fd.
+func TestDefaultFirmwarePrefersVeeManagedBundle(t *testing.T) {
+	if platform.DefaultGuestArch() == "aarch64" {
+		t.Skip("bundle names differ on aarch64; covered by the aarch64 branch")
+	}
+
+	home := t.TempDir()
+	qemuShare := filepath.Join(home, ".vee", "share", "qemu")
+	if err := os.MkdirAll(qemuShare, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	wantCode := filepath.Join(qemuShare, "edk2-x86_64-code.fd")
+	wantVars := filepath.Join(qemuShare, "edk2-i386-vars.fd")
+	wantSecboot := filepath.Join(qemuShare, "edk2-x86_64-secure-code.fd")
+	for _, p := range []string{wantCode, wantVars, wantSecboot} {
+		if err := os.WriteFile(p, []byte("fd"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	code, vars, secboot := defaultFirmware(home)
+	if code != wantCode {
+		t.Errorf("code: got %q, want vee-managed %q", code, wantCode)
+	}
+	if vars != wantVars {
+		t.Errorf("vars: got %q, want vee-managed %q", vars, wantVars)
+	}
+	if secboot != wantSecboot {
+		t.Errorf("secboot: got %q, want vee-managed %q", secboot, wantSecboot)
+	}
+}
