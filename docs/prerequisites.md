@@ -10,8 +10,16 @@ System requirements to set up before creating your first VM.
 | `qemu-img` | Disk image creation |
 | `ovmf` | UEFI firmware (OVMF_CODE / OVMF_VARS) |
 | `openssh` | `vee ssh` and `vee tunnel` |
-| `virtiofsd` | Host directory sharing into VMs (`--virtiofs-dir`) |
+| `virtiofsd` | Host directory sharing into VMs (`--virtiofs-dir`) — optional, see below |
 | `swtpm` | TPM 2.0 emulation (Windows template) |
+
+> **`virtiofsd` is optional.** If a system `virtiofsd` is not found the first time
+> a VM requests a virtiofs share, vee builds a pinned, checksum-verified copy on
+> demand and installs it at `~/.vee/bin/virtiofsd`. The build runs inside a host
+> container (`nerdctl` or `docker`, whichever is present); if neither is
+> available, vee falls back to compiling it inside a temporary Ubuntu VM. Both
+> paths verify the source archive's SHA-256 before building, and the first build
+> takes a few minutes. Installing the distro package above skips this entirely.
 
 ### Arch Linux
 

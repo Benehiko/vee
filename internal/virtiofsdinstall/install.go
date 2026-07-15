@@ -2,6 +2,9 @@ package virtiofsdinstall
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,9 +16,38 @@ import (
 )
 
 const (
+	// virtiofsdVersion is the human-facing tag, used only in log lines.
 	virtiofsdVersion = "v1.13.3"
-	virtiofsdSrcURL  = "https://gitlab.com/virtio-fs/virtiofsd/-/archive/" + virtiofsdVersion + "/virtiofsd-" + virtiofsdVersion + ".tar.gz"
+
+	// virtiofsdCommit is the git commit that tag v1.13.3 points at. We fetch the
+	// commit-SHA archive rather than the tag archive because a commit SHA names an
+	// immutable git tree, so GitLab produces a byte-reproducible tarball — the tag
+	// archive's gzip is not guaranteed stable, which would break a pinned hash.
+	virtiofsdCommit = "bbf82173682a3e48083771a0a23331e5c23b4924"
+
+	// virtiofsdSHA256 is the sha256 of the commit-SHA source archive below.
+	// Bump this deliberately (with virtiofsdCommit) when upgrading virtiofsd.
+	virtiofsdSHA256 = "76ee2a54eb76ef1ab130790a93970a2f6e26ff1de5589dd5aa2a102b1a0bec92"
+
+	virtiofsdSrcURL = "https://gitlab.com/virtio-fs/virtiofsd/-/archive/" + virtiofsdCommit + "/virtiofsd-" + virtiofsdCommit + ".tar.gz"
 )
+
+// ErrNoContainerRuntime is returned by EnsureVirtiofsd when no host container
+// runtime (nerdctl/docker) is available to build virtiofsd. Callers can detect
+// this with errors.Is to fall back to an alternative build strategy (e.g.
+// compiling inside a VM) instead of giving up.
+var ErrNoContainerRuntime = errors.New("no container runtime found (nerdctl/docker required to build virtiofsd)")
+
+// SourceURL returns the pinned virtiofsd source-archive URL, so alternative
+// builders (e.g. the in-VM fallback) fetch the exact same tarball.
+func SourceURL() string { return virtiofsdSrcURL }
+
+// SourceSHA256 returns the expected sha256 (hex) of the source archive at
+// SourceURL, so alternative builders verify the same integrity guarantee.
+func SourceSHA256() string { return virtiofsdSHA256 }
+
+// Version returns the human-facing virtiofsd version tag.
+func Version() string { return virtiofsdVersion }
 
 // EnsureVirtiofsd ensures that a virtiofsd binary exists at ~/.vee/bin/virtiofsd.
 // If already present it returns immediately. Otherwise it downloads the source
@@ -38,7 +70,7 @@ func EnsureVirtiofsd(home string) (string, error) {
 
 	containerRuntime, err := findContainerRuntime()
 	if err != nil {
-		return "", fmt.Errorf("no container runtime found (vessel/nerdctl/docker required to build virtiofsd): %w", err)
+		return "", err
 	}
 
 	fmt.Fprintf(os.Stderr, "virtiofsd not found — downloading and building %s (this takes a few minutes)…\n", virtiofsdVersion)
@@ -52,6 +84,11 @@ func EnsureVirtiofsd(home string) (string, error) {
 
 	if err := downloadFile(tarPath, virtiofsdSrcURL); err != nil {
 		return "", fmt.Errorf("download virtiofsd source: %w", err)
+	}
+	if err := verifyChecksum(tarPath, virtiofsdSHA256); err != nil {
+		// Drop the bad tarball so the next run re-downloads instead of trusting it.
+		_ = os.Remove(tarPath)
+		return "", fmt.Errorf("verify virtiofsd source: %w", err)
 	}
 
 	// Build inside a glibc container — source tarball and output dir are
@@ -119,14 +156,38 @@ func downloadFile(dst, url string) error {
 	return err
 }
 
+// verifyChecksum computes the sha256 of the file at path and compares it, in
+// constant-string form, against wantHex. On mismatch it returns an error naming
+// both the expected and actual hashes, so an intentional upstream re-roll can be
+// reconciled by bumping the pinned constant.
+func verifyChecksum(path, wantHex string) error {
+	f, err := os.Open(path) //nolint:gosec // G304: path is an internally constructed tempdir path, not user input.
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return err
+	}
+	gotHex := hex.EncodeToString(h.Sum(nil))
+	if gotHex != wantHex {
+		return fmt.Errorf("sha256 mismatch: expected %s, got %s", wantHex, gotHex)
+	}
+	return nil
+}
+
 // findContainerRuntime returns the path to the first available container runtime
 // that supports network access inside containers (needed for cargo to fetch crates).
-// vessel is excluded because its containers lack DNS resolution.
+// vessel is excluded because its containers lack DNS resolution. Returns
+// ErrNoContainerRuntime when none is found, so callers can fall back to an
+// in-VM build.
 func findContainerRuntime() (string, error) {
 	for _, name := range []string{"nerdctl", "docker"} {
 		if p, err := exec.LookPath(name); err == nil {
 			return p, nil
 		}
 	}
-	return "", fmt.Errorf("none of nerdctl/docker found in PATH (vessel not supported: no DNS in containers)")
+	return "", ErrNoContainerRuntime
 }
