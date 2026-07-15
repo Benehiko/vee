@@ -268,6 +268,10 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 	if cfg.SkipInstall && state.InstallState == "" {
 		filtered := cfg.Disks[:0]
 		for _, d := range cfg.Disks {
+			if d.IsScratch() {
+				m.deleteScratchDisk(cfg.Name, d)
+				continue
+			}
 			if !d.IsInstallISO() {
 				filtered = append(filtered, d)
 			}
@@ -309,9 +313,18 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 		// media=cdrom disks so legacy configs (written before the install_iso
 		// flag) get their now-dead installer cdrom removed here too — otherwise a
 		// deleted backing ISO makes every subsequent boot fail on the missing file.
+		//
+		// Scratch disks (e.g. the Windows 24H2 writable install copy) are also
+		// one-shot: strip them AND delete their VM-specific backing files so they
+		// don't waste disk after the install completes.
 		filtered := cfg.Disks[:0]
 		stripped := false
 		for _, d := range cfg.Disks {
+			if d.IsScratch() {
+				stripped = true
+				m.deleteScratchDisk(cfg.Name, d)
+				continue
+			}
 			if d.IsInstallISO() {
 				stripped = true
 				continue
@@ -1101,6 +1114,46 @@ func (m *Manager) Delete(name string) error {
 		_ = dbDeleteVM(m.db, name)
 	}
 	return deleteVMDir(m.vmDir(name))
+}
+
+// deleteScratchDisk removes the backing qcow2 of a one-shot scratch disk once
+// its install has completed. Best-effort: a missing file is fine, and any error
+// is logged rather than failing the start (the config is stripped regardless, so
+// the disk is no longer attached — a leftover file only wastes space).
+//
+// The path is resolved the same way qemu.Disk.AbsolutePath does: an explicit
+// file path is used verbatim, an explicit directory gets the generated file name
+// joined, and an empty Path resolves to the generated name relative to the
+// working directory (where qemu-img created it).
+func (m *Manager) deleteScratchDisk(vmName string, d DiskConfig) {
+	path := scratchDiskPath(vmName, d)
+	if path == "" {
+		return
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		m.provider.Logger().Warn("failed to delete scratch disk",
+			zap.String("vm", vmName), zap.String("path", path), zap.Error(err))
+		return
+	}
+	m.provider.Logger().Info("deleted install scratch disk",
+		zap.String("vm", vmName), zap.String("path", path))
+}
+
+// scratchDiskPath resolves a scratch disk's backing file path, mirroring
+// qemu.Disk.AbsolutePath / Disk.Name (disk-<vm>-<size>.<format>).
+func scratchDiskPath(vmName string, d DiskConfig) string {
+	diskSuffixes := []string{"qcow2", "qcow", "img", "raw", "iso", "vmdk", "vdi", "vhd"}
+	for _, suffix := range diskSuffixes {
+		if strings.HasSuffix(d.Path, suffix) {
+			return d.Path
+		}
+	}
+	format := d.Format
+	if format == "" {
+		format = "qcow2"
+	}
+	name := fmt.Sprintf("disk-%s-%s.%s", vmName, d.Size, format)
+	return filepath.Join(d.Path, name)
 }
 
 // deleteVMDir removes all contents of dir except the backups/ subdirectory.

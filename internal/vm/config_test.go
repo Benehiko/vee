@@ -38,6 +38,60 @@ func TestDiskConfigIsInstallISO(t *testing.T) {
 	}
 }
 
+func TestDiskConfigIsScratch(t *testing.T) {
+	if (DiskConfig{Media: "disk", Scratch: true}).IsScratch() != true {
+		t.Errorf("scratch disk should report IsScratch() = true")
+	}
+	if (DiskConfig{Media: "disk"}).IsScratch() != false {
+		t.Errorf("non-scratch disk should report IsScratch() = false")
+	}
+	// A scratch disk is never treated as an install ISO (it is a real disk).
+	if (DiskConfig{Media: "disk", Scratch: true}).IsInstallISO() != false {
+		t.Errorf("scratch disk should not be an install ISO")
+	}
+}
+
+func TestScratchDiskPath(t *testing.T) {
+	tests := []struct {
+		name string
+		vm   string
+		disk DiskConfig
+		want string
+	}{
+		{
+			name: "generated name for empty path",
+			vm:   "wintest",
+			disk: DiskConfig{Size: "8G", Format: "qcow2", Scratch: true},
+			want: "disk-wintest-8G.qcow2",
+		},
+		{
+			name: "default format when unset",
+			vm:   "wintest",
+			disk: DiskConfig{Size: "8G", Scratch: true},
+			want: "disk-wintest-8G.qcow2",
+		},
+		{
+			name: "explicit file path used verbatim",
+			vm:   "wintest",
+			disk: DiskConfig{Path: "/data/scratch.qcow2", Scratch: true},
+			want: "/data/scratch.qcow2",
+		},
+		{
+			name: "explicit directory gets generated name joined",
+			vm:   "wintest",
+			disk: DiskConfig{Path: "/data", Size: "8G", Format: "qcow2", Scratch: true},
+			want: "/data/disk-wintest-8G.qcow2",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := scratchDiskPath(tt.vm, tt.disk); got != tt.want {
+				t.Errorf("scratchDiskPath() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 // TestCheckDisksForDataSkipsLegacyCdrom guards the regression where a legacy
 // TrueNAS config carried a media=cdrom installer disk with no install_iso flag.
 // The data-check must skip it (a cdrom is never a data disk) rather than trying
