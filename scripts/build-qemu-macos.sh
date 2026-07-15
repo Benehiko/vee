@@ -52,14 +52,24 @@ brew install meson ninja pkg-config glib pixman dtc capstone libslirp \
 # is now >= 1.0 and therefore still COMPILES with QEMU 10.x — but without ANGLE
 # it renders in software (no Metal acceleration). We warn in that case.
 GL_ACCEL=1
+# The startergo/angle formula builds ANGLE from source via GN, which lives in a
+# separate startergo/gn tap; tap all three. Homebrew >= 6 requires explicit
+# per-tap trust before it will load third-party formulae, and — critically —
+# while an untrusted tap is merely *present* it refuses to resolve even core
+# formulae (the untrusted tap poisons the whole resolution). Trust these three
+# specific taps (scoped, not a global trust bypass); a no-op on older Homebrew.
 brew tap startergo/virglrenderer 2>/dev/null || true
 brew tap startergo/angle 2>/dev/null || true
+brew tap startergo/gn 2>/dev/null || true
 brew trust startergo/virglrenderer 2>/dev/null || true
 brew trust startergo/angle 2>/dev/null || true
+brew trust startergo/gn 2>/dev/null || true
 if ! brew install startergo/angle/angle \
   startergo/virglrenderer/libepoxy \
-  startergo/virglrenderer/virglrenderer 2>/dev/null; then
-  echo "warning: startergo qemu-virgl tap unavailable; falling back to Homebrew-core virglrenderer (>=1.0 so QEMU 10.x compiles, but NO macOS GL acceleration without ANGLE)" >&2
+  startergo/virglrenderer/virglrenderer; then
+  echo "warning: startergo qemu-virgl taps unavailable; falling back to Homebrew-core virglrenderer (>=1.0 so QEMU 10.x compiles, but NO macOS GL acceleration without ANGLE)" >&2
+  # Untap the third-party taps so they don't interfere with core resolution.
+  brew untap startergo/angle startergo/virglrenderer startergo/gn 2>/dev/null || true
   brew install libepoxy virglrenderer
   GL_ACCEL=0
 fi
