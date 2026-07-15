@@ -16,15 +16,15 @@ const releaseBaseURL = "https://github.com/Benehiko/vee/releases/download"
 // Checksums maps "<os>-<arch>" to the expected SHA-256 of the .tar.gz asset.
 // Populated when a release is built. An empty string means no asset is
 // published for that platform yet, so Ensure falls back to a system QEMU.
+//
+// These are the SHA-256 sums of the qemu-10.0.2-vee1 release assets. Each bundle
+// ships the QEMU binary plus the edk2/OVMF firmware under share/qemu, so with a
+// managed bundle vee needs neither a system QEMU nor an OVMF package.
 var Checksums = map[string]string{
-	"linux-amd64":  "",
-	"linux-arm64":  "",
-	"darwin-arm64": "",
-	// windows-amd64 has no published bundle yet, so Ensure falls back to a
-	// system QEMU on PATH (which must be a WHPX-capable build, i.e. QEMU for
-	// Windows with --enable-whpx). Populate this when a signed vee-qemu
-	// windows-amd64 asset is released.
-	"windows-amd64": "",
+	"linux-amd64":   "6230cead3993626fde6ebf94570fecc532e30c6b7f316810fc339ea1e8ee9b26",
+	"linux-arm64":   "fc685badfb0a5983abe2c34dc3eafe6c574dde74ff2f2f61ae22c8df342f25f5",
+	"darwin-arm64":  "f651b58be4d9ba2fb351639d45b4fb8a9af493869ebbefa584722cf70bba0690",
+	"windows-amd64": "8dbf64c69fd4147ad074faa3f43f8991870fa38db244e747655e38dc492f7779",
 }
 
 // AssetName returns the release asset filename for the given os/arch pair. The
