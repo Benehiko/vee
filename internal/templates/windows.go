@@ -196,6 +196,7 @@ func NewWindowsConfig(ctx context.Context, p provider.Provider, version images.W
 				Interface: "virtio",
 				Media:     "disk",
 				Cache:     "writeback",
+				Scratch:   true,
 			},
 		},
 		RTC:       "base=localtime,clock=host",

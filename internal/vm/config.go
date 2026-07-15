@@ -24,6 +24,12 @@ type DiskConfig struct {
 	// saved config once the install is complete (InstallState = ready), so the
 	// VM never re-enters the installer on subsequent starts.
 	InstallISO bool `yaml:"install_iso,omitempty" json:"install_iso,omitempty"`
+	// Scratch marks a disk as one-shot install scratch space (e.g. the Windows
+	// 11 24H2 template's writable copy of the install DVD). Like InstallISO it is
+	// attached only during install and stripped once the install completes, but
+	// unlike an ISO its backing qcow2 is VM-specific, so vee also deletes the
+	// file on teardown instead of leaving it to waste disk.
+	Scratch bool `yaml:"scratch,omitempty" json:"scratch,omitempty"`
 }
 
 // IsInstallISO reports whether this disk is a one-shot installer image that must
@@ -35,6 +41,13 @@ type DiskConfig struct {
 // backing ISO is removed.
 func (d DiskConfig) IsInstallISO() bool {
 	return d.InstallISO || d.Media == "cdrom"
+}
+
+// IsScratch reports whether this disk is one-shot install scratch space that
+// must be stripped from the config AND have its backing file deleted once
+// installation completes.
+func (d DiskConfig) IsScratch() bool {
+	return d.Scratch
 }
 
 type NICConfig struct {
