@@ -32,7 +32,7 @@ vee pull windows win11        # or win10, server2025, server2022
 
 | Setting | Value |
 |---------|-------|
-| Memory | 24G |
+| Memory | 8G |
 | CPUs | 4 |
 | UEFI | Yes (Secure Boot) |
 | TPM | 2.0 (swtpm) |
