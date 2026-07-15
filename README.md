@@ -92,11 +92,13 @@ vee pull windows server2025        # Windows Server 2025
 vee create winvm --template windows   # pulls automatically if not cached
 ```
 
-> **Windows-guest status:** `win10` (22H2) installs end-to-end. `win11` (24H2)
-> media boots into Windows Setup but the unattended install does not yet complete
-> (a 24H2 "OneSettings" Setup limitation). See
-> [docs/windows-guests.md](docs/windows-guests.md) for the ISO pipeline, the
-> `boot.wim` handling, and this limitation in detail.
+> **Windows-guest status:** both `win10` (22H2) and `win11` (24H2) install
+> end-to-end, booting to the desktop from the virtio system disk. 24H2 required
+> several workarounds (running Setup from a writable scratch disk, injecting
+> drivers via `offlineServicing`, and bundling `winre.wim` into `install.wim`).
+> See [docs/windows-guests.md](docs/windows-guests.md) for the ISO pipeline and
+> [docs/windows-24h2-install.md](docs/windows-24h2-install.md) for the full 24H2
+> debugging writeup.
 
 **Requirements:** `nerdctl` or `docker` on `PATH` (the ISO is assembled in a
 container; no host tooling is installed) and ~15 GB of free scratch space, which

@@ -118,23 +118,19 @@ func autounattendXML(version images.WindowsVersion, driverDir, tag string) strin
       <UILanguage>en-US</UILanguage>
       <UserLocale>en-US</UserLocale>
     </component>
-    <component name="Microsoft-Windows-PnpCustomizationsWinPE" processorArchitecture="amd64"
-               publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-      <DriverPaths>
-        <PathAndCredentials wcm:action="add" wcm:keyValue="1">
-          <Path>D:\viostor\{{DRIVERDIR}}\amd64</Path>
-        </PathAndCredentials>
-        <PathAndCredentials wcm:action="add" wcm:keyValue="2">
-          <Path>E:\viostor\{{DRIVERDIR}}\amd64</Path>
-        </PathAndCredentials>
-        <PathAndCredentials wcm:action="add" wcm:keyValue="3">
-          <Path>D:\NetKVM\{{DRIVERDIR}}\amd64</Path>
-        </PathAndCredentials>
-        <PathAndCredentials wcm:action="add" wcm:keyValue="4">
-          <Path>E:\NetKVM\{{DRIVERDIR}}\amd64</Path>
-        </PathAndCredentials>
-      </DriverPaths>
-    </component>
+    <!--
+      NOTE: Windows 11 24H2's ConX Setup (setuphost/setupprep) FAILS the old
+      unattend driver-injection path. A <Microsoft-Windows-PnpCustomizationsWinPE>
+      <DriverPaths> block here locates the (correctly signed) viostor.inf but the
+      ExecuteUnattendDriverInstall action dies with 0x80070103 (ERROR_NO_MORE_ITEMS,
+      reported as 0x80070103-0x40031 in the Setup UI) in the down-level phase,
+      before any image is applied. This is a Microsoft-acknowledged 24H2 regression.
+      So no DriverPaths here. Instead: startnet.cmd drvloads viostor in WinPE so
+      Setup can see the virtio system disk during apply (see
+      internal/images/windows.go), and the offlineServicing pass below injects
+      viostor + NetKVM into the applied OS image so the installed OS boots from
+      the virtio disk.
+    -->
     <component name="Microsoft-Windows-Setup" processorArchitecture="amd64"
                publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <RunSynchronous>
@@ -217,6 +213,35 @@ func autounattendXML(version images.WindowsVersion, driverDir, tag string) strin
         </ProductKey>
         <AcceptEula>true</AcceptEula>
       </UserData>
+    </component>
+  </settings>
+
+  <settings pass="offlineServicing">
+    <!--
+      Inject viostor (virtio-blk) + NetKVM into the APPLIED offline OS image via
+      DISM. This is the offlineServicing PnpCustomizationsNonWinPE mechanism —
+      distinct from the windowsPE PnpCustomizationsWinPE <DriverPaths> that 24H2
+      ConX Setup breaks (0x80070103). It runs against the on-disk image after it
+      is applied, so the installed OS boots from the virtio system disk without
+      the failing down-level unattend driver step. Paths scan both driver-CD
+      letters (D:/E:) since the assignment is not fixed.
+    -->
+    <component name="Microsoft-Windows-PnpCustomizationsNonWinPE" processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <DriverPaths>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="1">
+          <Path>D:\viostor\{{DRIVERDIR}}\amd64</Path>
+        </PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="2">
+          <Path>E:\viostor\{{DRIVERDIR}}\amd64</Path>
+        </PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="3">
+          <Path>D:\NetKVM\{{DRIVERDIR}}\amd64</Path>
+        </PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="4">
+          <Path>E:\NetKVM\{{DRIVERDIR}}\amd64</Path>
+        </PathAndCredentials>
+      </DriverPaths>
     </component>
   </settings>
 

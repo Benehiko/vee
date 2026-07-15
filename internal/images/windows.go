@@ -416,14 +416,129 @@ wimlib-imagex export "$INSTALL_ESD" "$BOOT_IDX" /work/iso/sources/boot.wim \
 if [ "$IS_WINRE" = "1" ]; then
     # Transform WinRE into a Windows Setup boot environment. WinRE's winpeshl.ini
     # hard-launches the recovery shell (recenv.exe); remove it and install a
-    # startnet.cmd that runs wpeinit then launches setup.exe from whichever drive
-    # the install media mounted as (the DVD letter is assigned at boot and is not
-    # knowable ahead of time, so scan all drives). This is the same result a
-    # native Setup boot.wim produces — verified end-to-end: the guest boots
-    # straight into "Windows Setup — Select language settings".
+    # startnet.cmd that runs wpeinit then launches setup.exe. This is the same
+    # result a native Setup boot.wim produces — the guest boots straight into
+    # "Windows Setup — Select language settings".
+    #
+    # Windows 11 24H2 "ConX" Setup (sources\setuphost.exe) writes its
+    # $WINDOWS.~BT working/diagnostics tree onto the drive setup.exe runs from.
+    # The install DVD is read-only, so launching setup.exe from it fails with
+    # "Access is denied [0x00000005]" and the cascading fatal "OneSettings
+    # initialization failed 0x800702E7" (~318 MB into image apply — issue #17).
+    # Fix: copy the DVD tree onto a writable scratch virtio disk and launch
+    # setup.exe from there so $WINDOWS.~BT lands on writable media.
+    #
+    # startnet.cmd: drvload viostor (WinRE has no virtio-blk driver) so the
+    # scratch virtio disk is visible -> select the last disk (the scratch disk
+    # is added last, so it enumerates as the highest index; the OS disk is disk
+    # 0) -> format NTFS as W: -> xcopy the DVD onto W: -> run W:\setup.exe.
+    # Everything is version-agnostic (scan for viostor.inf / the DVD letter) so
+    # this heredoc needs no per-version data. Falls back to the old direct-DVD
+    # launch if viostor or the DVD cannot be found (no worse than before for the
+    # win10 classic-Setup path, which does not hit the 24H2 gate anyway).
+    #
+    # NOTE: this runs in a WinRE-derived WinPE, which ships a REDUCED toolset —
+    # findstr.exe and robocopy.exe are NOT present. Only find.exe and xcopy.exe
+    # are available for filtering/copying, so this script must avoid findstr and
+    # robocopy entirely.
     cat > /tmp/startnet.cmd <<'STARTNET'
+@echo off
 wpeinit
+set LOG=X:\startnet.log
+echo [startnet] begin > %LOG%
+
+rem 1. Load the virtio-blk (viostor) driver so WinPE can see the virtio disks.
+rem    The extras CD ships viostor.inf for MANY Windows versions
+rem    (\viostor\<ver>\amd64\viostor.inf: 2k12, 2k16, w10, w11, ...). The
+rem    correct one for this WinPE is not knowable here, and picking the wrong
+rem    version's inf makes drvload fail so the virtio disks stay invisible.
+rem    Both the OS disk and the scratch disk are virtio, so a failed drvload
+rem    means diskpart sees NO usable disk. Load EVERY viostor.inf found — only
+rem    the matching one binds; the rest are harmless no-ops.
+set FOUNDVIO=
+for %%d in (C D E F G H I J K L M N O P Q R S T U V W X Y Z) do (
+  if exist %%d:\viostor (
+    for /f "delims=" %%f in ('dir /s /b %%d:\viostor\viostor.inf 2^>nul') do (
+      set FOUNDVIO=1
+      echo [startnet] drvload %%f >> %LOG%
+      drvload "%%f" >> %LOG% 2>&1
+    )
+  )
+)
+if not defined FOUNDVIO echo [startnet] WARNING no viostor.inf found >> %LOG%
+
+rem 2. Identify the scratch disk. It is the last virtio disk added to the
+rem    machine (the OS disk is disk 0, the 8 GB scratch is the highest index).
+rem    findstr is unavailable in WinRE, so filter diskpart output with find.exe.
+rem    "find" also matches the "Disk ###" header row, so drop it with a second
+rem    "find /v" on "#", then keep the last remaining index = highest = scratch.
+echo list disk > X:\dp-list.txt
+diskpart /s X:\dp-list.txt > X:\dp-out.txt
+type X:\dp-out.txt >> %LOG%
+set SCRATCH=
+for /f "tokens=2" %%a in ('type X:\dp-out.txt ^| find "Disk " ^| find /v "#"') do set SCRATCH=%%a
+echo [startnet] scratch disk = %SCRATCH% >> %LOG%
+if not defined SCRATCH (
+  echo [startnet] ERROR no virtio disk visible ^(drvload failed?^), aborting to DVD >> %LOG%
+  goto DVDFALLBACK
+)
+
+rem 3. Clean + GPT + NTFS-format the scratch disk, assign letter W:.
+echo select disk %SCRATCH% > X:\dp-fmt.txt
+echo clean >> X:\dp-fmt.txt
+echo convert gpt >> X:\dp-fmt.txt
+echo create partition primary >> X:\dp-fmt.txt
+echo format fs=ntfs quick label=VEESCRATCH >> X:\dp-fmt.txt
+echo assign letter=W >> X:\dp-fmt.txt
+diskpart /s X:\dp-fmt.txt >> %LOG% 2>&1
+
+rem 4. Find the install DVD (setup.exe + sources\install.wim) and copy it to W:.
+rem    robocopy is unavailable in WinRE; use xcopy (/e all subdirs, /h hidden,
+rem    /y overwrite, /c continue on error, /q quiet). Deliberately NOT /k: the
+rem    DVD files carry the read-only attribute, and copying that onto W: makes
+rem    24H2 ConX Setup fail 0x80070103-0x40031 when it tries to rewrite files in
+rem    its own working tree. After copying, clear read-only recursively so the
+rem    whole tree is writable.
+set DVD=
+for %%d in (C D E F G H I J K L M N O P Q R S T U V W X Y Z) do (
+  if not defined DVD if exist %%d:\setup.exe if exist %%d:\sources\install.wim set DVD=%%d
+)
+echo [startnet] dvd = %DVD% >> %LOG%
+if not defined DVD goto DVDSCAN
+if not exist W:\ (
+  echo [startnet] ERROR W: not formatted, falling back to DVD >> %LOG%
+  start "" /wait %DVD%:\setup.exe
+  goto END
+)
+echo [startnet] xcopy %DVD%:\ W:\ >> %LOG%
+xcopy %DVD%:\*.* W:\ /e /h /y /c /q >> %LOG% 2>&1
+echo [startnet] clearing read-only attributes on W: >> %LOG%
+attrib -R W:\*.* /S /D >> %LOG% 2>&1
+if exist W:\setup.exe (
+  echo [startnet] launch W:\setup.exe >> %LOG%
+  start "" /wait W:\setup.exe
+) else (
+  echo [startnet] W:\setup.exe missing, falling back to DVD >> %LOG%
+  start "" /wait %DVD%:\setup.exe
+)
+rem After Setup returns (success reboots before reaching here; failure falls
+rem through), harvest Setup's Panther logs from the WinPE RAM disk (X:) and any
+rem other drive to W:\vee-logs so they survive for offline inspection.
+mkdir W:\vee-logs >nul 2>&1
+copy %LOG% W:\vee-logs\startnet.log >nul 2>&1
+for %%d in (X C D E F G H I J K L M N O P Q R S T U V W Y Z) do (
+  if exist %%d:\$WINDOWS.~BT\Sources\Panther xcopy %%d:\$WINDOWS.~BT\Sources\Panther\*.* W:\vee-logs\panther-%%d\ /e /h /y /c /q >nul 2>&1
+)
+goto END
+
+:DVDSCAN
+echo [startnet] no DVD matched, scanning for setup.exe >> %LOG%
+:DVDFALLBACK
+rem The writable-scratch path could not be set up; fall back to launching Setup
+rem directly from the (read-only) DVD. On 24H2 this hits the OneSettings gate,
+rem but it is no worse than the pre-fix behaviour and keeps older media working.
 for %%d in (C D E F G H I J K L M N O P Q R S T U V W X Y Z) do if exist %%d:\setup.exe start "" /wait %%d:\setup.exe
+:END
 STARTNET
     wimlib-imagex update /work/iso/sources/boot.wim 1 \
         --command="delete --force /Windows/System32/winpeshl.ini" >/dev/null 2>&1 || true
@@ -435,6 +550,43 @@ fi
 # the whole reference set (base ESDs + captured CAB ESDs).
 wimlib-imagex export "$INSTALL_ESD" 3 /work/iso/sources/install.wim \
     --ref="$REFGLOB" --compress=LZX
+
+# Inject WinRE (winre.wim) into install.wim at \Windows\System32\Recovery.
+#
+# UUP metadata ESDs keep the Recovery Environment as a SEPARATE image; a plain
+# export of the OS image (index 3) leaves \Windows\System32\Recovery WITHOUT a
+# winre.wim (only ReAgent.xml). Real Microsoft media bundles winre.wim inside
+# install.wim, and Windows 11 24H2 Setup's image-deploy / SafeOS step hard-
+# requires it: without it Setup fails extracting
+# "\Windows\System32\Recovery\winre.wim from install.wim" with
+# 0x80070003 (ERROR_PATH_NOT_FOUND) right after the image starts deploying
+# (issue #17). So export the pristine Recovery Environment image from the ESD to
+# a standalone winre.wim and add it into install.wim at the expected path.
+#
+# Use the Recovery Environment image by NAME (not BOOT_IDX: when a dedicated
+# Setup PE exists, BOOT_IDX points at that, not WinRE). This is the untouched
+# recovery image — NOT the Setup-transformed boot.wim above.
+WINRE_IDX=$(wimlib-imagex info "$INSTALL_ESD" 2>/dev/null | awk '
+    tolower($0) ~ /^index:/ {idx=$2}
+    tolower($0) ~ /^name:/ && tolower($0) ~ /recovery environment/ {print idx; exit}')
+if [ -n "$WINRE_IDX" ]; then
+    echo "Injecting WinRE (index $WINRE_IDX) into install.wim as winre.wim"
+    wimlib-imagex export "$INSTALL_ESD" "$WINRE_IDX" /tmp/winre.wim \
+        --ref="$REFGLOB" --compress=LZX 2>/dev/null
+    # install.wim has a single image (index 1). Add winre.wim into it; create the
+    # Recovery dir path if the update command needs it (the dir already exists in
+    # the OS image, so a plain add of the file is sufficient).
+    wimlib-imagex update /work/iso/sources/install.wim 1 \
+        --command="add /tmp/winre.wim /Windows/System32/Recovery/winre.wim" >/dev/null 2>&1
+    if wimlib-imagex dir /work/iso/sources/install.wim 1 2>/dev/null | grep -qi "/Windows/System32/Recovery/winre.wim"; then
+        echo "WinRE injected into install.wim OK"
+    else
+        echo "ERROR: failed to inject winre.wim into install.wim" >&2
+        exit 1
+    fi
+else
+    echo "WARNING: no Recovery Environment image in ESD; install.wim will lack winre.wim (24H2 Setup may fail 0x80070003)" >&2
+fi
 
 if [ ! -f /work/iso/boot/etfsboot.com ] || [ ! -f /work/iso/efi/microsoft/boot/efisys_noprompt.bin ]; then
     echo "ERROR: boot files missing after applying setup media" >&2
