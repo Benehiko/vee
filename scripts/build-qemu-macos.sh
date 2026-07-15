@@ -52,25 +52,26 @@ brew install meson ninja pkg-config glib pixman dtc capstone libslirp \
 # is now >= 1.0 and therefore still COMPILES with QEMU 10.x — but without ANGLE
 # it renders in software (no Metal acceleration). We warn in that case.
 GL_ACCEL=1
-# The startergo/angle formula builds ANGLE from source via GN, which lives in a
-# separate startergo/gn tap; tap all three. Homebrew >= 6 requires explicit
-# per-tap trust before it will load third-party formulae, and — critically —
-# while an untrusted tap is merely *present* it refuses to resolve even core
-# formulae (the untrusted tap poisons the whole resolution). Trust these three
-# specific taps (scoped, not a global trust bypass); a no-op on older Homebrew.
-brew tap startergo/virglrenderer 2>/dev/null || true
-brew tap startergo/angle 2>/dev/null || true
-brew tap startergo/gn 2>/dev/null || true
-brew trust startergo/virglrenderer 2>/dev/null || true
-brew trust startergo/angle 2>/dev/null || true
-brew trust startergo/gn 2>/dev/null || true
-if ! brew install startergo/angle/angle \
-  startergo/virglrenderer/libepoxy \
-  startergo/virglrenderer/virglrenderer; then
-  echo "warning: startergo qemu-virgl taps unavailable; falling back to Homebrew-core virglrenderer (>=1.0 so QEMU 10.x compiles, but NO macOS GL acceleration without ANGLE)" >&2
-  # Untap the third-party taps so they don't interfere with core resolution.
-  brew untap startergo/angle startergo/virglrenderer startergo/gn 2>/dev/null || true
-  brew install libepoxy virglrenderer
+# startergo/virglrenderer/virglrenderer transitively depends (per its formula)
+# on startergo/angle/angle, startergo/libepoxy/libepoxy and molten-vk; angle in
+# turn build-depends on startergo/gn/gn. So we only need to install the
+# virglrenderer formula and Homebrew pulls the rest — but all four taps must be
+# tapped and trusted first. Homebrew >= 6 requires explicit per-tap trust before
+# it will load third-party formulae, and while an untrusted tap is merely
+# *present* it refuses to resolve even core formulae. Trust these four specific
+# taps (scoped, not a global trust bypass); a no-op on older Homebrew.
+GL_TAPS=(startergo/virglrenderer startergo/angle startergo/gn startergo/libepoxy)
+for t in "${GL_TAPS[@]}"; do
+  brew tap "$t" 2>/dev/null || true
+  brew trust "$t" 2>/dev/null || true
+done
+if ! brew install startergo/virglrenderer/virglrenderer; then
+  # No macOS Homebrew-core virglrenderer exists to fall back to, so build a plain
+  # HVF QEMU without accelerated virtio-gpu (2D still works; guests run fast
+  # under HVF). Untap the third-party taps so they don't poison core resolution.
+  echo "warning: startergo virglrenderer tap unavailable; building WITHOUT accelerated virtio-gpu (HVF + 2D only)" >&2
+  brew untap "${GL_TAPS[@]}" 2>/dev/null || true
+  brew install libepoxy || true
   GL_ACCEL=0
 fi
 brew install molten-vk vulkan-headers || true
@@ -126,10 +127,16 @@ for f in angle libangle libepoxy-angle libepoxy virglrenderer; do
   LIBRARY_PATH="${LIBRARY_PATH:+$LIBRARY_PATH:}$p/lib"
 done
 export CPATH LIBRARY_PATH
+# Only enable the GL/virgl stack when accelerated virglrenderer is available.
+# Without it (GL_ACCEL=0) build a plain HVF QEMU — enabling virglrenderer with no
+# usable virglrenderer would fail configure.
 if [[ "$GL_ACCEL" == "1" ]]; then
   echo "==> Building with ANGLE-accelerated virglrenderer (Metal-backed virtio-gpu)"
+  GL_CONFIGURE=(--enable-opengl --enable-virglrenderer)
 else
-  echo "==> Building with non-ANGLE virglrenderer (compiles, but software GL only)"
+  echo "==> Building WITHOUT accelerated virtio-gpu (HVF + 2D only)"
+  GL_CONFIGURE=(--disable-virglrenderer)
+  GLFLAGS=""
 fi
 # Homebrew prefixes contain no spaces, so word-splitting $GLFLAGS is intentional.
 # shellcheck disable=SC2086
@@ -137,8 +144,7 @@ fi
   --prefix=/usr/local \
   --target-list=aarch64-softmmu \
   --enable-cocoa \
-  --enable-opengl \
-  --enable-virglrenderer \
+  "${GL_CONFIGURE[@]}" \
   --enable-hvf \
   --enable-slirp \
   --enable-curl \
