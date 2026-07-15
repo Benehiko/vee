@@ -17,6 +17,10 @@ jobs:
     name: Build vee-qemu (${{ matrix.arch }})
     runs-on: ubuntu-latest
     strategy:
+      # One leg failing must not cancel the others — each platform bundle is an
+      # independent release asset. (The linux-arm64 leg is not yet fixed; keeping
+      # fail-fast off lets the working linux-amd64 leg finish and publish.)
+      fail-fast: false
       matrix:
         include:
           - arch: amd64
@@ -97,7 +101,7 @@ jobs:
         run: |
           # Bundle layout (bin/, share/qemu) matches what vee's qemubin extracts
           # into ~/.vee.
-          mkdir -p dist bundle/bin
+          mkdir -p dist bundle/bin bundle/share
           ASSET="qemu-system-x86_64-linux-${{ matrix.goarch }}"
           cp build/qemu-system-x86_64 bundle/bin/qemu-system-x86_64
           chmod +x bundle/bin/qemu-system-x86_64
