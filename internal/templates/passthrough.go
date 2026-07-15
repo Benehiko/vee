@@ -22,7 +22,7 @@ func NewPassthroughConfig(p provider.Provider, name, nvmeDev, ovmfVarsPath, pciA
 	cfg := &vm.VMConfig{
 		Name:     name,
 		Template: "passthrough",
-		Memory:   "16G",
+		Memory:   "8G",
 		CPUs:     6,
 		Sockets:  1,
 		Cores:    3,
