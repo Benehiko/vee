@@ -124,7 +124,7 @@ jobs:
             echo
             echo "## Install"
             echo
-            echo "Download the asset for your platform, **verify the checksum**, and put \`vee\` on your \`PATH\`. vee drives QEMU, so install your host's QEMU packages too — see the [Installation guide](https://benehiko.github.io/vee/getting-started/installation/)."
+            echo "Download the asset for your platform, **verify the checksum**, and put \`vee\` on your \`PATH\`. vee drives QEMU, so install your host's QEMU packages too — see the [Installation guide](https://vee.benehiko.com/getting-started/installation/)."
             echo
             echo "### Linux"
             echo
