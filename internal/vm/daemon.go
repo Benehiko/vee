@@ -96,6 +96,14 @@ func (m *Manager) RunDaemon(ctx context.Context) error {
 		}
 	}
 
+	// Serve the control socket so `vee qmp` can route commands to the QMP
+	// connections this daemon owns.
+	go m.serveControlSocket(ctx)
+
+	// Adopt VMs already running (e.g. started before this daemon incarnation)
+	// so their QMP sockets are owned here and reachable via the control socket.
+	m.adoptRunningVMs(ctx)
+
 	if err := m.startAutoStartVMs(ctx); err != nil {
 		log.Warn("initial autostart pass had errors", zap.Error(err))
 	}

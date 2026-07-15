@@ -206,6 +206,7 @@ See [docs/gpu-passthrough-gaming.md](docs/gpu-passthrough-gaming.md) for Sunshin
 | `vee ip <name>` | Show network interfaces and IP addresses inside a VM |
 | `vee logs <name>` | Stream QEMU output |
 | `vee monitor <name>` | Real-time CPU / memory / disk / network stats |
+| `vee qmp <name> <command>` | Send a QMP (QEMU Machine Protocol) command to a running VM |
 | `vee view <name>` | Open or connect to a VM's display (SPICE or GPU) |
 | `vee config <name>` | Edit a VM's configuration in an interactive TUI |
 | `vee check <name>` | Run health checks on an installed VM |

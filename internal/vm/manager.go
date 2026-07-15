@@ -35,10 +35,16 @@ type Manager struct {
 	// PromptFn is called when interactive input is needed (e.g. TrueNAS password).
 	// If nil, operations requiring prompts are skipped with a warning.
 	PromptFn func(prompt string) (string, error)
+
+	// qmp tracks the live QMP owner connection for each running VM in this
+	// process. Only the daemon keeps a Manager alive long enough for this to
+	// hold entries; short-lived CLI Managers leave it empty and fall back to
+	// dialing QMP sockets directly.
+	qmp *qmpRegistry
 }
 
 func NewManager(p provider.Provider) *Manager {
-	return &Manager{provider: p, db: p.DB()}
+	return &Manager{provider: p, db: p.DB(), qmp: newQMPRegistry()}
 }
 
 func (m *Manager) storagePath() string {
@@ -450,7 +456,7 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 	// so detach it from the request ctx — cancelling Start must not kill the
 	// watcher — while still carrying any ctx values via WithoutCancel.
 	if newState.QMPSocket != "" {
-		go m.watchShutdownEvents(context.WithoutCancel(ctx), name, newState.QMPSocket)
+		go m.watchVMConnection(context.WithoutCancel(ctx), name, newState.QMPSocket)
 	}
 
 	// Register hostname → IP and inject SSH key. Best-effort: log but don't fail start.
@@ -908,11 +914,7 @@ func (m *Manager) stopWithReason(ctx context.Context, name, reason string) error
 	}
 
 	if state.QMPSocket != "" {
-		client, qmpErr := qemu.NewQMPClient(ctx, state.QMPSocket, 3*time.Second)
-		if qmpErr == nil {
-			_ = client.SystemPowerdown()
-			_ = client.Close()
-		}
+		m.powerdown(ctx, name, state.QMPSocket)
 	}
 
 	// Wait up to 30s for the process to exit.
