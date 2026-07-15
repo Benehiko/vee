@@ -76,6 +76,11 @@ jobs:
 
               mkdir -p /output
               cp /tmp/qemu-install/usr/local/bin/qemu-system-x86_64 /output/
+              # Copy the QEMU datadir (pc-bios incl. the bz2-compressed edk2
+              # x86_64 firmware) out of the container to the bind-mounted /output.
+              # make install writes it inside the container FS; only /output
+              # survives. The host runner stages + decompresses it below.
+              cp -R /tmp/qemu-install/usr/local/share/qemu /output/qemu-share
               # Copy the GPLv2 license text (and per-component summary) out of the
               # source tree so the host can ship it in the bundle (GPLv2 §1/§3).
               cp "qemu-${QEMU_VER}/COPYING" /output/COPYING
@@ -90,11 +95,21 @@ jobs:
             --enable-usb-redir --enable-slirp --enable-kvm --disable-docs
             --disable-debug-info
         run: |
-          # Bundle layout (bin/) matches what vee's qemubin extracts into ~/.vee.
+          # Bundle layout (bin/, share/qemu) matches what vee's qemubin extracts
+          # into ~/.vee.
           mkdir -p dist bundle/bin
           ASSET="qemu-system-x86_64-linux-${{ matrix.goarch }}"
           cp build/qemu-system-x86_64 bundle/bin/qemu-system-x86_64
           chmod +x bundle/bin/qemu-system-x86_64
+          # Ship the QEMU datadir so vee needs no distro OVMF package. Decompress
+          # the edk2 x86_64 firmware vee probes for (bz2 -> plain .fd); vee's
+          # runtime extractBundle does not handle bz2, so it must be plain here.
+          cp -R build/qemu-share bundle/share/qemu
+          for fw in edk2-x86_64-code edk2-x86_64-secure-code edk2-i386-vars; do
+            if [ -f "bundle/share/qemu/${fw}.fd.bz2" ] && [ ! -f "bundle/share/qemu/${fw}.fd" ]; then
+              bunzip2 -k "bundle/share/qemu/${fw}.fd.bz2"
+            fi
+          done
           # GPLv2 compliance: ship COPYING + SOURCE.txt in the bundle. Stage the
           # license text extracted from the source tree so the helper finds it.
           mkdir -p srcmeta
@@ -199,7 +214,7 @@ jobs:
             **macOS (aarch64, Apple Silicon):** self-contained bundle with cocoa · OpenGL · virglrenderer (ANGLE/Metal) · MoltenVK (Venus) · HVF, code-signed with the hypervisor entitlement
             **Windows (x86_64):** WHPX · slirp, MinGW-cross-built with bundled runtime DLLs (accelerated CPU + 2D; the GL/SPICE stack is not yet cross-built for Windows)
 
-            Assets are bundles (bin/, lib/, share/) extracted into ~/.vee by vee's qemubin package.
+            Assets are bundles (bin/, lib/, share/) extracted into ~/.vee by vee's qemubin package. Each bundle ships QEMU's datadir under share/qemu, including the edk2/OVMF UEFI firmware (decompressed to plain .fd), so no distro OVMF package or Homebrew QEMU is required.
 
             ### License
 

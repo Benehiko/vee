@@ -43,7 +43,7 @@ apt-get install -y --no-install-recommends \
   python3 python3-venv python3-pip ninja-build meson pkg-config \
   mingw-w64 \
   libglib2.0-dev-bin \
-  curl ca-certificates xz-utils git \
+  curl ca-certificates xz-utils git bzip2 \
   mingw-w64-x86-64-dev
 
 # Debian/Ubuntu ship a pkg-config wrapper for the cross target as
@@ -96,6 +96,15 @@ cp "$QEMU_BIN" "$BUNDLE/bin/qemu-system-x86_64.exe"
 # Datadir (pc-bios, keymaps, firmware).
 QEMU_SHARE="$(find "$STAGE" -type d -name qemu -path '*/share/*' | head -n1)"
 [[ -n "$QEMU_SHARE" ]] && cp -R "$QEMU_SHARE" "$BUNDLE/share/qemu"
+
+# Decompress the edk2 x86_64 firmware vee probes for (bz2 -> plain .fd). vee's
+# runtime extractBundle does not handle bz2, so ship plain .fd. Mirrors the
+# aarch64 decompression in build-qemu-macos.sh.
+for fw in edk2-x86_64-code edk2-x86_64-secure-code edk2-i386-vars; do
+  if [[ -f "$BUNDLE/share/qemu/${fw}.fd.bz2" && ! -f "$BUNDLE/share/qemu/${fw}.fd" ]]; then
+    bunzip2 -k "$BUNDLE/share/qemu/${fw}.fd.bz2"
+  fi
+done
 
 echo "==> Bundling dependency DLLs"
 # Resolve the DLLs the .exe imports (MinGW runtime + glib/pixman/etc.) and copy
