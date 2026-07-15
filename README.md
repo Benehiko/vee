@@ -284,7 +284,7 @@ Download the `.tar.gz` for your platform from the
 matching `.sha256`, extract the `vee` binary onto your `PATH`, and install the
 host QEMU packages. Full step-by-step instructions (Linux, macOS, Windows) plus
 how to run vee as a daemon are in the
-[Installation guide](https://benehiko.github.io/vee/getting-started/installation/).
+[Installation guide](https://vee.benehiko.com/getting-started/installation/).
 
 ## Docs
 
@@ -294,6 +294,7 @@ how to run vee as a daemon are in the
 - [docs/pacman-mirror.md](docs/pacman-mirror.md) — host-side pacman caching proxy for Arch VMs
 - [docs/host-shutdown.md](docs/host-shutdown.md) — how the daemon blocks host poweroff while VMs are running
 - [docs/github-runner.md](docs/github-runner.md) — self-hosted GitHub Actions runner: cred persistence, SSH keys, disk GC
+- [docs/docs-site.md](docs/docs-site.md) — Hugo documentation site: local preview and Cloudflare Pages deploy
 
 ## License
 

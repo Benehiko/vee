@@ -1,4 +1,4 @@
-baseURL = "https://benehiko.github.io/vee/"
+baseURL = "https://vee.benehiko.com/"
 languageCode = "en-us"
 title = "vee"
 theme = "hugo-geekdoc"
