@@ -106,7 +106,11 @@ jobs:
         id: changelog
         run: |
           TAG="${{ github.ref_name }}"
-          PREV="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+          # Only consider vee version tags (v*) as the previous release. Other
+          # tags — notably the vee-qemu bundle tags (qemu-*-vee*) — land between
+          # vee releases and would otherwise be picked as the "previous tag",
+          # producing a wrong changelog range and compare link.
+          PREV="$(git describe --tags --abbrev=0 --match 'v*' "${TAG}^" 2>/dev/null || true)"
           {
             echo "## What's changed"
             echo
