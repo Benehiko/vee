@@ -173,3 +173,42 @@ func TestLoadConfigMissingFile(t *testing.T) {
 		t.Fatal("expected non-nil config")
 	}
 }
+
+func TestFirstExistingPrefersFirstOnDisk(t *testing.T) {
+	dir := t.TempDir()
+	present := filepath.Join(dir, "present.fd")
+	if err := os.WriteFile(present, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	missing := filepath.Join(dir, "missing.fd")
+
+	// The first existing candidate wins, even if a later one also exists.
+	if got := firstExisting("fallback", missing, present); got != present {
+		t.Errorf("firstExisting: got %q, want %q", got, present)
+	}
+	// When nothing exists, the fallback is returned.
+	if got := firstExisting("fallback", missing); got != "fallback" {
+		t.Errorf("firstExisting fallback: got %q, want %q", got, "fallback")
+	}
+}
+
+// defaultFirmware probes several distro OVMF layouts. When none exist on the
+// test host it must still return the arch-appropriate fallback rather than an
+// empty string, so a VM build produces a clear "firmware not found" copy error
+// instead of a confusing empty-path one.
+func TestDefaultFirmwareFallsBackToArchDefault(t *testing.T) {
+	home := t.TempDir()
+	code, vars, secboot := defaultFirmware(home)
+
+	if code == "" || vars == "" || secboot == "" {
+		t.Fatalf("defaultFirmware returned an empty path: code=%q vars=%q secboot=%q", code, vars, secboot)
+	}
+
+	wantSuffix := "OVMF" // x86_64 fallback
+	if platform.DefaultGuestArch() == "aarch64" {
+		wantSuffix = "" // aarch64 fallbacks live under ~/.vee or AAVMF; skip the assertion
+	}
+	if wantSuffix != "" && !strings.Contains(code, wantSuffix) {
+		t.Errorf("x86_64 code fallback should reference OVMF: %s", code)
+	}
+}

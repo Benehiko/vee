@@ -173,7 +173,9 @@ func (m *Manager) Create(ctx context.Context, cfg *VMConfig) error {
 		}
 		dst := filepath.Join(dir, "OVMF_VARS.fd")
 		if err := copyFile(src, dst); err != nil {
-			return fmt.Errorf("copy UEFI vars (%s): %w — ensure aarch64 firmware is available (install the vee-qemu bundle or QEMU via Homebrew)", src, err)
+			return fmt.Errorf("copy UEFI vars (%s): %w — UEFI firmware not found; install your distro's OVMF/edk2 package "+
+				"(Arch: edk2-ovmf, Debian/Ubuntu/Mint: ovmf, Fedora: edk2-ovmf, macOS: brew install qemu), "+
+				"or set ovmf_vars_path in ~/.vee/config.yaml", src, err)
 		}
 		cfg.UEFI.VarsPath = dst
 	}
