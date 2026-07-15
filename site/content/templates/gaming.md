@@ -1,35 +1,14 @@
 ---
 title: gaming
-weight: 50
+weight: 48
 ---
 
-GPU passthrough gaming VM. Creates a fresh VM with a new OS disk, 16G RAM, 6 CPUs, and `anti_detect` enabled for anti-cheat compatibility.
-
-## Prerequisites
-
-See [GPU Passthrough Prerequisites]({{< relref "/gpu-passthrough/prerequisites" >}}).
-
-## Create
+Legacy alias for [`gaming-arch`]({{< relref "gaming-arch" >}}). Kept for backwards compatibility.
 
 ```sh
 vee create win-gaming --template gaming --gpu-pci 08:00.0
 ```
 
-## Defaults
+Behaviour is identical to `gaming-arch`, with one convenience: if you pass `--gpu-pci` without `--gpu-mode`, passthrough is enabled implicitly.
 
-| Setting | Value |
-|---------|-------|
-| Memory | 16G |
-| CPUs | 6 (3 cores × 2 threads) |
-| Network | Bridge (br0) |
-| GPU | VFIO passthrough |
-| Anti-detect | Enabled |
-| UEFI | Yes |
-
-## Anti-detect
-
-The `anti_detect: true` flag configures QEMU to hide virtualization artifacts that anti-cheat software (Easy Anti-Cheat, BattlEye) may detect. This includes hiding the QEMU vendor string from CPUID and the PCI subsystem IDs.
-
-## Notes
-
-For a gaming VM booting from an existing NVMe (e.g. a Windows install you already use on bare metal), use the [`passthrough` template]({{< relref "passthrough" >}}) instead.
+Prefer [`gaming-arch`]({{< relref "gaming-arch" >}}) (fresh Arch install) or [`gaming-bazzite`]({{< relref "gaming-bazzite" >}}) (Bazzite ISO) for new VMs. To boot an existing Windows/Linux install off a real NVMe with passthrough, use [`passthrough`]({{< relref "passthrough" >}}).
