@@ -100,6 +100,15 @@ Then add `~/.vee/bin` to your `PATH` (next section) and jump to
 
 Install the required system packages before building.
 
+{{< hint info >}}
+**Managed QEMU.** For platforms where vee publishes a `vee-qemu` bundle, vee
+downloads a pinned, checksum-verified QEMU into `~/.vee/bin/` on first use and
+prefers it over any system QEMU. That bundle also carries the edk2/OVMF firmware
+under `~/.vee/share/qemu/`, so neither QEMU nor OVMF needs a system install. When
+no bundle is published for your platform, vee falls back to the system QEMU on
+your `PATH` — install the packages below.
+{{< /hint >}}
+
 ### Arch Linux
 
 ```sh
@@ -135,6 +144,10 @@ Debian/Ubuntu/Mint in `/usr/share/OVMF/OVMF_*_4M.fd`, Fedora/RHEL in
 your distro's OVMF package (`ovmf` on Debian-family, `edk2-ovmf` on Arch/Fedora)
 is all that's needed. If your firmware lives somewhere unusual, override
 `ovmf_code_path` / `ovmf_vars_path` in `~/.vee/config.yaml`.
+
+When vee uses a managed QEMU bundle (see the note above), that bundle ships
+edk2/OVMF firmware under `~/.vee/share/qemu/`, which vee prefers over any system
+OVMF — so no distro OVMF package is required in that case.
 {{< /hint >}}
 
 {{< hint info >}}
