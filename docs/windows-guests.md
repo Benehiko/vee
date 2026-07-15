@@ -54,50 +54,59 @@ Without a valid `sources/boot.wim`, the firmware loads `bootmgr` and then fails
 in Windows Boot Manager with **`0xc000000f`** ("a required device isn't connected
 or can't be accessed").
 
-## Windows 11 24H2 limitation
+## Windows 11 24H2: installing from a writable scratch disk
 
-`vee pull windows win11` builds **Windows 11 24H2**. Its media **boots into
-Windows Setup** (the boot.wim handling above works) and Setup partitions the
-disk and begins applying the image — but the **unattended install does not yet
-complete on 24H2**.
+`vee pull windows win11` builds **Windows 11 24H2**, and it installs
+**end-to-end** through vee's pipeline (WinPE → Setup → image apply → OOBE →
+`vee` desktop, booting from the virtio system disk).
 
-Windows 11 24H2 replaced the long-standing `setup.exe` with a new "ConX" setup
-(`sources\setuphost.exe` / `setupprep.exe`). In an offline, unattended VM the
-install fails at ~318 MB with (from `X:\$Windows.~BT\Sources\Panther\setuperr.log`):
+Getting there took working around four 24H2-specific failures. Windows 11 24H2
+replaced the long-standing `setup.exe` with a new "ConX" setup
+(`sources\setuphost.exe` / `setupprep.exe`) that writes its `$WINDOWS.~BT`
+working/diagnostics tree onto **the drive `setup.exe` is launched from**. On a
+read-only install DVD that write is denied, and 24H2 treats the failure as fatal:
 
 ```
-Error  CDiagnosticsHelper::PersistDiagnosticsData: ...\\?\D:\$WINDOWS.~BT\Sources\Diagnostics: Access is denied [0x00000005]
-Error  SetupHost::InitializeOnSettings ... Result = 0x800702E7
+Error  CDiagnosticsHelper::PersistDiagnosticsData: ...D:\$WINDOWS.~BT\Sources\Diagnostics: Access is denied [0x00000005]
 Error  SetupHost: OneSettings initialization failed 0x800702E7
 ```
 
-Root cause: 24H2 Setup places its `$WINDOWS.~BT` working/diagnostics directory
-on the **source DVD (D:, read-only)**, hits *Access is denied*, and that
-cascades into a fatal failure to initialise Microsoft's **OneSettings** online
-service. (Older Setup put `$WINDOWS.~BT` on the writable target disk.)
+Registry/flag bypasses do **not** fix this (`/product server` switches Setup to
+the Server codepath and rejects the client `install.wim`; `/Compat
+IgnoreWarning` has no effect; `BypassNRO` addresses a later OOBE screen). The
+real fix is to **run Setup from writable media**, which vee now does:
 
-Bypasses that do **not** work:
+1. **Scratch disk.** The `windows` template attaches an extra 8 GB virtio
+   "scratch" disk (in addition to the OS disk). It is the last virtio disk, so it
+   enumerates as disk 1 (OS disk = disk 0). See `internal/templates/windows.go`.
+2. **`startnet.cmd` copies the DVD to it.** In WinPE, `startnet.cmd` `drvload`s
+   the viostor driver (WinRE has no virtio-blk driver, so the virtio disks are
+   otherwise invisible), formats the scratch disk NTFS as `W:`, `xcopy`s the
+   whole install DVD onto `W:`, and launches `W:\setup.exe`. Now `$WINDOWS.~BT`
+   lands on writable `W:` and the OneSettings failure clears. See
+   `internal/images/windows.go`. (WinRE's reduced toolset has no `findstr` or
+   `robocopy`, so the script uses `find` and `xcopy`.)
+3. **Drivers via `offlineServicing`, not WinPE `DriverPaths`.** 24H2 ConX Setup
+   fails the old `windowsPE` `PnpCustomizationsWinPE` `<DriverPaths>` unattend
+   step with `0x80070103` (`ERROR_NO_MORE_ITEMS`, shown as `0x80070103-0x40031`)
+   — a Microsoft-acknowledged regression. vee instead injects viostor + NetKVM
+   through an **`offlineServicing`** `PnpCustomizationsNonWinPE` pass (DISM against
+   the applied image), so the installed OS boots from the virtio disk.
+4. **`winre.wim` injected into `install.wim`.** UUP metadata ESDs keep the
+   Recovery Environment as a separate image, so a plain export leaves
+   `\Windows\System32\Recovery` without a `winre.wim`. 24H2 Setup's image-deploy
+   step requires it and otherwise fails with `0x80070003`
+   (`ERROR_PATH_NOT_FOUND`). vee exports the Recovery Environment image and adds
+   it into `install.wim` at build time.
 
-- `setup.exe /product server` skips the online/hardware gating, but Setup then
-  runs the **Server** codepath and rejects the client `install.wim`
-  ("Windows Server installation has failed").
-- `setup.exe /Compat IgnoreWarning` has no effect on `0x800702E7`.
-- `oobe\bypassnro` / OOBE `BypassNRO` address the later network-account screen,
-  not this earlier OneSettings check.
-
-The likely fix (not yet implemented) is to run Setup from a **writable** source
-so `$WINDOWS.~BT` lands on writable media — e.g. copy the DVD `sources` +
-`setup.exe` to a scratch partition in `startnet.cmd` and launch from there.
-
-**Use `win10` (22H2) for a working end-to-end Windows guest today** — its classic
-`setup.exe` flow has no OneSettings gate. Tracking issue: **#17**.
+Tracking issue: **#17** (resolved). For the full problem-by-problem writeup of
+every 24H2 failure and its fix, see
+[windows-24h2-install.md](windows-24h2-install.md).
 
 > **Note on 23H2:** pinning `win11` to 23H2 does not help — 23H2's "Windows Setup
 > Media" image ships a **stale (2022) `bootmgr`/`cdboot`** while its boot.wim is
 > current, so `bootmgr` page-faults in UEFI firmware before WinPE even loads.
-> Refreshing the boot files from boot.wim clears that fault but then hits a UEFI
-> "No mapping" in the cdboot→bootmgfw chain. 24H2's boot files are self-consistent,
-> so 24H2 is the cleaner-booting base; only its OneSettings install stage remains.
+> 24H2's boot files are self-consistent, so 24H2 is the cleaner-booting base.
 
 ## Unattended install details
 
@@ -106,8 +115,9 @@ The `windows` template runs a fully unattended install:
 - `Autounattend.xml` on a seed ISO (with the virtio-win drivers) provides locale,
   disk layout (EFI + MSR + Windows), image index, product key, and an autologon
   admin account (`vee` / `vee`).
-- The WinPE pass injects the **viostor** (virtio-blk/scsi) and **NetKVM**
-  drivers so Setup can see the virtio system disk and network.
+- **WinPE** loads viostor via `startnet.cmd` `drvload` so Setup can see the
+  virtio system disk; the **`offlineServicing`** pass injects viostor + NetKVM
+  into the installed OS so it boots from the virtio disk and has networking.
 - Windows 11 hardware checks (TPM, Secure Boot, RAM, CPU) are bypassed via
   `HKLM\SYSTEM\Setup\LabConfig` keys, since the VM presents a real TPM 2.0 but no
   enrolled Secure Boot keys.

@@ -179,6 +179,24 @@ func NewWindowsConfig(ctx context.Context, p provider.Provider, version images.W
 				Media:     "disk",
 				Cache:     "writeback",
 			},
+			// Scratch disk (virtio; viostor drvloaded in WinPE by startnet.cmd).
+			// Windows 11 24H2 "ConX" Setup writes its $WINDOWS.~BT working tree
+			// onto the drive setup.exe runs from; the install DVD is read-only,
+			// so Setup must be launched from writable media or it fails with
+			// OneSettings 0x800702E7 (issue #17). startnet.cmd formats this disk,
+			// copies the DVD tree onto it, and runs setup.exe from here. Must
+			// stay LAST in the array so it enumerates as virtio disk 1 (OS disk =
+			// disk 0); startnet selects the highest disk index as the scratch and
+			// never touches the OS disk. Sized 8G to hold the ~3.7 GB DVD copy
+			// plus Setup's $WINDOWS.~BT working set. Thrown away after install.
+			{
+				Path:      "",
+				Size:      "8G",
+				Format:    "qcow2",
+				Interface: "virtio",
+				Media:     "disk",
+				Cache:     "writeback",
+			},
 		},
 		RTC:       "base=localtime,clock=host",
 		CreatedAt: time.Now(),
