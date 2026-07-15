@@ -70,9 +70,11 @@ func NewDockerConfig(ctx context.Context, p provider.Provider, name string, sshK
 		NIC: vm.NICConfig{
 			Mode:  "user",
 			Model: "virtio-net-pci",
-			// Forward SSH and Docker API ports to the host.
+			// Forward the Docker API port to the host. The SSH forward is added
+			// by the manager from SSHPort (below) — declaring it here too would
+			// emit a duplicate "…-:22" hostfwd, which Windows QEMU rejects
+			// (Linux QEMU silently tolerates it).
 			HostFwds: []string{
-				fmt.Sprintf("tcp:127.0.0.1:%d-:22", sshPort),
 				fmt.Sprintf("tcp:127.0.0.1:%d-:%d", DockerTCPPort, DockerTCPPort),
 			},
 		},

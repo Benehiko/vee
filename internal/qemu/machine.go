@@ -296,6 +296,14 @@ func (q *BaseMachine) effectiveMachineType() string {
 		strings.HasPrefix(mt, "virt") && !strings.Contains(mt, "gic-version") {
 		mt += ",gic-version=max"
 	}
+	// WHPX's in-hypervisor APIC emulation is buggy in current QEMU/WHPX builds:
+	// setting the virtual interrupt-controller state can fail with c0350005
+	// (WHvSetVirtualProcessorInterruptControllerState … failed), killing the VM
+	// at boot — notably when the WHPX guest is itself nested under another
+	// hypervisor. Falling back to QEMU's userspace irqchip avoids that path.
+	if q.accelerator == AccelWHPX && !strings.Contains(mt, "kernel-irqchip") {
+		mt += ",kernel-irqchip=off"
+	}
 	return mt
 }
 
