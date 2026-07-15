@@ -69,11 +69,22 @@ done
 export PKG_CONFIG_PATH="$PKGS"
 
 # QEMU's configure creates a Python venv (mkvenv) that needs "distlib" to build
-# console-script wrappers. Some python.org framework builds ship pip without a
-# usable standalone distlib, which makes configure abort with "found no usable
-# distlib". Ensure it up front against the same python3 configure will pick
-# (harmless if already present).
-python3 -m pip install --user distlib >/dev/null 2>&1 || true
+# console-script wrappers. Newer runner Pythons (3.12+, incl. Homebrew's 3.14)
+# are PEP 668 "externally managed", so a bare `pip install --user distlib`
+# fails (and previously did so silently), leaving configure to abort with
+# "found no usable distlib". Install it into the exact python3 configure will
+# pick, tolerating the externally-managed marker. Try the ordinary path first,
+# then fall back to --break-system-packages.
+PYBIN="$(command -v python3)"
+echo "==> Ensuring distlib for $PYBIN ($("$PYBIN" --version 2>&1))"
+if ! "$PYBIN" -c 'import distlib' >/dev/null 2>&1; then
+  "$PYBIN" -m pip install --user distlib >/dev/null 2>&1 ||
+    "$PYBIN" -m pip install --break-system-packages distlib >/dev/null 2>&1 ||
+    "$PYBIN" -m pip install --user --break-system-packages distlib >/dev/null 2>&1 ||
+    true
+fi
+"$PYBIN" -c 'import distlib; print("distlib", distlib.__version__)' ||
+  echo "warning: distlib still unavailable for $PYBIN; QEMU mkvenv may fail" >&2
 
 echo "==> Fetching QEMU $QEMU_VERSION"
 mkdir -p "$WORK" && cd "$WORK"

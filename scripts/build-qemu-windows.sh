@@ -38,11 +38,17 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 # gcc-mingw-w64 provides the cross compiler; the mingw-w64 dev libraries provide
 # glib/pixman/SDL2/etc. cross-built for Windows. python3/ninja/meson build QEMU.
+#
+# A cross build still needs a NATIVE build-machine toolchain: meson compiles a
+# few build-time tools/codegen with the host compiler, so gcc + native
+# libglib2.0-dev must be present or configure aborts with "Compiler for language
+# c for the build machine not found" / "Dependency glib-2.0 not found".
 apt-get install -y --no-install-recommends \
+  gcc g++ \
   gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 mingw-w64-tools \
   python3 python3-venv python3-pip ninja-build meson pkg-config \
   mingw-w64 \
-  libglib2.0-dev-bin \
+  libglib2.0-dev libglib2.0-dev-bin \
   curl ca-certificates xz-utils git bzip2 \
   mingw-w64-x86-64-dev
 
