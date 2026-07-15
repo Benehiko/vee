@@ -75,6 +75,12 @@ jobs:
           tar czf "dist/${ASSET}.tar.gz" "${BIN}" LICENSE README.md THIRD_PARTY_LICENSES
           ( cd dist && shasum -a 256 "${ASSET}.tar.gz" > "${ASSET}.tar.gz.sha256" )
 
+          # Also publish an unversioned copy so the install docs can use
+          # stable `releases/latest/download/vee-<os>-<arch>.tar.gz` URLs.
+          UNVERSIONED="vee-${{ matrix.goos }}-${{ matrix.goarch }}"
+          cp "dist/${ASSET}.tar.gz" "dist/${UNVERSIONED}.tar.gz"
+          ( cd dist && shasum -a 256 "${UNVERSIONED}.tar.gz" > "${UNVERSIONED}.tar.gz.sha256" )
+
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -124,55 +130,35 @@ jobs:
             echo
             echo "## Install"
             echo
-            echo "Download the asset for your platform, **verify the checksum**, and put \`vee\` on your \`PATH\`. vee drives QEMU, so install your host's QEMU packages too — see the [Installation guide](https://benehiko.github.io/vee/getting-started/installation/)."
+            echo "Download the asset for your platform, **verify the checksum**, and put \`vee\` on your \`PATH\`. vee drives QEMU, so install your host's QEMU packages too — see the [Installation guide](https://vee.benehiko.com/getting-started/installation/)."
             echo
+            REL="https://github.com/${{ github.repository }}/releases/download/${TAG}"
             echo "### Linux"
             echo
             echo '```sh'
-            echo "VEE_VERSION=${TAG}"
-            echo 'ASSET="vee-${VEE_VERSION}-linux-amd64"   # or linux-arm64'
-            echo 'BASE="https://github.com/'"${{ github.repository }}"'/releases/download/${VEE_VERSION}"'
-            echo
-            echo 'curl -LO "${BASE}/${ASSET}.tar.gz"'
-            echo 'curl -LO "${BASE}/${ASSET}.tar.gz.sha256"'
-            echo 'sha256sum -c "${ASSET}.tar.gz.sha256"          # must print: OK'
-            echo
-            echo 'tar xzf "${ASSET}.tar.gz"'
+            echo "curl -LO ${REL}/vee-${TAG}-linux-amd64.tar.gz          # or linux-arm64"
+            echo "curl -LO ${REL}/vee-${TAG}-linux-amd64.tar.gz.sha256"
+            echo "sha256sum -c vee-${TAG}-linux-amd64.tar.gz.sha256"
+            echo "tar xzf vee-${TAG}-linux-amd64.tar.gz"
             echo 'install -Dm755 vee "$HOME/.vee/bin/vee"'
-            echo 'export PATH="$HOME/.vee/bin:$PATH"             # add to ~/.bashrc'
             echo '```'
             echo
             echo "### macOS (Apple Silicon)"
             echo
             echo '```sh'
-            echo "VEE_VERSION=${TAG}"
-            echo 'ASSET="vee-${VEE_VERSION}-darwin-arm64"        # Intel: darwin-amd64'
-            echo 'BASE="https://github.com/'"${{ github.repository }}"'/releases/download/${VEE_VERSION}"'
-            echo
-            echo 'curl -LO "${BASE}/${ASSET}.tar.gz"'
-            echo 'curl -LO "${BASE}/${ASSET}.tar.gz.sha256"'
-            echo 'shasum -a 256 -c "${ASSET}.tar.gz.sha256"      # must print: OK'
-            echo
-            echo 'tar xzf "${ASSET}.tar.gz"'
-            echo 'mkdir -p "$HOME/.vee/bin" && install -m755 vee "$HOME/.vee/bin/vee"'
+            echo "curl -LO ${REL}/vee-${TAG}-darwin-arm64.tar.gz         # Intel: darwin-amd64"
+            echo "curl -LO ${REL}/vee-${TAG}-darwin-arm64.tar.gz.sha256"
+            echo "shasum -a 256 -c vee-${TAG}-darwin-arm64.tar.gz.sha256"
+            echo "tar xzf vee-${TAG}-darwin-arm64.tar.gz"
+            echo 'install -Dm755 vee "$HOME/.vee/bin/vee"'
             echo 'xattr -d com.apple.quarantine "$HOME/.vee/bin/vee" 2>/dev/null || true   # unsigned binary'
-            echo 'export PATH="$HOME/.vee/bin:$PATH"             # add to ~/.zshrc'
             echo '```'
             echo
             echo "### Windows (PowerShell)"
             echo
             echo '```powershell'
-            echo '$Version = "'"${TAG}"'"; $Asset = "vee-$Version-windows-amd64"'
-            echo '$Base = "https://github.com/'"${{ github.repository }}"'/releases/download/$Version"'
-            echo
-            echo 'Invoke-WebRequest "$Base/$Asset.tar.gz"        -OutFile "$Asset.tar.gz"'
-            echo 'Invoke-WebRequest "$Base/$Asset.tar.gz.sha256" -OutFile "$Asset.tar.gz.sha256"'
-            echo
-            echo '$expected = (Get-Content "$Asset.tar.gz.sha256").Split()[0].ToLower()'
-            echo '$actual   = (Get-FileHash "$Asset.tar.gz" -Algorithm SHA256).Hash.ToLower()'
-            echo 'if ($expected -ne $actual) { throw "checksum mismatch" }'
-            echo
-            echo 'tar xzf "$Asset.tar.gz"'
+            echo "iwr ${REL}/vee-${TAG}-windows-amd64.tar.gz -OutFile vee.tar.gz"
+            echo 'tar xzf vee.tar.gz'
             echo 'New-Item -ItemType Directory -Force "$HOME\.vee\bin" | Out-Null'
             echo 'Move-Item -Force vee.exe "$HOME\.vee\bin\vee.exe"'
             echo '```'

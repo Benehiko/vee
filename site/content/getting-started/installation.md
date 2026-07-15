@@ -19,75 +19,48 @@ Prebuilt `vee` binaries are published for every supported host on the
 
 | Platform | Asset |
 |----------|-------|
-| Linux (x86-64) | `vee-<version>-linux-amd64.tar.gz` |
-| Linux (ARM64) | `vee-<version>-linux-arm64.tar.gz` |
-| macOS (Apple Silicon) | `vee-<version>-darwin-arm64.tar.gz` |
-| macOS (Intel) | `vee-<version>-darwin-amd64.tar.gz` |
-| Windows (x86-64) | `vee-<version>-windows-amd64.tar.gz` |
+| Linux (x86-64) | `vee-linux-amd64.tar.gz` |
+| Linux (ARM64) | `vee-linux-arm64.tar.gz` |
+| macOS (Apple Silicon) | `vee-darwin-arm64.tar.gz` |
+| macOS (Intel) | `vee-darwin-amd64.tar.gz` |
+| Windows (x86-64) | `vee-windows-amd64.tar.gz` |
 
-Set the version you want (see the Releases page for the latest tag):
-
-```sh
-VEE_VERSION=v0.2.0
-```
+Each snippet below grabs the **latest** release. For a specific version, swap
+`latest/download` for `download/<tag>` (e.g. `download/v0.2.0`), and pick the
+matching asset from the table above.
 
 ### Linux
 
 ```sh
-# Pick your arch: linux-amd64 or linux-arm64
-ASSET="vee-${VEE_VERSION}-linux-amd64"
-BASE="https://github.com/Benehiko/vee/releases/download/${VEE_VERSION}"
-
-curl -LO "${BASE}/${ASSET}.tar.gz"
-curl -LO "${BASE}/${ASSET}.tar.gz.sha256"
-
-# Verify the checksum before extracting.
-sha256sum -c "${ASSET}.tar.gz.sha256"
-
-# Extract and install to ~/.vee/bin (on your PATH — see below).
-tar xzf "${ASSET}.tar.gz"
+curl -LO https://github.com/Benehiko/vee/releases/latest/download/vee-linux-amd64.tar.gz
+curl -LO https://github.com/Benehiko/vee/releases/latest/download/vee-linux-amd64.tar.gz.sha256
+sha256sum -c vee-linux-amd64.tar.gz.sha256
+tar xzf vee-linux-amd64.tar.gz
 install -Dm755 vee "$HOME/.vee/bin/vee"
 ```
 
 ### macOS
 
 ```sh
-# Apple Silicon: darwin-arm64. Intel: darwin-amd64.
-ASSET="vee-${VEE_VERSION}-darwin-arm64"
-BASE="https://github.com/Benehiko/vee/releases/download/${VEE_VERSION}"
-
-curl -LO "${BASE}/${ASSET}.tar.gz"
-curl -LO "${BASE}/${ASSET}.tar.gz.sha256"
-
-# Verify the checksum (shasum ships with macOS).
-shasum -a 256 -c "${ASSET}.tar.gz.sha256"
-
-tar xzf "${ASSET}.tar.gz"
-mkdir -p "$HOME/.vee/bin"
-install -m755 vee "$HOME/.vee/bin/vee"
-
-# The binary is unsigned, so Gatekeeper quarantines it on first run. Clear it:
-xattr -d com.apple.quarantine "$HOME/.vee/bin/vee" 2>/dev/null || true
+curl -LO https://github.com/Benehiko/vee/releases/latest/download/vee-darwin-arm64.tar.gz
+curl -LO https://github.com/Benehiko/vee/releases/latest/download/vee-darwin-arm64.tar.gz.sha256
+shasum -a 256 -c vee-darwin-arm64.tar.gz.sha256
+tar xzf vee-darwin-arm64.tar.gz
+install -Dm755 vee "$HOME/.vee/bin/vee"
+xattr -d com.apple.quarantine "$HOME/.vee/bin/vee" 2>/dev/null || true   # unsigned binary
 ```
 
 ### Windows (PowerShell)
 
 ```powershell
-$Version = "v0.2.0"
-$Asset   = "vee-$Version-windows-amd64"
-$Base    = "https://github.com/Benehiko/vee/releases/download/$Version"
+$Base = "https://github.com/Benehiko/vee/releases/latest/download"
+iwr "$Base/vee-windows-amd64.tar.gz"        -OutFile vee.tar.gz
+iwr "$Base/vee-windows-amd64.tar.gz.sha256" -OutFile vee.tar.gz.sha256
 
-Invoke-WebRequest -Uri "$Base/$Asset.tar.gz"        -OutFile "$Asset.tar.gz"
-Invoke-WebRequest -Uri "$Base/$Asset.tar.gz.sha256" -OutFile "$Asset.tar.gz.sha256"
+# Verify the checksum:
+if ((Get-Content vee.tar.gz.sha256).Split()[0].ToLower() -ne (Get-FileHash vee.tar.gz -Algorithm SHA256).Hash.ToLower()) { throw "checksum mismatch" }
 
-# Verify the checksum. The .sha256 file is "<hash>  <filename>"; compare the hash.
-$expected = (Get-Content "$Asset.tar.gz.sha256").Split()[0].ToLower()
-$actual   = (Get-FileHash "$Asset.tar.gz" -Algorithm SHA256).Hash.ToLower()
-if ($expected -ne $actual) { throw "checksum mismatch" }
-
-# tar ships with Windows 10+.
-tar xzf "$Asset.tar.gz"
-# Move vee.exe somewhere on your PATH, e.g. a tools directory you control:
+tar xzf vee.tar.gz   # tar ships with Windows 10+
 New-Item -ItemType Directory -Force "$HOME\.vee\bin" | Out-Null
 Move-Item -Force vee.exe "$HOME\.vee\bin\vee.exe"
 ```
