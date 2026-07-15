@@ -40,7 +40,7 @@ Templates apply sane defaults (memory, CPUs, disks, networking, cloud-init) auto
 | `gaming` | Legacy alias for `gaming-arch` with passthrough |
 | `passthrough` | Raw NVMe boot + GPU passthrough · 16G / 6 CPUs · SPICE · virtiofs |
 | `truenas` | TrueNAS SCALE · AHCI OS disk · bridge NIC · SPICE |
-| `torrent` | Lightweight 4G / 2 CPUs · qbittorrent-nox via cloud-init |
+| `torrent` | Lightweight 2G / 1 CPU · qbittorrent-nox via cloud-init · optional VPN kill-switch |
 | `jellyfin` | Jellyfin · NFS/SMB/host-dir/block/USB media · mDNS |
 | `windows` | Windows · UEFI secure boot · TPM 2.0 |
 | `docker` | Alpine Linux · Docker daemon on `tcp://localhost:2375` |
@@ -288,13 +288,22 @@ how to run vee as a daemon are in the
 
 ## Docs
 
+The full documentation site is published at **<https://vee.benehiko.com/>**. Deep-dive
+docs also live in this repo:
+
 - [docs/prerequisites.md](docs/prerequisites.md) — system setup, groups, bridge networking, OVMF
+- [docs/macos.md](docs/macos.md) — macOS (Apple Silicon / HVF) host support and the per-guest GPU matrix
+- [docs/windows.md](docs/windows.md) — Windows (WHPX) host support, feature matrix, and the nested-virtualization limitation
+- [docs/windows-guests.md](docs/windows-guests.md) — the on-demand Windows guest ISO build pipeline
+- [docs/windows-24h2-install.md](docs/windows-24h2-install.md) — full writeup of the Windows 11 24H2 install debugging
+- [docs/qmp.md](docs/qmp.md) — `vee qmp` and the daemon-routed QMP transport
 - [docs/gpu-passthrough-gaming.md](docs/gpu-passthrough-gaming.md) — Sunshine + Moonlight streaming over GPU passthrough
 - [docs/media-sources.md](docs/media-sources.md) — attaching NFS/SMB/host-dir/block/USB media to VMs
 - [docs/pacman-mirror.md](docs/pacman-mirror.md) — host-side pacman caching proxy for Arch VMs
 - [docs/host-shutdown.md](docs/host-shutdown.md) — how the daemon blocks host poweroff while VMs are running
+- [docs/install-iso-lifecycle.md](docs/install-iso-lifecycle.md) — one-shot installer ISO lifecycle and repair
 - [docs/github-runner.md](docs/github-runner.md) — self-hosted GitHub Actions runner: cred persistence, SSH keys, disk GC
-- [docs/docs-site.md](docs/docs-site.md) — Hugo documentation site: local preview and Cloudflare Pages deploy
+- [docs/docs-site.md](docs/docs-site.md) — Hugo documentation site: local preview and Cloudflare deploy
 
 ## License
 
