@@ -72,7 +72,7 @@ Templates apply sane defaults automatically:
                   select amd (default), nvidia, or virtio.
   gaming-bazzite  Bazzite (Fedora Atomic) gaming ISO, 16G / 8 CPUs, KDE Plasma pre-installed
   gaming          Legacy alias for gaming-arch with passthrough
-  passthrough     Raw NVMe boot + GPU passthrough, 16G / 6 CPUs, SPICE, virtiofs Games
+  passthrough     Raw NVMe boot + GPU passthrough, 8G / 6 CPUs, SPICE, virtiofs Games
   torrent         Lightweight 4G / 2 CPUs, SPICE, qbittorrent-nox via cloud-init
   devbox          8G / 4 CPUs, Docker + zsh via cloud-init (supports --distro)
   server          8G / 2 CPUs, openssh + ufw + fail2ban via cloud-init (supports --distro)
@@ -80,7 +80,7 @@ Templates apply sane defaults automatically:
                   (virgl). Graphical window with GDM autologin (supports --distro:
                   fedora default, ubuntu). Works on Apple Silicon (aarch64).
   docker          2G / 2 CPUs, Alpine Linux, Docker daemon on tcp://localhost:2375
-  windows         24G / 4 CPUs, UEFI secboot, TPM 2.0
+  windows         8G / 4 CPUs, UEFI secboot, TPM 2.0
   truenas         4G / 1 CPU, UEFI, AHCI OS disk, bridge NIC, SPICE display
   jellyfin        4G / 2 CPUs, Ubuntu cloud image, Jellyfin via official APT repo,
                   Avahi mDNS so http://<name> resolves on the LAN. Attach libraries

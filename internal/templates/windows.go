@@ -102,7 +102,7 @@ func NewWindowsConfig(ctx context.Context, p provider.Provider, version images.W
 	return &vm.VMConfig{
 		Name:     name,
 		Template: "windows",
-		Memory:   "24G",
+		Memory:   "8G",
 		CPUs:     4,
 		Sockets:  1,
 		Cores:    4,

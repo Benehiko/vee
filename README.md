@@ -38,7 +38,7 @@ Templates apply sane defaults (memory, CPUs, disks, networking, cloud-init) auto
 | `gaming-arch` | Arch Linux + KDE Plasma + Steam · 16G / 8 CPUs · virgl or GPU passthrough |
 | `gaming-bazzite` | Bazzite (Fedora Atomic) gaming ISO · 16G / 8 CPUs · KDE Plasma |
 | `gaming` | Legacy alias for `gaming-arch` with passthrough |
-| `passthrough` | Raw NVMe boot + GPU passthrough · 16G / 6 CPUs · SPICE · virtiofs |
+| `passthrough` | Raw NVMe boot + GPU passthrough · 8G / 6 CPUs · SPICE · virtiofs |
 | `truenas` | TrueNAS SCALE · AHCI OS disk · bridge NIC · SPICE |
 | `torrent` | Lightweight 2G / 1 CPU · qbittorrent-nox via cloud-init · optional VPN kill-switch |
 | `jellyfin` | Jellyfin · NFS/SMB/host-dir/block/USB media · mDNS |
