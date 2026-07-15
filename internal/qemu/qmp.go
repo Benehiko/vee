@@ -119,6 +119,14 @@ func (c *QMPClient) execute(cmd string, args map[string]any) (json.RawMessage, e
 	return resp.Return, nil
 }
 
+// Execute runs an arbitrary QMP command and returns its raw "return" payload.
+// This is the escape hatch used by `vee qmp` so callers (and the CLI) can issue
+// any QMP verb without a bespoke wrapper method. args may be nil for commands
+// that take no arguments.
+func (c *QMPClient) Execute(cmd string, args map[string]any) (json.RawMessage, error) {
+	return c.execute(cmd, args)
+}
+
 func (c *QMPClient) Capabilities() error {
 	_, err := c.execute("qmp_capabilities", nil)
 	return err
