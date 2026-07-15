@@ -33,8 +33,16 @@ sudo dnf install qemu-kvm edk2-ovmf openssh-clients virtiofsd swtpm
 | `qemu-img` | Disk image creation |
 | `ovmf` | UEFI firmware |
 | `openssh` | `vee ssh` and `vee tunnel` |
-| `virtiofsd` | Host directory sharing into VMs |
+| `virtiofsd` | Host directory sharing into VMs — optional, see below |
 | `swtpm` | TPM 2.0 emulation (Windows template) |
+
+{{< hint info >}}
+**`virtiofsd` is optional.** When a VM first requests a virtiofs share and no
+system `virtiofsd` is found, vee builds a pinned, checksum-verified copy on
+demand into `~/.vee/bin/virtiofsd` — inside a host container (`nerdctl`/`docker`)
+if one is available, otherwise inside a temporary Ubuntu VM. Installing the
+distro package skips this on-demand build.
+{{< /hint >}}
 
 ## KVM access
 

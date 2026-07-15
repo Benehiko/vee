@@ -1593,7 +1593,13 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 		home, homeErr := os.UserHomeDir()
 		if homeErr == nil {
 			//nolint:contextcheck // EnsureVirtiofsd lives in internal/virtiofsdinstall and takes no ctx; adding one is out of scope for this package
-			if path, ensureErr := virtiofsdinstall.EnsureVirtiofsd(home); ensureErr == nil {
+			path, ensureErr := virtiofsdinstall.EnsureVirtiofsd(home)
+			if ensureErr != nil && errors.Is(ensureErr, virtiofsdinstall.ErrNoContainerRuntime) {
+				// No host container runtime — fall back to compiling inside a
+				// throwaway VM.
+				path, ensureErr = m.buildVirtiofsdInVM(ctx, home)
+			}
+			if ensureErr == nil {
 				m.provider.Config().VirtiofsdPath = path
 			} else {
 				m.provider.Logger().Warn("virtiofsd not available", zap.Error(ensureErr))
