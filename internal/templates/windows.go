@@ -41,6 +41,11 @@ func NewWindowsConfig(ctx context.Context, p provider.Provider, version images.W
 			"and Windows guests get no GPU 3D acceleration on a macOS host (no virtio-gpu driver, no VFIO)")
 	}
 
+	// Anchor created disks under the VM's storage dir (like the other templates).
+	// Leaving Path empty makes qemu resolve the file relative to the working
+	// directory, which litters the cwd with disk-<name>-<size>.qcow2 files.
+	vmDir := filepath.Join(conf.StoragePath, name)
+
 	img := images.NewWindowsImage(p, version)
 	if err := img.Download(ctx); err != nil {
 		return nil, err
@@ -172,7 +177,7 @@ func NewWindowsConfig(ctx context.Context, p provider.Provider, version images.W
 			},
 			// System disk (virtio; driver injected during Setup).
 			{
-				Path:      "",
+				Path:      filepath.Join(vmDir, "storage", "disk-os.qcow2"),
 				Size:      conf.DefaultDiskSize,
 				Format:    "qcow2",
 				Interface: "virtio",
@@ -190,7 +195,7 @@ func NewWindowsConfig(ctx context.Context, p provider.Provider, version images.W
 			// never touches the OS disk. Sized 8G to hold the ~3.7 GB DVD copy
 			// plus Setup's $WINDOWS.~BT working set. Thrown away after install.
 			{
-				Path:      "",
+				Path:      filepath.Join(vmDir, "storage", "disk-scratch.qcow2"),
 				Size:      "8G",
 				Format:    "qcow2",
 				Interface: "virtio",
