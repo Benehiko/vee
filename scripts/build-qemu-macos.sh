@@ -28,6 +28,10 @@ WORK="${WORK:-$(pwd)/qemu-build}"
 OUT="${OUT:-$(pwd)/dist}"
 ASSET="qemu-system-aarch64-darwin-arm64"
 JOBS="$(sysctl -n hw.ncpu)"
+# Resolve script/repo paths up front, before any cd, so the entitlements plist
+# and the license helper are found regardless of the working directory later.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
   echo "error: this script must run on an Apple Silicon (arm64) macOS host" >&2
@@ -191,7 +195,7 @@ JSON
 fi
 
 echo "==> Code signing (ad-hoc) with hypervisor entitlement"
-ENTITLEMENTS="$(cd "$(dirname "$0")/.." && pwd)/internal/qemubin/qemu-entitlements.plist"
+ENTITLEMENTS="$REPO_ROOT/internal/qemubin/qemu-entitlements.plist"
 # Sign dylibs first, then the main binary last (so its signature stays valid).
 find "$BUNDLE/lib" -name '*.dylib' -exec codesign --force --sign - --timestamp=none {} \;
 codesign --force --sign - --entitlements "$ENTITLEMENTS" --timestamp=none \
@@ -203,7 +207,6 @@ echo "==> Writing GPLv2 compliance files (COPYING + SOURCE.txt)"
 # the license text and a corresponding-source pointer. This build links QEMU's
 # GL stack against the startergo tap's virglrenderer 1.x + ANGLE (Metal); QEMU
 # itself is unmodified upstream, but note the GL dependency provenance.
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 QEMU_PATCHES="links against virglrenderer 1.x + ANGLE (GLES->Metal) from the startergo Homebrew taps for accelerated virtio-gpu on macOS" \
   bash "$SCRIPT_DIR/qemu-bundle-license.sh" "$BUNDLE" "$WORK/qemu-${QEMU_VERSION}" "$QEMU_VERSION" \
     --target-list=aarch64-softmmu --enable-cocoa --enable-opengl --enable-virglrenderer \
