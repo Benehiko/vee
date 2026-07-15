@@ -266,16 +266,25 @@ git push origin v0.4.0
 ```
 
 It cross-compiles the `vee` binary for every supported host — `linux/amd64`,
-`linux/arm64`, `darwin/amd64`, `darwin/arm64` — with the tag, commit, and build
-date injected via `-ldflags` (so `vee version` reports the release identity). Each
-build is packaged as a `.tar.gz` (binary + `LICENSE` + `README.md` +
-`THIRD_PARTY_LICENSES`) alongside a `.sha256` checksum, and a GitHub Release is
-published whose body lists the commits since the previous tag. Tags containing a
-hyphen (e.g. `v0.4.0-rc1`) are marked as pre-releases.
+`linux/arm64`, `darwin/amd64`, `darwin/arm64`, `windows/amd64` — with the tag,
+commit, and build date injected via `-ldflags` (so `vee version` reports the
+release identity). Each build is packaged as a `.tar.gz` (binary + `LICENSE` +
+`README.md` + `THIRD_PARTY_LICENSES`) alongside a `.sha256` checksum, and a
+GitHub Release is published whose body lists the commits since the previous tag.
+Tags containing a hyphen (e.g. `v0.4.0-rc1`) are marked as pre-releases.
 
-Windows binaries are not produced yet: vee is a host-side hypervisor driver that
-depends on vsock, VFIO, and POSIX syscalls, so it currently only builds on Linux
-and macOS.
+On Windows, VFIO passthrough, virtiofs, vsock, swtpm, bridge networking, and the
+systemd daemon are Linux-only and degrade gracefully; the binary runs x86-64
+guests under WHPX. See [docs/windows.md](docs/windows.md).
+
+### Installing a release
+
+Download the `.tar.gz` for your platform from the
+[Releases page](https://github.com/Benehiko/vee/releases), verify it against the
+matching `.sha256`, extract the `vee` binary onto your `PATH`, and install the
+host QEMU packages. Full step-by-step instructions (Linux, macOS, Windows) plus
+how to run vee as a daemon are in the
+[Installation guide](https://benehiko.github.io/vee/getting-started/installation/).
 
 ## Docs
 
