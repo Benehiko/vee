@@ -100,8 +100,9 @@ jobs:
               cp -R /tmp/qemu-install/usr/local/share/qemu /output/qemu-share
               # Copy the GPLv2 license text (and per-component summary) out of the
               # source tree so the host can ship it in the bundle (GPLv2 §1/§3).
-              cp "qemu-${QEMU_VER}/COPYING" /output/COPYING
-              [ -f "qemu-${QEMU_VER}/LICENSE" ] && cp "qemu-${QEMU_VER}/LICENSE" /output/LICENSE || true
+              # CWD is already the extracted qemu-${QEMU_VER} source dir.
+              cp COPYING /output/COPYING
+              [ -f LICENSE ] && cp LICENSE /output/LICENSE || true
             '
 
       - name: Package binary
@@ -183,7 +184,10 @@ jobs:
   build-windows:
     name: Build vee-qemu (windows-amd64)
     # Cross-compiled from Linux with MinGW-w64; --enable-whpx targets the Windows
-    # Hypervisor Platform. No Windows runner needed.
+    # Hypervisor Platform. No Windows runner needed. Built inside a Fedora
+    # container: Fedora ships the full mingw64-* stack (glib2, pixman, SDL2, …)
+    # that Ubuntu/Debian lack, and it is what QEMU's own upstream CI uses to
+    # cross-build the Windows binary.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -192,7 +196,7 @@ jobs:
         run: |
           docker run --rm \
             -v "$PWD:/src" -w /src \
-            ubuntu:24.04 bash -c '
+            fedora:43 bash -c '
               set -euo pipefail
               QEMU_VERSION="${{ inputs.qemu_version }}" \
               VEE_SUFFIX="${{ inputs.vee_suffix }}" \
