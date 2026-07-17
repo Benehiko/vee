@@ -46,6 +46,22 @@ Changing a path does **not** move data already on disk. To relocate:
 
 The image cache can instead simply be re-populated with `vee pull`.
 
+## Per-VM boot disk location
+
+`storage_path` moves every VM. To relocate just one VM's boot disk — say onto a
+fast NVMe — pass a directory to `vee create`:
+
+```sh
+vee create win --template windows --boot-disk-path /mnt/nvme
+```
+
+The value is a directory; vee keeps its generated disk filename inside it
+(`/mnt/nvme/disk-win-<size>.qcow2`) and persists the path in the VM's `vm.yaml`.
+Only the boot disk image moves — the VM's metadata, logs, and sockets stay under
+`<storage_path>/<name>/`. This differs from `--boot-disk`, which boots from a raw
+host block device via passthrough; with a raw `--boot-disk` there is no managed
+qcow2 disk to relocate.
+
 ## Other keys
 
 The same file also configures firmware/binary paths (`ovmf_code_path`,

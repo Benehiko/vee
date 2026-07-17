@@ -54,6 +54,31 @@ already on disk. To relocate an existing setup:
 The image cache (`iso_cache_path`) can also simply be re-downloaded with
 `vee pull` if you would rather not move it.
 
+## Per-VM boot disk location
+
+`storage_path` moves *every* VM. To place just one VM's boot disk elsewhere — for
+example a single Windows VM's disk on a fast NVMe while the rest stay on the
+default disk — pass `--boot-disk-path` to `vee create`:
+
+```sh
+vee create win --template windows --boot-disk-path /mnt/nvme
+```
+
+- The value is a **directory**. Vee keeps its generated disk filename inside it,
+  so the boot disk lands at `/mnt/nvme/disk-win-<size>.qcow2`. The directory is
+  created on demand.
+- Only the **boot disk image** moves. The rest of the VM directory (`vm.yaml`,
+  `state.json`, logs, control sockets, UEFI `OVMF_VARS.fd`, the cloud-init
+  `cidata.iso`) stays under `<storage_path>/<name>/`. This is the same split that
+  already applies to raw-device passthrough VMs.
+- The resolved path is written into the VM's `vm.yaml`, so restarts, backups, and
+  QMP all use the new location.
+
+This is different from `--boot-disk`, which boots from a **raw host block device**
+(`/dev/disk/by-id/...`) via passthrough rather than a managed qcow2 image. If you
+pass a raw `--boot-disk` there is no managed qcow2 disk to relocate, so
+`--boot-disk-path` has no effect.
+
 ## Other configurable paths
 
 These default to locations under `~/.vee` and rarely need changing, but the same
