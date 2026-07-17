@@ -58,6 +58,10 @@ vee create mynas --template truenas \
 images into the local cache (`~/.vee/iso/`) with `vee pull`, so later VMs reuse the
 cached copy instead of re-downloading. A pull for an already-cached image is a no-op.
 
+Both the image cache and the VM storage directory can be relocated to another disk
+via `~/.vee/config.yaml` (`iso_cache_path` / `storage_path`) — see
+[docs/configuration.md](docs/configuration.md).
+
 ```sh
 vee pull ubuntu            # newest known Ubuntu cloud image
 vee pull ubuntu 22.04      # a specific version

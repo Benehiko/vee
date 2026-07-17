@@ -160,6 +160,38 @@ func TestLoadConfigKeepsAbsolutePaths(t *testing.T) {
 	}
 }
 
+// Relocating the ISO cache and VM storage to another disk is the documented way
+// to keep bulk data off the home partition, so an absolute override for both
+// must be honoured verbatim (e.g. /mnt/bigdisk/...).
+func TestLoadConfigRelocatesDataDirs(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	veeDir := filepath.Join(tmp, ".vee")
+	if err := os.MkdirAll(veeDir, 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// A separate location standing in for another disk/mount.
+	dataRoot := filepath.Join(tmp, "bigdisk", "vee")
+	wantStorage := filepath.Join(dataRoot, "vms")
+	wantISO := filepath.Join(dataRoot, "iso")
+	yaml := "storage_path: " + wantStorage + "\niso_cache_path: " + wantISO + "\n"
+	if err := os.WriteFile(filepath.Join(veeDir, "config.yaml"), []byte(yaml), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := NewConfig()
+	if err != nil {
+		t.Fatalf("NewConfig: %v", err)
+	}
+	if cfg.StoragePath != wantStorage {
+		t.Errorf("StoragePath: got %q, want %q", cfg.StoragePath, wantStorage)
+	}
+	if cfg.ISOCachePath != wantISO {
+		t.Errorf("ISOCachePath: got %q, want %q", cfg.ISOCachePath, wantISO)
+	}
+}
+
 func TestLoadConfigMissingFile(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
