@@ -55,6 +55,13 @@ type Opts struct {
 	Disk      string   // primary qcow2 size, e.g. "50G"
 	DataDisks []string // host block devices for passthrough, repeatable
 	BootDisk  string   // path of the data-disk to mark as UEFI boot priority 1
+	// BootDiskPath relocates the managed boot qcow2 disk to a host directory of
+	// the caller's choosing (e.g. a fast NVMe) instead of the default
+	// <storage_path>/<name>/storage. The value is a directory; vee keeps its
+	// generated disk filename inside it. Only the disk image moves — the rest of
+	// the VM directory (vm.yaml, logs, sockets, UEFI vars) stays under
+	// <storage_path>/<name>. No effect on raw-device --boot-disk passthrough.
+	BootDiskPath string
 
 	// SPICE / display.
 	SPICEPort *int
@@ -458,6 +465,23 @@ func applyOverrides(cfg *vm.VMConfig, opts Opts, prov provider.Provider) {
 				disk.BootIndex = 1
 			}
 			cfg.Disks = append(cfg.Disks, disk)
+		}
+	}
+	// Relocate the managed boot qcow2 disk to a caller-chosen directory. Runs
+	// after the qcow2-strip block above so a --boot-disk passthrough VM (whose
+	// managed OS disk was already removed) has nothing to retarget. The primary
+	// OS disk is the first writable qcow2 "disk"; templates always list it first.
+	// Setting Path to a bare directory makes Disk.AbsolutePath append the
+	// generated disk filename, and Disk.Create MkdirAll's the parent, so the
+	// target directory is created on demand.
+	if opts.BootDiskPath != "" {
+		for i := range cfg.Disks {
+			d := &cfg.Disks[i]
+			if d.Passthrough || d.Media != "disk" || d.Format != "qcow2" {
+				continue
+			}
+			d.Path = opts.BootDiskPath
+			break
 		}
 	}
 	if opts.SSHShare != nil {

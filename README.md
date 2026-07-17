@@ -52,6 +52,11 @@ vee create mynas --template truenas \
   --data-disk /dev/disk/by-id/ata-ST22000NM000C_ZXA0WD9J:EXOS22TB-B
 ```
 
+To place a single VM's managed boot disk on another disk (e.g. a fast NVMe) while
+the rest stay on the default, pass a directory to `--boot-disk-path`
+(`vee create win --template windows --boot-disk-path /mnt/nvme`) — see
+[docs/configuration.md](docs/configuration.md#per-vm-boot-disk-location).
+
 ## Base images
 
 `vee create` downloads the base image it needs automatically. You can also pre-fetch
