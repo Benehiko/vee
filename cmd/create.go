@@ -58,6 +58,7 @@ var (
 	createRunnerSSHKey  bool
 	createPassword      string
 	createBootDisk      string
+	createBootDiskPath  string
 )
 
 var createCmd = &cobra.Command{
@@ -404,6 +405,9 @@ func optsFromFlags(cmd *cobra.Command, name string) build.Opts {
 	if cmd.Flags().Changed("boot-disk") {
 		opts.BootDisk = createBootDisk
 	}
+	if cmd.Flags().Changed("boot-disk-path") {
+		opts.BootDiskPath = createBootDiskPath
+	}
 	if cmd.Flags().Changed("spice-port") {
 		p := createSpicePort
 		opts.SPICEPort = &p
@@ -493,6 +497,7 @@ func init() {
 	createCmd.Flags().StringVar(&createDistroVersion, "distro-version", "latest", "ISO version for the selected distro (e.g. 24.04, 2025.05.01, 42) or 'latest'")
 	createCmd.Flags().StringArrayVar(&createDataDisks, "data-disk", nil, "Host block device for passthrough data disk, optionally with serial: path[:serial] (repeatable)")
 	createCmd.Flags().StringVar(&createBootDisk, "boot-disk", "", "Host block device to boot from (implies --data-disk; sets UEFI bootindex=1)")
+	createCmd.Flags().StringVar(&createBootDiskPath, "boot-disk-path", "", "Host directory for the managed boot qcow2 disk (default: <storage_path>/<name>/storage); no effect with raw-device --boot-disk")
 	createCmd.Flags().StringVar(&createHostname, "hostname", "", "Hostname registered in /etc/hosts (or systemd-resolved) on start (default: VM name)")
 	createCmd.Flags().StringVar(&createNVMeDev, "nvme-dev", "", "Host NVMe block device for raw boot passthrough (passthrough template)")
 	createCmd.Flags().StringVar(&createOVMFVars, "ovmf-vars", "", "Path to existing OVMF_VARS.fd to reuse for UEFI state (passthrough template)")
