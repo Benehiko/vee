@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"go.uber.org/zap"
@@ -1108,6 +1109,141 @@ func (m *Manager) cleanupStaleVM(name string, _ *VMConfig, state *VMState) {
 	_ = m.saveState(name, preserved)
 }
 
+// diskFileSuffixes are the extensions AbsolutePath treats as an explicit file
+// path (rather than a directory to join the generated disk name into). Mirrors
+// qemu.Disk.AbsolutePath.
+var diskFileSuffixes = []string{"qcow2", "qcow", "img", "raw", "iso", "vmdk", "vdi", "vhd"}
+
+// managedBootDiskAbsPath resolves the on-disk path of a managed qcow2 disk the
+// same way qemu.Disk.AbsolutePath / Disk.Name do: an explicit file path is used
+// verbatim, otherwise Path is treated as a directory and the generated file name
+// (disk-<vm>-<size>.<format>) is joined onto it.
+func managedBootDiskAbsPath(vmName string, d DiskConfig) string {
+	for _, suffix := range diskFileSuffixes {
+		if strings.HasSuffix(d.Path, suffix) {
+			return d.Path
+		}
+	}
+	format := d.Format
+	if format == "" {
+		format = "qcow2"
+	}
+	name := fmt.Sprintf("disk-%s-%s.%s", vmName, d.Size, format)
+	if d.Path == "" {
+		// Empty Path resolves relative to the VM directory (where qemu-img
+		// created the disk).
+		return name
+	}
+	return filepath.Join(d.Path, name)
+}
+
+// findManagedBootDisk returns the index of the VM's managed boot qcow2 disk —
+// the first writable, non-passthrough qcow2 "disk". This is the same predicate
+// used by build.applyOverrides when relocating with --boot-disk-path.
+func findManagedBootDisk(cfg *VMConfig) int {
+	for i := range cfg.Disks {
+		d := &cfg.Disks[i]
+		if d.Passthrough || d.Media != "disk" || d.Format != "qcow2" {
+			continue
+		}
+		return i
+	}
+	return -1
+}
+
+// MoveBootDisk relocates a VM's managed boot qcow2 disk image into targetDir and
+// updates the persisted config to point at the new location. The VM must be
+// stopped — callers are responsible for stopping it first. The disk file is
+// moved via rename when possible, falling back to copy+delete across
+// filesystems. Only the boot disk image moves; vm.yaml, logs, sockets, UEFI vars
+// and cidata.iso stay under <storage_path>/<name>.
+func (m *Manager) MoveBootDisk(name, targetDir string) (oldPath, newPath string, err error) {
+	state, err := m.loadState(name)
+	if err != nil {
+		return "", "", err
+	}
+	if state.Running && isAlive(state.PID) {
+		return "", "", fmt.Errorf("VM %q is running; stop it first", name)
+	}
+
+	cfg, err := m.loadConfig(name)
+	if err != nil {
+		return "", "", err
+	}
+
+	idx := findManagedBootDisk(cfg)
+	if idx < 0 {
+		return "", "", fmt.Errorf("VM %q has no managed boot disk to move (raw-device --boot-disk VMs cannot be relocated)", name)
+	}
+
+	// Resolve the source path relative to the VM directory so an empty or
+	// relative Path (stored verbatim by older configs) still resolves correctly.
+	src := managedBootDiskAbsPath(name, cfg.Disks[idx])
+	if !filepath.IsAbs(src) {
+		src = filepath.Join(m.vmDir(name), src)
+	}
+	if _, statErr := os.Stat(src); statErr != nil {
+		return "", "", fmt.Errorf("boot disk not found at %s: %w", src, statErr)
+	}
+
+	absTarget, err := filepath.Abs(targetDir)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve target dir: %w", err)
+	}
+	dst := filepath.Join(absTarget, filepath.Base(src))
+
+	if dst == src {
+		return "", "", fmt.Errorf("boot disk is already at %s", dst)
+	}
+	if _, statErr := os.Stat(dst); statErr == nil {
+		return "", "", fmt.Errorf("a file already exists at target path %s", dst)
+	}
+
+	if err := os.MkdirAll(absTarget, 0o750); err != nil {
+		return "", "", fmt.Errorf("create target dir %s: %w", absTarget, err)
+	}
+
+	if err := moveFile(src, dst); err != nil {
+		return "", "", fmt.Errorf("move boot disk: %w", err)
+	}
+
+	// Persist the explicit destination file path. Using the full path (rather than
+	// a bare directory) is correct whether the source was a generated name
+	// (disk-<vm>-<size>.<format>) or a custom file name like disk-os.img — a bare
+	// directory would make AbsolutePath re-derive the generated name and lose a
+	// custom basename.
+	cfg.Disks[idx].Path = dst
+	if err := m.saveConfig(cfg); err != nil {
+		// Best-effort rollback: move the file back so config and disk stay in sync.
+		if backErr := moveFile(dst, src); backErr != nil {
+			return "", "", fmt.Errorf("save config after move failed (%w); disk left at %s — restore manually", err, dst)
+		}
+		return "", "", fmt.Errorf("save config: %w", err)
+	}
+
+	return src, dst, nil
+}
+
+// moveFile relocates src to dst, using rename when both live on the same
+// filesystem and falling back to copy+remove across filesystems (rename returns
+// EXDEV in that case).
+func moveFile(src, dst string) error {
+	if err := os.Rename(src, dst); err == nil {
+		return nil
+	} else if !errors.Is(err, syscall.EXDEV) {
+		return err
+	}
+	// Cross-filesystem: copy then remove the source.
+	if err := copyFile(src, dst); err != nil {
+		_ = os.Remove(dst)
+		return err
+	}
+	if err := os.Remove(src); err != nil {
+		return fmt.Errorf("copied to %s but could not remove original %s: %w", dst, src, err)
+	}
+	return nil
+}
+
 // Delete removes a VM directory and its DB records. Refuses if the VM is running.
 func (m *Manager) Delete(name string) error {
 	state, err := m.loadState(name)
@@ -1146,18 +1282,7 @@ func (m *Manager) deleteScratchDisk(vmName string, d DiskConfig) {
 // scratchDiskPath resolves a scratch disk's backing file path, mirroring
 // qemu.Disk.AbsolutePath / Disk.Name (disk-<vm>-<size>.<format>).
 func scratchDiskPath(vmName string, d DiskConfig) string {
-	diskSuffixes := []string{"qcow2", "qcow", "img", "raw", "iso", "vmdk", "vdi", "vhd"}
-	for _, suffix := range diskSuffixes {
-		if strings.HasSuffix(d.Path, suffix) {
-			return d.Path
-		}
-	}
-	format := d.Format
-	if format == "" {
-		format = "qcow2"
-	}
-	name := fmt.Sprintf("disk-%s-%s.%s", vmName, d.Size, format)
-	return filepath.Join(d.Path, name)
+	return managedBootDiskAbsPath(vmName, d)
 }
 
 // deleteVMDir removes all contents of dir except the backups/ subdirectory.
