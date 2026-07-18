@@ -4,6 +4,12 @@ package qemu
 
 import "go.uber.org/zap"
 
+// qemuEnv returns nil so the QEMU child inherits the parent environment. On
+// macOS the vee-qemu bundle carries its own dylibs and the loader finds them via
+// the binary's install paths; no LD_LIBRARY_PATH augmentation is needed (that is
+// a Linux-only fix for the libaio soname transition — see issue #40).
+func qemuEnv(_ string) []string { return nil }
+
 // applyVFIOLimits is a no-op on macOS. VFIO PCI passthrough is a Linux kernel
 // feature with no Hypervisor.framework equivalent, so no guest RAM is ever
 // DMA-mapped into an IOMMU and there is no RLIMIT_MEMLOCK to raise. Passthrough
