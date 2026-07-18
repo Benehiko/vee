@@ -448,6 +448,7 @@ func (q *BaseMachine) start(ctx context.Context, detach bool) (*StartResult, err
 
 	//nolint:gosec // binary/args are the operator-configured QEMU command for this VM manager, not user shell input.
 	cmd := exec.CommandContext(ctx, binary, args...)
+	cmd.Env = qemuEnv(binary)
 
 	if detach {
 		setDetachAttrs(cmd)

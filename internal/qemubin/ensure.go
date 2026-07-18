@@ -68,6 +68,11 @@ func Ensure() (string, error) {
 	// Check if already installed at the pinned version.
 	if b, err := os.ReadFile(marker); err == nil && string(b) == PinnedVersion { //nolint:gosec // marker path derived from UserHomeDir + fixed name, not user input
 		if _, err := os.Stat(binPath); err == nil {
+			// Heal an existing install whose host is missing a Debian-renamed
+			// soname (e.g. libaio.so.1t64 on Arch); best-effort, see issue #40.
+			if err := ensureSonameCompat(binPath); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not create library compat symlink for %s: %v\n", binPath, err)
+			}
 			return binPath, nil
 		}
 	}
@@ -106,6 +111,13 @@ func Ensure() (string, error) {
 	// entitlement so HVF works. No-op on other hosts.
 	if err := hardenBinary(binPath); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not prepare %s for HVF: %v\n", binPath, err)
+	}
+
+	// Linux: create a compat symlink for any Debian-renamed soname the freshly
+	// downloaded QEMU needs but the host lacks (e.g. libaio.so.1t64 on Arch).
+	// Best-effort; QEMU surfaces its own loader error later if unmet. See #40.
+	if err := ensureSonameCompat(binPath); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not create library compat symlink for %s: %v\n", binPath, err)
 	}
 
 	// Write version marker.

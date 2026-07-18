@@ -4,6 +4,12 @@ package qemu
 
 import "go.uber.org/zap"
 
+// qemuEnv returns nil so the QEMU child inherits the parent environment. On
+// Windows the bundle's DLLs sit next to the .exe and are found via the default
+// DLL search path; the Linux LD_LIBRARY_PATH libaio fix does not apply here.
+// See issue #40.
+func qemuEnv(_ string) []string { return nil }
+
 // applyVFIOLimits is a no-op on Windows. VFIO PCI passthrough is a Linux kernel
 // feature with no Windows Hypervisor Platform equivalent, so there is no guest
 // RAM DMA-mapped into an IOMMU and no RLIMIT_MEMLOCK to raise. Passthrough

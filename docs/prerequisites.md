@@ -21,6 +21,16 @@ System requirements to set up before creating your first VM.
 > paths verify the source archive's SHA-256 before building, and the first build
 > takes a few minutes. Installing the distro package above skips this entirely.
 
+> **Managed QEMU.** vee ships a custom QEMU build (OpenGL/virgl enabled) that it
+> downloads to `~/.vee/bin/` on demand when a published build exists for your
+> platform. This bundle is built on a Debian-family host, so on Linux the binary
+> records a dependency on the Debian 64-bit-`time_t` soname `libaio.so.1t64`. On
+> distros that ship only the upstream `libaio.so.1` (Arch, Fedora, …), vee
+> automatically creates an ABI-compatible `libaio.so.1t64 → libaio.so.1` compat
+> symlink inside `~/.vee/bin/` and adds that directory to the QEMU loader path,
+> so no manual step is required. The compat symlink is (re)created on every
+> `vee start` if the host is missing the Debian soname.
+
 ### Arch Linux
 
 ```sh
@@ -208,6 +218,22 @@ gpu:
 ### D3cold recovery after unclean exit
 
 If a passthrough VM exits uncleanly (crash, force-kill), the GPU may be left in the `D3cold` power state. `vee` automatically attempts a PCI function-level reset before each start and logs the outcome. If the device cannot be reset via sysfs, a cold reboot of the host is required.
+
+## Hostname registration (`/etc/hosts`)
+
+When a VM is started with a `--hostname`, vee registers a `hostname → IP` entry in
+`/etc/hosts` so the guest is reachable by name. Writing that file needs root, so
+vee uses `sudo -n` (non-interactive). If the host has no passwordless sudo rule
+and `/etc/hosts` is not writable by your user, vee **skips** registration and logs
+an informational line — it no longer fails or warns on every boot. The VM is still
+reachable by IP; use `vee ls` to see it.
+
+To enable name-based access, grant a passwordless sudo rule for `tee`:
+
+```sh
+# /etc/sudoers.d/vee  (edit with visudo)
+%kvm ALL=(root) NOPASSWD: /usr/bin/tee -a /etc/hosts, /usr/bin/tee /etc/hosts
+```
 
 ## Shell completion
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +14,30 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
 )
+
+// qemuEnv returns the environment for the QEMU child process. The managed
+// vee-qemu binary has no rpath, and on non-Debian distros it needs a compat
+// symlink for Debian-renamed sonames (e.g. libaio.so.1t64 -> libaio.so.1) that
+// qemubin creates in the binary's own directory (~/.vee/bin). Prepending that
+// directory to LD_LIBRARY_PATH lets the loader find the symlink. See issue #40.
+func qemuEnv(binary string) []string {
+	binDir := filepath.Dir(binary)
+	env := os.Environ()
+	prev := os.Getenv("LD_LIBRARY_PATH")
+	val := binDir
+	if prev != "" {
+		val = binDir + string(os.PathListSeparator) + prev
+	}
+	// Replace any inherited LD_LIBRARY_PATH with the augmented value.
+	out := make([]string, 0, len(env)+1)
+	for _, e := range env {
+		if strings.HasPrefix(e, "LD_LIBRARY_PATH=") {
+			continue
+		}
+		out = append(out, e)
+	}
+	return append(out, "LD_LIBRARY_PATH="+val)
+}
 
 // applyVFIOLimits raises RLIMIT_MEMLOCK on the child process when VFIO devices
 // are configured. VFIO DMA-maps the entire guest RAM into the IOMMU; without

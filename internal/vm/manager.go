@@ -470,9 +470,18 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 				zap.String("vm", name), zap.Error(ipErr))
 		} else {
 			if cfg.Hostname != "" {
-				if regErr := RegisterHostname(cfg.Hostname, ip); regErr != nil {
-					m.provider.Logger().Warn("hostname registration failed",
-						zap.String("hostname", cfg.Hostname), zap.Error(regErr))
+				switch {
+				case !CanWriteHosts():
+					// No passwordless sudo and /etc/hosts isn't writable — skip
+					// registration rather than logging a sudo failure every boot.
+					// The VM is still reachable by IP. See issue #40.
+					m.provider.Logger().Info("skipping /etc/hosts registration: needs root (no passwordless sudo)",
+						zap.String("hostname", cfg.Hostname), zap.String("ip", ip))
+				default:
+					if regErr := RegisterHostname(cfg.Hostname, ip); regErr != nil {
+						m.provider.Logger().Warn("hostname registration failed",
+							zap.String("hostname", cfg.Hostname), zap.Error(regErr))
+					}
 				}
 			}
 			if cfg.Template == "truenas" {
