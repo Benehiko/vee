@@ -21,7 +21,10 @@ type NIC struct {
 	HostFwds []string
 	// Queues enables multiqueue virtio-net when > 1. Only applied in bridge mode.
 	Queues int
-	// BridgeHelper is the path to qemu-bridge-helper. Only used when Queues > 1.
+	// BridgeHelper is the path to qemu-bridge-helper. When empty, QEMU falls
+	// back to its compiled-in default, which for the managed vee-qemu bundle is
+	// /usr/local/libexec/qemu-bridge-helper — a path that rarely exists on
+	// hosts, so callers should set this whenever a helper is detected.
 	BridgeHelper string
 }
 
@@ -58,6 +61,9 @@ func (n *NIC) Args() []string {
 			return []string{"-netdev", netdev, "-device", device}
 		}
 		val := fmt.Sprintf("bridge,br=%s,model=%s,mac=%s", n.Bridge, n.Model, n.MAC)
+		if n.BridgeHelper != "" {
+			val += ",helper=" + n.BridgeHelper
+		}
 		return []string{"-nic", val}
 	default:
 		// Use -netdev/-device split so we can set rombar=0 on the device.
