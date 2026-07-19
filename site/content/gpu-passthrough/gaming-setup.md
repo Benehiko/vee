@@ -160,3 +160,106 @@ with `guest_agent: true` in `vm.yaml`. No manual `systemctl enable` is needed.
 4. Select the desktop app and connect
 
 Sunshine's web UI is also available at `https://localhost:47990` from inside the VM for pairing and configuration.
+
+## Troubleshooting
+
+### Games run in "slow motion" (rendered on the CPU)
+
+**Symptom:** every game launched through Steam/Proton runs in slow motion, as if
+time itself is throttled. GPU usage on the passthrough card stays near idle.
+
+**Cause:** a passthrough gaming VM has **two** GPUs — the VFIO passthrough card
+(e.g. `card1`, render node `renderD129`) *and* the `virtio-gpu-pci` device vee
+attaches for SPICE/KasmVNC remote console (`card0`, render node `renderD128`).
+
+When a Vulkan application (all Proton games use Vulkan via DXVK/vkd3d)
+enumerates GPUs on a headless session, the Mesa loader may reach the virtio-gpu
+node first. Its `radv` winsys tries to connect through the guest virtio path and
+fails:
+
+```
+MESA: error: vdrm_device_connect failed
+radv/amdgpu: failed to initialize device.
+failed to initialize winsys (VK_ERROR_INITIALIZATION_FAILED)
+```
+
+`radv` then aborts the entire enumeration and Vulkan falls back to **llvmpipe**,
+the CPU software rasterizer. Confirm with:
+
+```sh
+vulkaninfo | grep deviceName
+# BAD:  deviceName = llvmpipe (LLVM ...)   <- CPU rendering
+# GOOD: deviceName = AMD Radeon RX 7900 XTX (RADV NAVI31)
+```
+
+**Fix:** pin Mesa/Vulkan to the passthrough render node so the virtio-gpu node
+is never probed by `radv`. Add these to the guest's environment (system-wide in
+`/etc/environment`, or the game launch environment):
+
+```sh
+# Select the AMD passthrough GPU by PCI vendor:device (Navi 31 = 1002:744c).
+# Use `vulkaninfo --summary` or lspci to find your device ID.
+MESA_VK_DEVICE_SELECT=1002:744c
+```
+
+For Steam specifically, set the launch option per-game or globally:
+
+```
+MESA_VK_DEVICE_SELECT=1002:744c %command%
+```
+
+> **Note:** a GPU left in a wedged state by an unclean host reboot (visible as
+> `REG_WAIT timeout` / `dcn32` errors in `dmesg`) can also force the llvmpipe
+> fallback because `radv` cannot initialize the device at all. If pinning does
+> not help and `dmesg` shows amdgpu ring/display timeouts, **cold-boot the host**
+> (full power off, not warm reboot — Navi GPUs do not reset cleanly on warm
+> reboot under VFIO). Verify `vulkaninfo` reports the AMD device afterward.
+
+### Stutter / judder in the stream
+
+**Symptom:** the game renders on the GPU (not slow motion) but the Moonlight
+stream stutters or judders.
+
+**Cause:** with the virtio-gpu display present, the guest compositor sees
+multiple heads — the virtio virtual output, the real GPU output, and sometimes a
+ghost connector (e.g. an unplugged DisplayPort reporting `connected` from a
+stale EDID). Sunshine captures via KMS and can grab the wrong head, or a
+refresh-rate mismatch between the captured head and the client causes judder.
+
+**Fix:** enforce a single head on the passthrough GPU and match the refresh rate
+to the stream. On KDE/KWin the outputs can be disabled with `kscreen-doctor`:
+
+```sh
+# List outputs and their modes.
+kscreen-doctor -o
+
+# Disable the virtio virtual head and any ghost connectors, leaving only the
+# real GPU output. Replace names with those shown by kscreen-doctor.
+kscreen-doctor output.Virtual-1.disable
+kscreen-doctor output.DP-1.disable
+
+# Set the remaining head to a mode matching your target stream FPS.
+# A 60 Hz head with a 60 FPS client gives exact 1:1 pacing (no judder).
+kscreen-doctor output.HDMI-A-1.mode.<id-for-2560x1440@60>
+```
+
+Persist across reboots via a Plasma startup script
+(`~/.config/plasma-workspace/env/single-head.sh`, `chmod +x`):
+
+```sh
+#!/bin/sh
+( sleep 4
+  kscreen-doctor output.Virtual-1.disable
+  kscreen-doctor output.DP-1.disable
+  kscreen-doctor output.HDMI-A-1.enable output.HDMI-A-1.mode.<id>
+) &
+```
+
+Then pin Sunshine to the surviving head in `sunshine.conf`:
+
+```ini
+output_name = 0          # KMS monitor index of the passthrough GPU head
+```
+
+Check which KMS index maps to your GPU head in the Sunshine log
+(`journalctl --user -u sunshine`, look for the "KMS monitor list" block).
