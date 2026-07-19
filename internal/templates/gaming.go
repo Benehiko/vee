@@ -623,6 +623,29 @@ Environment=LIBVA_DRM_DEVICE=/dev/dri/renderD129
 Environment=LIBVA_DRIVER_NAME=radeonsi
 SEOF
 
+# Hide the virtio-gpu *render* node from Vulkan.
+#
+# The passthrough VM carries a virtio-gpu-pci device alongside the VFIO GPU so
+# SPICE/KMS has a scanout surface. Since Mesa 26, RADV enumerates every DRM
+# render node during winsys init and routes each amdgpu device through the
+# virtio "vdrm" winsys when a virtio-gpu render node is present. On the VFIO
+# GPU that path fails ("could not get caps: Function not implemented" ->
+# vdrm_device_connect failed -> failed to initialize winsys), RADV aborts
+# entirely, and Vulkan silently falls back to llvmpipe — so Proton games run on
+# the CPU. See docs/gpu-passthrough-gaming.md.
+#
+# Making the virtio *render* node unreadable (mode 0000) stops RADV from
+# opening it, so RADV binds cleanly to the amdgpu node. The virtio *card* node
+# (scanout) is left untouched, so SPICE/KMS display and Sunshine KMS capture
+# keep working. Match by parent driver + render kernel name so the rule is
+# robust to non-deterministic renderD* / card* numbering.
+mkdir -p /etc/udev/rules.d
+cat > /etc/udev/rules.d/90-vee-hide-virtio-render.rules <<'UEOF'
+# Managed by vee — hide virtio-gpu render node from Vulkan/RADV so the VFIO GPU
+# is selected. Keeps the virtio card (scanout) node available for SPICE.
+SUBSYSTEM=="drm", KERNEL=="renderD*", DRIVERS=="virtio-pci", MODE="0000"
+UEOF
+
 # PipeWire RT priority drop-ins — rtkit grants elevated scheduling but only
 # after PipeWire's direct setpriority() attempt fails. The drop-ins ensure
 # the unit has sufficient RLIMIT_NICE/RLIMIT_RTPRIO for rtkit to act on.

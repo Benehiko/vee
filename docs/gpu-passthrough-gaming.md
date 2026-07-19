@@ -109,43 +109,47 @@ cat /sys/class/drm/card1-DP-1/status   # should print: connected
 
 ---
 
-## Post-install: fix Vulkan on Mesa 26
+## Vulkan on Mesa 26: virtio-gpu render node collision
 
-Arch Linux's Mesa 26 is built with `-D amdgpu-virtio=true`. This causes `radv` to route GPU initialization through a virtio-specific code path (`vdrm_device_connect`) that fails on VFIO-passed amdgpu devices. Vulkan returns zero physical devices and `vkcube` fails with:
+The passthrough VM carries a `virtio-gpu-pci` device alongside the VFIO GPU so that SPICE/KMS always has a scanout surface (the passthrough GPU often has no monitor attached, so no native scanout). This creates a second DRM render node in the guest — e.g. `renderD128` for virtio-gpu and `renderD129` for the passthrough amdgpu.
+
+Since Mesa 26, `radv` enumerates **every** DRM render node during winsys initialization and, when a virtio-gpu render node is present, routes the amdgpu device through the virtio `vdrm` winsys. On the VFIO-passed GPU that path fails, `radv` aborts entirely, and Vulkan silently falls back to `llvmpipe` (software rendering) — so Proton/DXVK games run on the CPU. The tell-tale errors:
 
 ```
+MESA: info: could not get caps: Function not implemented
 MESA: error: vdrm_device_connect failed
 radv/amdgpu: failed to initialize device
-vkEnumeratePhysicalDevices reported zero accessible devices
 ```
 
-There is no runtime workaround — Mesa must be rebuilt with `-D amdgpu-virtio=false`.
+`vulkaninfo --summary` then shows only `llvmpipe`, never `RADV NAVI31`.
 
-### Rebuild Mesa in the guest
+### The fix — hide the virtio render node from Vulkan
 
-```sh
-# 1. Get the Arch mesa PKGBUILD
-mkdir -p ~/mesa-vfio && cd ~/mesa-vfio
-git clone --depth=1 https://gitlab.archlinux.org/archlinux/packaging/packages/mesa.git .
+vee ships a udev rule in the guest (installed by `vee-firstboot`) that makes the virtio-gpu **render** node unreadable, so `radv` skips it and binds cleanly to the amdgpu node. The virtio **card** (scanout) node is left untouched, so SPICE/KMS display and Sunshine KMS capture keep working. No Mesa rebuild is required, and the rule survives `pacman -Syu`.
 
-# 2. Disable amdgpu-virtio
-sed -i 's/-D amdgpu-virtio=true/-D amdgpu-virtio=false/' PKGBUILD
+`/etc/udev/rules.d/90-vee-hide-virtio-render.rules`:
 
-# 3. Import the signing key
-gpg --recv-keys 8D8E31AFC32428A6
-
-# 4. Build and install (takes ~30 minutes)
-makepkg -si --noconfirm
+```
+SUBSYSTEM=="drm", KERNEL=="renderD*", DRIVERS=="virtio-pci", MODE="0000"
 ```
 
-After install, verify Vulkan sees the GPU:
+The rule matches by parent driver + render kernel name, so it is robust to non-deterministic `renderD*` / `card*` numbering across boots.
+
+If a VM predates this rule (or you want to verify it), install it live and re-trigger udev:
 
 ```sh
+sudo tee /etc/udev/rules.d/90-vee-hide-virtio-render.rules >/dev/null <<'EOF'
+SUBSYSTEM=="drm", KERNEL=="renderD*", DRIVERS=="virtio-pci", MODE="0000"
+EOF
+sudo udevadm control --reload-rules
+sudo udevadm trigger --subsystem-match=drm --action=change
+
+# Verify Vulkan now sees the real GPU:
 vulkaninfo --summary 2>&1 | grep deviceName
 # Expected: AMD Radeon RX 7900 GRE (RADV NAVI31)
 ```
 
-The patched mesa survives `pacman -Syu` until Arch updates the `mesa` package to a version that fixes the issue upstream. After any `mesa` upgrade, recheck with `vulkaninfo --summary` and rebuild if the error returns.
+A harmless `TU: error ... failed to open device /dev/dri/renderD<n>` line may appear afterward — that is the freedreno ICD failing to open the now-hidden virtio node, which `radv` correctly ignores.
 
 ---
 
@@ -221,7 +225,7 @@ vee ssh <name> -- 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user restart sunsh
 
 ### Vulkan: zero accessible devices
 
-Mesa 26 `amdgpu-virtio` bug — see the [Post-install: fix Vulkan](#post-install-fix-vulkan-on-mesa-26) section above.
+Mesa 26 virtio-gpu render node collision — `radv` fell back to `llvmpipe`. See [Vulkan on Mesa 26: virtio-gpu render node collision](#vulkan-on-mesa-26-virtio-gpu-render-node-collision) above.
 
 ---
 
