@@ -1425,12 +1425,17 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 		nicMode = "user"
 	}
 	nic := qemu.NewNIC(qemu.NICMode(nicMode), cfg.NIC.Bridge, cfg.NIC.MAC, nicHostFwds...)
-	if nicMode == "bridge" && cfg.CPUs > 1 {
+	if nicMode == "bridge" {
 		helperPath := m.provider.Config().BridgeHelperPath
 		if helperPath != "" {
 			if _, statErr := os.Stat(helperPath); statErr == nil {
-				nic.Queues = min(cfg.CPUs, 8)
+				// Always pass the detected helper: the managed vee-qemu bundle's
+				// compiled-in default (/usr/local/libexec/qemu-bridge-helper)
+				// does not exist on typical hosts.
 				nic.BridgeHelper = helperPath
+				if cfg.CPUs > 1 {
+					nic.Queues = min(cfg.CPUs, 8)
+				}
 			} else {
 				m.provider.Logger().Warn("qemu-bridge-helper not found, multiqueue disabled",
 					zap.String("path", helperPath))
