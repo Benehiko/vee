@@ -192,20 +192,34 @@ vulkaninfo | grep deviceName
 # GOOD: deviceName = AMD Radeon RX 7900 XTX (RADV NAVI31)
 ```
 
-**Fix:** pin Mesa/Vulkan to the passthrough render node so the virtio-gpu node
-is never probed by `radv`. Add these to the guest's environment (system-wide in
-`/etc/environment`, or the game launch environment):
+**Fix:** hide the virtio-gpu **render** node from `radv` entirely. Selecting a
+device by `MESA_VK_DEVICE_SELECT` does **not** work here — `radv` aborts during
+winsys initialization, before device selection is ever reached, so the whole ICD
+fails and Vulkan still falls back to llvmpipe.
+
+vee ships a udev rule (installed by `vee-firstboot`) that makes the virtio-gpu
+render node unreadable, so `radv` skips it and binds cleanly to the amdgpu node.
+The virtio **card** (scanout) node is left intact, so SPICE/KasmVNC console and
+Sunshine KMS capture keep working. No Mesa rebuild is needed and the rule
+survives `pacman -Syu`.
+
+`/etc/udev/rules.d/90-vee-hide-virtio-render.rules`:
+
+```
+SUBSYSTEM=="drm", KERNEL=="renderD*", DRIVERS=="virtio-pci", MODE="0000"
+```
+
+Matching by parent driver + render kernel name keeps the rule robust to
+non-deterministic `renderD*` / `card*` numbering across boots. For a VM that
+predates the rule, install it live and re-trigger udev:
 
 ```sh
-# Select the AMD passthrough GPU by PCI vendor:device (Navi 31 = 1002:744c).
-# Use `vulkaninfo --summary` or lspci to find your device ID.
-MESA_VK_DEVICE_SELECT=1002:744c
-```
-
-For Steam specifically, set the launch option per-game or globally:
-
-```
-MESA_VK_DEVICE_SELECT=1002:744c %command%
+sudo tee /etc/udev/rules.d/90-vee-hide-virtio-render.rules >/dev/null <<'EOF'
+SUBSYSTEM=="drm", KERNEL=="renderD*", DRIVERS=="virtio-pci", MODE="0000"
+EOF
+sudo udevadm control --reload-rules
+sudo udevadm trigger --subsystem-match=drm --action=change
+vulkaninfo | grep deviceName   # expect the RADV NAVI31 device, not llvmpipe
 ```
 
 > **Note:** a GPU left in a wedged state by an unclean host reboot (visible as
