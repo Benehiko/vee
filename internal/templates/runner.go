@@ -195,21 +195,22 @@ profile rootlesskit /usr/local/bin/rootlesskit flags=(unconfined) {
 	// the runner disk fills to 100% and the actions-runner service crash-loops
 	// (it cannot even copy run-helper.sh), so GitHub marks the runner offline.
 	// vee-runner-gc.sh reclaims that space. It runs as the runner user with the
-	// rootless socket env sourced from runner.env, so it talks to the same
+	// rootless socket env derived from the runner's UID, so it talks to the same
 	// containerd/BuildKit the jobs use.
 	//
-	// It is gated on no job being in progress: the actions-runner worker writes
-	// .runner files under _diag and holds a Runner.Worker process while a job
-	// executes, so GC checks for a live Runner.Worker and skips if one is found.
-	// That keeps GC from deleting an in-flight job's images mid-build.
+	// Correctness against an in-flight job is enforced by AGE-GATING every
+	// destructive action, NOT by skipping the whole run when a job is present.
+	// The earlier "skip if any Runner.Worker is alive" guard was a foot-gun: on a
+	// busy runner the timer keeps firing while a job runs, GC keeps skipping, and
+	// disk usage grows unbounded until the runner falls over (observed: a runner
+	// went offline with the disk at 100% after GC had effectively not run for
+	// days). Instead the reap below only removes containers older than a generous
+	// ceiling — a real job's containers are always younger than that — so stale
+	// stacks that a canceled or crashed job left behind (nerdctl's own
+	// `system prune` never reaps them because they are still "Up") are collected
+	// even while an unrelated job runs, and the live job is never touched.
 	runnerGC := `#!/usr/bin/env bash
 set -uo pipefail
-
-# Skip if a job is currently running, so we never prune an in-flight build.
-if pgrep -u runner -f 'Runner.Worker' >/dev/null 2>&1; then
-  echo "vee-runner-gc: job in progress, skipping"
-  exit 0
-fi
 
 # Derive the rootless socket env from the runner's own UID rather than reading
 # /etc/actions-runner/runner.env: that file is root-owned 0600 and unreadable by
@@ -221,6 +222,37 @@ export BUILDKIT_HOST="unix:///run/user/${RUNNER_UID}/buildkit/buildkitd.sock"
 export CONTAINERD_NAMESPACE=default
 export PATH=/usr/local/bin:/usr/bin:/bin
 
+# Any container older than this is treated as an orphan and force-removed even if
+# still "Up". A real CI job's containers live far under this; the ceiling only
+# needs to exceed the slowest legitimate job. 90 minutes is generous headroom.
+ORPHAN_MAX_AGE_SEC=$((90 * 60))
+NOW=$(date +%s)
+
+# Force-reap stale containers even if "Up". nerdctl's own 'system prune' only
+# removes STOPPED containers, so a stack a canceled/crashed job left running is
+# never collected — that is the primary disk-growth source. Age-gating by each
+# container's StartedAt guarantees the current job's young containers survive, so
+# this is safe to run with a job in progress and needs no name allow-list.
+echo "vee-runner-gc: reaping containers older than ${ORPHAN_MAX_AGE_SEC}s"
+for id in $(nerdctl ps -aq 2>/dev/null); do
+  name=$(nerdctl inspect --format '{{.Name}}' "${id}" 2>/dev/null) || continue
+  started=$(nerdctl inspect --format '{{.State.StartedAt}}' "${id}" 2>/dev/null)
+  if [ -n "${started}" ] && [ "${started}" != "0001-01-01T00:00:00Z" ]; then
+    started_epoch=$(date -d "${started}" +%s 2>/dev/null || echo 0)
+  else
+    # Created but never started — always safe to drop; treat as maximally old.
+    started_epoch=0
+  fi
+  age=$((NOW - started_epoch))
+  if [ "${started_epoch}" -eq 0 ] || [ "${age}" -ge "${ORPHAN_MAX_AGE_SEC}" ]; then
+    echo "vee-runner-gc: reaping ${name} (${id}, age ${age}s)"
+    nerdctl rm -f "${id}" >/dev/null 2>&1 || true
+  fi
+done
+
+# Standard prune of whatever is now stopped/dangling/unreferenced. Safe with a
+# job in progress: prune only touches stopped containers, dangling images, and
+# unused volumes/networks — an active build's resources are in use and skipped.
 echo "vee-runner-gc: pruning containerd/nerdctl"
 nerdctl system prune -af  || true
 nerdctl volume prune -af  || true
@@ -232,9 +264,17 @@ echo "vee-runner-gc: pruning BuildKit cache to 2GB ceiling"
 buildctl prune --keep-storage 2048 || true
 
 # Trim a runaway Go build cache (cgo/native CI builds), bounded not cleared.
-GOCACHE_DIR="$HOME/.cache/go-build"
-if [ -d "$GOCACHE_DIR" ]; then
-  GOCACHE=$GOCACHE_DIR go clean -cache 2>/dev/null || rm -rf "${GOCACHE_DIR:?}/"* || true
+# Only when no job is running: a live build writes here and clearing it mid-build
+# is a pointless cache-cold penalty (not a correctness problem — the age-gated
+# reap above is what protects an in-flight job). This is the one place a live
+# Runner.Worker is worth checking for.
+if pgrep -u runner -f 'Runner.Worker' >/dev/null 2>&1; then
+  echo "vee-runner-gc: job in progress, leaving go-build cache warm"
+else
+  GOCACHE_DIR="$HOME/.cache/go-build"
+  if [ -d "$GOCACHE_DIR" ]; then
+    GOCACHE=$GOCACHE_DIR go clean -cache 2>/dev/null || rm -rf "${GOCACHE_DIR:?}/"* || true
+  fi
 fi
 
 # Old runner diagnostics and stale per-job temp dirs.
@@ -255,15 +295,17 @@ User=runner
 ExecStart=/usr/local/bin/vee-runner-gc.sh
 `
 
+	// Hourly, not daily: a canceled CI job can leak a still-running stack mid-day,
+	// and a daily cadence lets orphans accumulate for up to 24h between runs.
 	// Persistent=true so a GC missed while the VM was powered off runs at the
-	// next boot rather than silently skipping a day.
+	// next boot rather than silently skipping an interval.
 	runnerGCTimer := `[Unit]
-Description=Run vee runner disk garbage collection daily
+Description=Run vee runner disk garbage collection hourly
 
 [Timer]
-OnCalendar=daily
+OnCalendar=hourly
 Persistent=true
-RandomizedDelaySec=600
+RandomizedDelaySec=120
 
 [Install]
 WantedBy=timers.target
@@ -421,7 +463,7 @@ WantedBy=timers.target
 		"ufw --force enable",
 		"systemctl enable --now vee-ssh-agent",
 		"systemctl enable --now qemu-guest-agent",
-		// Daily disk GC so CI build leftovers can't fill the disk and knock the
+		// Hourly disk GC so CI build leftovers can't fill the disk and knock the
 		// runner offline (see vee-runner-gc.sh above).
 		"systemctl enable --now vee-runner-gc.timer",
 	)
