@@ -94,7 +94,7 @@ func TestGitHubRunnerCloudInit(t *testing.T) {
 	if !strings.Contains(joined, "systemctl enable --now vee-runner-gc.timer") {
 		t.Error("runcmd missing vee-runner-gc.timer enable")
 	}
-	var gcScript string
+	var gcScript, gcTimer string
 	haveGCService, haveGCTimer := false, false
 	for _, f := range files {
 		switch f.Path {
@@ -106,6 +106,7 @@ func TestGitHubRunnerCloudInit(t *testing.T) {
 		case "/etc/systemd/system/vee-runner-gc.service":
 			haveGCService = true
 		case "/etc/systemd/system/vee-runner-gc.timer":
+			gcTimer = f.Content
 			haveGCTimer = true
 		}
 	}
@@ -118,12 +119,8 @@ func TestGitHubRunnerCloudInit(t *testing.T) {
 	if !haveGCTimer {
 		t.Error("no vee-runner-gc.timer write_file")
 	}
-	// GC must derive the rootless env from its own UID (runner.env is
-	// root-owned 0600 and unreadable by the runner user GC runs as) and refuse
-	// to run during a job.
-	if !strings.Contains(gcScript, "Runner.Worker") {
-		t.Error("GC script does not guard against in-progress jobs (Runner.Worker check)")
-	}
+	// GC must derive the rootless env from its own UID: runner.env is root-owned
+	// 0600 and unreadable by the runner user GC runs as.
 	if strings.Contains(gcScript, ". /etc/actions-runner/runner.env") {
 		t.Error("GC script sources root-owned runner.env — must derive env from id -u instead")
 	}
@@ -132,6 +129,35 @@ func TestGitHubRunnerCloudInit(t *testing.T) {
 	}
 	if !strings.Contains(gcScript, "nerdctl system prune") {
 		t.Error("GC script does not prune nerdctl")
+	}
+	// The whole GC run must NOT be skipped when a job is in progress — that guard
+	// let orphaned stacks accumulate until the disk filled. The Runner.Worker
+	// check may only survive to gate the go-build cache clear, never as an early
+	// `exit 0` for the entire script.
+	if strings.Contains(gcScript, "job in progress, skipping") {
+		t.Error("GC script still skips the whole run when a job is in progress — reap must be age-gated instead")
+	}
+	// Stale containers left "Up" by a canceled/crashed job are the primary
+	// disk-growth source and nerdctl's own prune never reaps them; GC must
+	// force-remove containers past an age ceiling even while running.
+	if !strings.Contains(gcScript, "ORPHAN_MAX_AGE_SEC") {
+		t.Error("GC script does not age-reap orphaned containers (no ORPHAN_MAX_AGE_SEC)")
+	}
+	if !strings.Contains(gcScript, "nerdctl rm -f") {
+		t.Error("GC script does not force-remove stale containers")
+	}
+	// The Runner.Worker check must remain, but only to keep the go-build cache
+	// warm during a job — not to skip the whole run.
+	if !strings.Contains(gcScript, "Runner.Worker") {
+		t.Error("GC script lost the Runner.Worker check that keeps the go-build cache warm during a job")
+	}
+	// Cadence must be hourly, not daily: a daily timer lets orphans accumulate
+	// for up to 24h between runs on a busy runner.
+	if !strings.Contains(gcTimer, "OnCalendar=hourly") {
+		t.Errorf("GC timer must run hourly, got:\n%s", gcTimer)
+	}
+	if strings.Contains(gcTimer, "OnCalendar=daily") {
+		t.Error("GC timer still set to daily — must be hourly")
 	}
 }
 
