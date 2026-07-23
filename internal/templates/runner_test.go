@@ -94,7 +94,7 @@ func TestGitHubRunnerCloudInit(t *testing.T) {
 	if !strings.Contains(joined, "systemctl enable --now vee-runner-gc.timer") {
 		t.Error("runcmd missing vee-runner-gc.timer enable")
 	}
-	var gcScript, gcTimer string
+	var gcScript, gcTimer, journaldConf, sudoersConf string
 	haveGCService, haveGCTimer := false, false
 	for _, f := range files {
 		switch f.Path {
@@ -108,6 +108,15 @@ func TestGitHubRunnerCloudInit(t *testing.T) {
 		case "/etc/systemd/system/vee-runner-gc.timer":
 			gcTimer = f.Content
 			haveGCTimer = true
+		case "/etc/systemd/journald.conf.d/vee-runner.conf":
+			journaldConf = f.Content
+		case "/etc/sudoers.d/vee-runner-gc":
+			sudoersConf = f.Content
+			// sudo silently ignores any sudoers file that is group- or
+			// world-writable, which would make the journal vacuum fail.
+			if f.Permissions != "0440" {
+				t.Errorf("sudoers drop-in must be 0440, got %q", f.Permissions)
+			}
 		}
 	}
 	if gcScript == "" {
@@ -131,9 +140,8 @@ func TestGitHubRunnerCloudInit(t *testing.T) {
 		t.Error("GC script does not prune nerdctl")
 	}
 	// The whole GC run must NOT be skipped when a job is in progress — that guard
-	// let orphaned stacks accumulate until the disk filled. The Runner.Worker
-	// check may only survive to gate the go-build cache clear, never as an early
-	// `exit 0` for the entire script.
+	// let orphaned stacks accumulate until the disk filled. Every destructive
+	// action is age-gated instead, so nothing needs an early `exit 0`.
 	if strings.Contains(gcScript, "job in progress, skipping") {
 		t.Error("GC script still skips the whole run when a job is in progress — reap must be age-gated instead")
 	}
@@ -146,11 +154,59 @@ func TestGitHubRunnerCloudInit(t *testing.T) {
 	if !strings.Contains(gcScript, "nerdctl rm -f") {
 		t.Error("GC script does not force-remove stale containers")
 	}
-	// The Runner.Worker check must remain, but only to keep the go-build cache
-	// warm during a job — not to skip the whole run.
-	if !strings.Contains(gcScript, "Runner.Worker") {
-		t.Error("GC script lost the Runner.Worker check that keeps the go-build cache warm during a job")
+	// The go-build cache must be bounded by SIZE with an age floor, not cleared
+	// wholesale. The previous design gated a full `go clean -cache` on a live
+	// Runner.Worker, so the cache either grew unchecked on a busy runner or went
+	// completely cold on an idle one. Age-gated LRU eviction protects a live
+	// build's working set without ever discarding the whole cache, which also
+	// makes the Runner.Worker check unnecessary.
+	if !strings.Contains(gcScript, "GOCACHE_CEILING_MB") {
+		t.Error("GC script does not bound the go-build cache by size (no GOCACHE_CEILING_MB)")
 	}
+	if !strings.Contains(gcScript, "GOCACHE_MIN_AGE_MIN") {
+		t.Error("GC script does not age-gate go-build eviction (no GOCACHE_MIN_AGE_MIN)")
+	}
+	if strings.Contains(gcScript, "go clean -cache") {
+		t.Error("GC script still clears the whole go-build cache instead of trimming to a ceiling")
+	}
+	// The age floor must be in MINUTES. A day-granularity guard is useless here:
+	// a busy runner rewrites its entire cache within a single day, so nothing is
+	// ever a day old and the ceiling can never be enforced (observed live: 16584
+	// cache files, all stamped the same day, 0 eligible for eviction).
+	if !strings.Contains(gcScript, "-mmin") {
+		t.Error("go-build eviction must select candidates by minutes (-mmin), not days")
+	}
+	if strings.Contains(gcScript, "-mtime +1 -printf") {
+		t.Error("go-build eviction uses day-granularity -mtime; a busy runner never has day-old entries")
+	}
+	// The journal is the one genuinely unbounded path: systemd's default ceiling
+	// is 10% of the filesystem, so growing the runner disk silently raises it.
+	// Vacuuming needs sudo — the runner user cannot unlink files under
+	// /var/log/journal, and an unprivileged vacuum fails per-file while still
+	// exiting 0, so the failure is silent.
+	if !strings.Contains(gcScript, "sudo -n journalctl --vacuum-size") {
+		t.Error("GC script does not vacuum the journal via sudo (unprivileged vacuum frees nothing)")
+	}
+	// systemd's default journal ceiling is 10% of the filesystem — a proportional
+	// cap that silently grows when the runner disk is resized (20G -> 60G raised
+	// it from ~1.9G to ~5.8G). Pin an absolute cap instead.
+	if !strings.Contains(journaldConf, "SystemMaxUse=") {
+		t.Error("journald drop-in does not cap journal size (no SystemMaxUse)")
+	}
+	// The cap only takes effect once journald reloads; without the restart the
+	// daemon keeps running with the compiled-in 10%-of-filesystem default.
+	if !strings.Contains(strings.Join(runs, "\n"), "systemctl restart systemd-journald") {
+		t.Error("runcmd does not restart journald, so the size cap never takes effect")
+	}
+	// The vacuum in the GC script runs as the runner user and needs exactly this
+	// grant; without it the vacuum fails per-file and frees nothing.
+	if !strings.Contains(sudoersConf, "journalctl --vacuum-size") {
+		t.Error("sudoers drop-in does not grant the journal vacuum the GC script runs")
+	}
+	if !strings.Contains(sudoersConf, "NOPASSWD:") {
+		t.Error("sudoers grant must be NOPASSWD — the GC service runs non-interactively")
+	}
+
 	// Cadence must be hourly, not daily: a daily timer lets orphans accumulate
 	// for up to 24h between runs on a busy runner.
 	if !strings.Contains(gcTimer, "OnCalendar=hourly") {

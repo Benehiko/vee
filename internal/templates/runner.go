@@ -263,19 +263,65 @@ nerdctl builder prune -af || true
 echo "vee-runner-gc: pruning BuildKit cache to 2GB ceiling"
 buildctl prune --keep-storage 2048 || true
 
-# Trim a runaway Go build cache (cgo/native CI builds), bounded not cleared.
-# Only when no job is running: a live build writes here and clearing it mid-build
-# is a pointless cache-cold penalty (not a correctness problem — the age-gated
-# reap above is what protects an in-flight job). This is the one place a live
-# Runner.Worker is worth checking for.
-if pgrep -u runner -f 'Runner.Worker' >/dev/null 2>&1; then
-  echo "vee-runner-gc: job in progress, leaving go-build cache warm"
-else
-  GOCACHE_DIR="$HOME/.cache/go-build"
-  if [ -d "$GOCACHE_DIR" ]; then
-    GOCACHE=$GOCACHE_DIR go clean -cache 2>/dev/null || rm -rf "${GOCACHE_DIR:?}/"* || true
+# Bound the Go build cache by SIZE rather than clearing it wholesale. The old
+# behaviour was all-or-nothing — skip entirely while a job ran, otherwise wipe
+# every entry — which meant the cache either grew unchecked on a busy runner or
+# went fully cold on an idle one. GOCACHEPROG-free trimming is not exposed by
+# the go tool, so evict least-recently-used entries directly: the cache is
+# content-addressed under two-hex-digit subdirectories, and its files carry
+# atime-like mtimes that the go tool refreshes on use, so dropping the oldest
+# files first approximates Go's own LRU trimming closely enough for a CI box.
+#
+# Runs even with a job in progress: evicting a cold entry only costs that entry
+# a recompile, and the cache is designed to tolerate arbitrary eviction (a miss
+# is a rebuild, never a failure). Only entries untouched for GOCACHE_MIN_AGE_MIN
+# are eligible, so a live build's working set is never evicted.
+#
+# The age floor is in MINUTES, not days. A day-granularity guard (-mtime +1) is
+# useless here: a busy runner rewrites the whole cache within a single day, so
+# nothing is ever a day old and the ceiling can never be enforced — observed on
+# this runner with 16584 files, all stamped today, and 0 eligible for eviction.
+# 120 minutes comfortably exceeds the longest CI job while still leaving the
+# bulk of a day's accumulation collectable.
+GOCACHE_CEILING_MB=1536
+GOCACHE_MIN_AGE_MIN=120
+GOCACHE_DIR="$HOME/.cache/go-build"
+if [ -d "$GOCACHE_DIR" ]; then
+  used_mb=$(du -xsm "$GOCACHE_DIR" 2>/dev/null | cut -f1)
+  used_mb=${used_mb:-0}
+  if [ "$used_mb" -gt "$GOCACHE_CEILING_MB" ]; then
+    echo "vee-runner-gc: go-build cache ${used_mb}MB over ${GOCACHE_CEILING_MB}MB ceiling, evicting LRU entries"
+    # Track the running total by subtracting each file's own size rather than
+    # re-running du after every unlink: the cache holds tens of thousands of
+    # files, so a du per deletion would mean thousands of full-tree stat walks.
+    freed_kb=0
+    target_kb=$(( (used_mb - GOCACHE_CEILING_MB) * 1024 ))
+    evicted=0
+    # Oldest first; stop as soon as enough has been freed.
+    while IFS= read -r line; do
+      size_kb=${line%% *}
+      f=${line#* }
+      [ -f "$f" ] || continue
+      rm -f "$f" 2>/dev/null || continue
+      freed_kb=$(( freed_kb + size_kb ))
+      evicted=$(( evicted + 1 ))
+      [ "$freed_kb" -ge "$target_kb" ] && break
+    done < <(find "$GOCACHE_DIR" -type f -mmin "+${GOCACHE_MIN_AGE_MIN}" -printf '%T@ %k %p\n' 2>/dev/null \
+               | sort -n | cut -d' ' -f2-)
+    used_mb=$(du -xsm "$GOCACHE_DIR" 2>/dev/null | cut -f1)
+    used_mb=${used_mb:-0}
+    echo "vee-runner-gc: go-build cache now ${used_mb}MB (evicted ${evicted} entries)"
+  else
+    echo "vee-runner-gc: go-build cache ${used_mb}MB within ${GOCACHE_CEILING_MB}MB ceiling"
   fi
 fi
+
+# Bound the journal too. The drop-in config caps steady-state growth, but a
+# burst between rotations can still overshoot, so vacuum explicitly. Needs sudo:
+# the runner user cannot unlink files under /var/log/journal, and an
+# unprivileged vacuum fails per-file and frees nothing.
+echo "vee-runner-gc: vacuuming journal"
+sudo -n journalctl --vacuum-size=200M >/dev/null 2>&1 || true
 
 # Old runner diagnostics and stale per-job temp dirs.
 find /opt/actions-runner/_diag -type f -name '*.log' -mtime +3 -delete 2>/dev/null || true
@@ -284,6 +330,25 @@ rm -rf /opt/actions-runner/_work/_temp/* 2>/dev/null || true
 echo "vee-runner-gc: done"
 df -h / | tail -1
 `
+
+	// systemd's default journal ceiling is 10% of the filesystem, which scales
+	// with the disk instead of with anything the runner actually needs: growing
+	// a 20G runner disk to 60G silently raises the journal's allowance from
+	// ~1.9G to ~5.8G. CI logs are verbose and nothing here reads journal history
+	// older than a few days, so pin an absolute cap instead of a proportional
+	// one. SystemMaxUse bounds the total; MaxRetentionSec drops anything older
+	// than a week even if the size cap is never reached.
+	journaldConf := `[Journal]
+SystemMaxUse=200M
+SystemKeepFree=1G
+MaxRetentionSec=1week
+`
+
+	// The GC service runs as User=runner, which cannot delete files under
+	// /var/log/journal — an unprivileged `journalctl --vacuum-size` reports
+	// "Permission denied" per file and frees 0B, silently. Grant exactly that
+	// one command via sudo rather than running the whole GC as root.
+	journalVacuumSudoers := "runner ALL=(root) NOPASSWD: /usr/bin/journalctl --vacuum-size=200M\n"
 
 	runnerGCService := `[Unit]
 Description=vee runner disk garbage collection
@@ -353,6 +418,18 @@ WantedBy=timers.target
 			Path:        "/etc/systemd/system/vee-runner-gc.timer",
 			Content:     runnerGCTimer,
 			Permissions: "0644",
+		},
+		{
+			Path:        "/etc/systemd/journald.conf.d/vee-runner.conf",
+			Content:     journaldConf,
+			Permissions: "0644",
+		},
+		{
+			// 0440 is required: sudo ignores any sudoers file that is
+			// group- or world-writable.
+			Path:        "/etc/sudoers.d/vee-runner-gc",
+			Content:     journalVacuumSudoers,
+			Permissions: "0440",
 		},
 	}
 
@@ -466,6 +543,10 @@ WantedBy=timers.target
 		// Hourly disk GC so CI build leftovers can't fill the disk and knock the
 		// runner offline (see vee-runner-gc.sh above).
 		"systemctl enable --now vee-runner-gc.timer",
+		// Apply the journal size cap. Without a restart journald keeps running
+		// with the compiled-in default (10% of the filesystem), which scales
+		// with disk size instead of need.
+		"systemctl restart systemd-journald",
 	)
 
 	return writeFiles, runCmds
