@@ -385,6 +385,7 @@ func (q *Disk) Args() []string {
 			"id=" + id,
 			"cache=none",
 			"aio=" + diskAIO("native"),
+			"discard=unmap",
 		}
 		deviceArgs := []string{
 			"virtio-blk-pci",
@@ -396,7 +397,16 @@ func (q *Disk) Args() []string {
 		if q.BootIndex > 0 {
 			deviceArgs = append(deviceArgs, fmt.Sprintf("bootindex=%d", q.BootIndex))
 		}
+		// Dedicate an iothread to this device so its I/O is serviced off the
+		// main QEMU loop. Without it every virtio-blk device shares the main
+		// loop with vCPU execution, so guest compute and disk I/O contend for
+		// one thread — the dominant latency source on storage VMs (TrueNAS)
+		// that pass through several spinning drives.
+		iothreadID := fmt.Sprintf("iothread-%s", id)
+		deviceArgs = append(deviceArgs, "iothread="+iothreadID)
+
 		return []string{
+			"-object", "iothread,id=" + iothreadID,
 			"-drive", strings.Join(driveArgs, ","),
 			"-device", strings.Join(deviceArgs, ","),
 		}

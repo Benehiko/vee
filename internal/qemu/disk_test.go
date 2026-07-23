@@ -125,6 +125,102 @@ func TestDiskArgsPassthrough(t *testing.T) {
 	if !strings.Contains(joined, "serial=SERIAL123") {
 		t.Errorf("passthrough disk should carry serial: %s", joined)
 	}
+	if !strings.Contains(joined, "discard=unmap") {
+		t.Errorf("passthrough disk should pass discards through: %s", joined)
+	}
+}
+
+// Passthrough disks must get a dedicated iothread so their I/O is serviced off
+// the main QEMU loop instead of contending with vCPU execution.
+func TestDiskArgsPassthroughIothread(t *testing.T) {
+	p := newTestProvider(t)
+	m := newTestMachine(t)
+	disk := qemu.NewDisk(p, m,
+		qemu.WithCustomPath("/dev/disk/by-id/nvme0n1"),
+		qemu.WithPassthrough(true),
+	)
+	args := disk.Args()
+	joined := strings.Join(args, " ")
+
+	if !strings.Contains(joined, "-object iothread,id=iothread-disk0") {
+		t.Errorf("passthrough disk should declare an iothread object: %s", joined)
+	}
+	if !strings.Contains(joined, "iothread=iothread-disk0") {
+		t.Errorf("passthrough device should bind its iothread: %s", joined)
+	}
+	// The object must be declared before the device that references it.
+	if strings.Index(joined, "-object iothread") > strings.Index(joined, "virtio-blk-pci") {
+		t.Errorf("iothread object must precede the device referencing it: %s", joined)
+	}
+
+	// A non-passthrough disk must NOT get an iothread — only the passthrough
+	// path is wired for it.
+	plain := qemu.NewDisk(p, m, qemu.WithCustomPath("/data/plain.qcow2"))
+	if strings.Contains(strings.Join(plain.Args(), " "), "iothread") {
+		t.Errorf("non-passthrough disk should not declare an iothread: %v", plain.Args())
+	}
+}
+
+// A hyperthreaded topology (1 socket / 1 core / 2 threads) must emit an -smp
+// whose total matches the vCPU count; QEMU rejects a mismatch.
+func TestCPUArgsHyperthreadedTopology(t *testing.T) {
+	p := newTestProvider(t)
+	base, err := qemu.NewEmptyMachine(p)
+	if err != nil {
+		t.Fatalf("NewEmptyMachine: %v", err)
+	}
+	// WithSMP takes (smp, sockets, threads, cores) — note threads precedes
+	// cores, so 1 socket / 1 core / 2 threads is (2, 1, 2, 1).
+	m, err := base.BuildMachine(
+		qemu.WithCPU(qemu.NewCPU(p, qemu.WithSMP(2, 1, 2, 1))),
+		qemu.AddDisk(qemu.NewDisk(p, base, qemu.WithCustomPath("/data/os.qcow2"))),
+	)
+	if err != nil {
+		t.Fatalf("BuildMachine: %v", err)
+	}
+	joined := strings.Join(m.Args(), " ")
+	if !strings.Contains(joined, "-smp 2,sockets=1,cores=1,threads=2") {
+		t.Errorf("expected hyperthreaded -smp topology, got: %s", joined)
+	}
+}
+
+// Multiple passthrough disks must each get a UNIQUE iothread id — a collision
+// makes QEMU refuse to start ("duplicate object id").
+func TestDiskArgsPassthroughIothreadUnique(t *testing.T) {
+	p := newTestProvider(t)
+	base, err := qemu.NewEmptyMachine(p)
+	if err != nil {
+		t.Fatalf("NewEmptyMachine: %v", err)
+	}
+	machine, err := base.BuildMachine(
+		qemu.AddDisk(qemu.NewDisk(p, base,
+			qemu.WithCustomPath("/dev/disk/by-id/ata-DISK-A"),
+			qemu.WithPassthrough(true),
+		)),
+		qemu.AddDisk(qemu.NewDisk(p, base,
+			qemu.WithCustomPath("/dev/disk/by-id/ata-DISK-B"),
+			qemu.WithPassthrough(true),
+		)),
+	)
+	if err != nil {
+		t.Fatalf("BuildMachine: %v", err)
+	}
+
+	ids := map[string]int{}
+	args := machine.Args()
+	for i, a := range args {
+		if a == "-object" && i+1 < len(args) && strings.HasPrefix(args[i+1], "iothread,id=") {
+			ids[strings.TrimPrefix(args[i+1], "iothread,id=")]++
+		}
+	}
+	if len(ids) != 2 {
+		t.Fatalf("expected 2 distinct iothread objects, got %v (args: %v)", ids, args)
+	}
+	for id, n := range ids {
+		if n != 1 {
+			t.Errorf("iothread id %q declared %d times, must be unique", id, n)
+		}
+	}
 }
 
 func TestDiskAbsolutePath(t *testing.T) {
