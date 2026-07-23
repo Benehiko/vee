@@ -82,7 +82,8 @@ Templates apply sane defaults automatically:
                   fedora default, ubuntu). Works on Apple Silicon (aarch64).
   docker          2G / 2 CPUs, Alpine Linux, Docker daemon on tcp://localhost:2375
   windows         8G / 4 CPUs, UEFI secboot, TPM 2.0
-  truenas         4G / 1 CPU, UEFI, AHCI OS disk, bridge NIC, SPICE display
+  truenas         6G / 2 CPUs, UEFI, AHCI OS disk, bridge NIC, SPICE display.
+                  Passthrough data drives each get a dedicated iothread.
   jellyfin        4G / 2 CPUs, Ubuntu cloud image, Jellyfin via official APT repo,
                   Avahi mDNS so http://<name> resolves on the LAN. Attach libraries
                   with repeatable --media flags (NFS/SMB/host-dir/block/USB).

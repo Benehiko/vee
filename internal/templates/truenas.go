@@ -38,7 +38,9 @@ func ParseDataDisk(s string) DataDisk {
 // TrueNAS requires UEFI, bridge networking (to reach the web UI at port 80/443
 // on the VM's LAN IP), and SATA/AHCI for its OS boot pool disks. Data drives
 // are passed through as virtio-blk-pci with serials derived from the disk-by-id
-// name so ZFS can identify physical drives after reboots.
+// name so ZFS can identify physical drives after reboots. Each passthrough disk
+// gets its own iothread so drive I/O does not contend with vCPU execution on
+// the main QEMU loop.
 func NewTruenasConfig(ctx context.Context, p provider.Provider, name, version, bridge string, spicePort int, dataDisks []string) (*vm.VMConfig, error) {
 	if version == "" {
 		version = "latest"
@@ -103,11 +105,24 @@ func NewTruenasConfig(ctx context.Context, p provider.Provider, name, version, b
 	return &vm.VMConfig{
 		Name:     name,
 		Template: "truenas",
-		Memory:   "4G",
-		CPUs:     1,
+		// ZFS + NFS are both throughput-sensitive and multi-threaded: nfsd runs
+		// a thread pool, and ZFS does checksumming, compression and write
+		// aggregation off the caller. A single vCPU serializes all of that, so
+		// clients see writes queue for seconds even when the pool itself
+		// retires them in milliseconds. 2 vCPUs, exposed as one hyperthreaded
+		// core, are enough to keep nfsd off the critical path without taking a
+		// second physical core away from the host.
+		//
+		// 6G is sized from measurement, not convention: on a 4G host ARC held
+		// 2.1G against a 2.9G cap at a 95% hit rate with arc_no_grow and
+		// memory_throttle_count both 0, so ARC was working well and merely
+		// short of headroom. 6G lifts the default ARC cap to ~3G and leaves
+		// ~1G free for nfsd once it is no longer single-threaded.
+		Memory:   "6G",
+		CPUs:     2,
 		Sockets:  1,
 		Cores:    1,
-		Threads:  1,
+		Threads:  2,
 		CPUModel: conf.DefaultCPUModel,
 		NIC: vm.NICConfig{
 			Mode:   "bridge",
