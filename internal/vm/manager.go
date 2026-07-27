@@ -174,7 +174,10 @@ func (m *Manager) Create(ctx context.Context, cfg *VMConfig) error {
 
 	// Copy the UEFI vars template per-VM if UEFI is requested. The provider
 	// default is arch-correct (OVMF on x86_64, AAVMF/edk2-arm on aarch64).
-	if cfg.UEFI.Enabled {
+	// QEMU-only, like every block below guarded on the backend: vz VMs use
+	// their auxiliary storage instead of OVMF vars, have no cloud-init
+	// cidata path, and no SPICE server.
+	if cfg.BackendName() == backend.QEMU && cfg.UEFI.Enabled {
 		src := cfg.UEFI.VarsPath
 		if src == "" {
 			src = m.provider.Config().OVMFVarsPath
@@ -189,7 +192,7 @@ func (m *Manager) Create(ctx context.Context, cfg *VMConfig) error {
 	}
 
 	// Generate cloud-init cidata ISO if requested.
-	if cfg.CloudInit != nil {
+	if cfg.BackendName() == backend.QEMU && cfg.CloudInit != nil {
 		writeFiles := make([]cloudinit.WriteFile, len(cfg.CloudInit.WriteFiles))
 		for i, wf := range cfg.CloudInit.WriteFiles {
 			writeFiles[i] = cloudinit.WriteFile{
@@ -237,7 +240,7 @@ func (m *Manager) Create(ctx context.Context, cfg *VMConfig) error {
 
 	// Assign a random free SPICE port if the template left it at 0, then
 	// back-fill any ServiceEntry with Protocol=spice so tunnel can find it.
-	if cfg.SPICE != nil && cfg.SPICE.Port == 0 {
+	if cfg.BackendName() == backend.QEMU && cfg.SPICE != nil && cfg.SPICE.Port == 0 {
 		port, err := freeTCPPort()
 		if err != nil {
 			return fmt.Errorf("alloc SPICE port: %w", err)
@@ -356,8 +359,9 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 	}
 
 	// Re-allocate the SPICE port if the configured port is already in use
-	// (e.g. a previous run crashed without releasing the port).
-	if cfg.SPICE != nil && cfg.SPICE.Port > 0 {
+	// (e.g. a previous run crashed without releasing the port). QEMU-only:
+	// vz has no SPICE server.
+	if cfg.BackendName() == backend.QEMU && cfg.SPICE != nil && cfg.SPICE.Port > 0 {
 		if isPortInUse(cfg.SPICE.Port) {
 			port, portErr := freeTCPPort()
 			if portErr != nil {
@@ -394,14 +398,13 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 		fgState := &VMState{
 			PID:          result.PID,
 			Backend:      string(cfg.BackendName()),
-			QMPSocket:    result.ControlSocket,
-			QGASocket:    result.GuestAgentSocket,
 			StartedAt:    ptr(time.Now()),
 			Running:      true,
 			DesiredState: DesiredStateRunning,
 			InstallState: state.InstallState,
 			InstalledAt:  state.InstalledAt,
 		}
+		assignControlSockets(fgState, cfg, result)
 		if cfg.SPICE != nil {
 			fgState.SPICEPort = cfg.SPICE.Port
 		}
@@ -443,8 +446,6 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 	newState := &VMState{
 		PID:           result.PID,
 		Backend:       string(cfg.BackendName()),
-		QMPSocket:     result.ControlSocket,
-		QGASocket:     result.GuestAgentSocket,
 		VirtiofsdPIDs: virtiofsdPIDs,
 		StartedAt:     ptr(time.Now()),
 		Running:       true,
@@ -452,6 +453,7 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 		InstallState:  state.InstallState,
 		InstalledAt:   state.InstalledAt,
 	}
+	assignControlSockets(newState, cfg, result)
 	if cfg.SPICE != nil {
 		newState.SPICEPort = cfg.SPICE.Port
 	}
@@ -462,14 +464,16 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 		return err
 	}
 
-	// Watch for guest-initiated SHUTDOWN events so the daemon can tell
-	// "user shut down inside the VM" apart from a crash. Best-effort.
-	// The watcher outlives this Start call (it runs for the VM's lifetime),
-	// so detach it from the request ctx — cancelling Start must not kill the
-	// watcher — while still carrying any ctx values via WithoutCancel.
-	// QEMU-only: the watcher speaks QMP over the control socket.
-	if cfg.BackendName() == backend.QEMU && newState.QMPSocket != "" {
+	// Watch for guest-initiated shutdowns so the daemon can tell "user shut
+	// down inside the VM" apart from a crash. Best-effort. The watcher
+	// outlives this Start call (it runs for the VM's lifetime), so detach it
+	// from the request ctx — cancelling Start must not kill the watcher —
+	// while still carrying any ctx values via WithoutCancel.
+	switch {
+	case cfg.BackendName() == backend.QEMU && newState.QMPSocket != "":
 		go m.watchVMConnection(context.WithoutCancel(ctx), name, newState.QMPSocket)
+	case cfg.BackendName() == backend.VZ && newState.ControlSocket != "":
+		go m.watchVZShutdown(context.WithoutCancel(ctx), name, newState.ControlSocket)
 	}
 
 	// Register hostname → IP and inject SSH key. Best-effort: log but don't fail start.

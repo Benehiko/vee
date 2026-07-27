@@ -68,7 +68,7 @@ created_at: 2026-01-01T00:00:00Z
 |-------|------|-------------|
 | `name` | string | VM name (matches directory name) |
 | `template` | string | Template used to create the VM |
-| `backend` | string | Virtualization backend: `qemu` (default when empty) or `vz` (Apple Virtualization.framework — not implemented yet, tracked in [#51](https://github.com/Benehiko/vee/issues/51)) |
+| `backend` | string | Virtualization backend: `qemu` (default when empty) or `vz` (Apple Virtualization.framework for macOS guests on Apple Silicon hosts — experimental, requires a `macos:` section and the `vee-vz-helper` binary; [#51](https://github.com/Benehiko/vee/issues/51)) |
 | `memory` | string | RAM, e.g. `16G` |
 | `cpus` | int | Total vCPU count |
 | `sockets` | int | CPU socket topology |

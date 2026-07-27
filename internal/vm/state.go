@@ -38,9 +38,13 @@ type VMState struct {
 	// Backend records which virtualization backend started the VM so stop
 	// and control paths dispatch correctly even if the config changes while
 	// the VM runs. Empty = QEMU (states written before this field existed).
-	Backend       string     `json:"backend,omitempty"`
-	QMPSocket     string     `json:"qmp_socket,omitempty"`
-	QGASocket     string     `json:"qga_socket,omitempty"`
+	Backend   string `json:"backend,omitempty"`
+	QMPSocket string `json:"qmp_socket,omitempty"`
+	QGASocket string `json:"qga_socket,omitempty"`
+	// ControlSocket is the non-QEMU backend control channel (the vz helper
+	// socket). Kept separate from QMPSocket so QMP consumers (vee qmp,
+	// monitor, dashboard) never dial a socket speaking another protocol.
+	ControlSocket string     `json:"control_socket,omitempty"`
 	SPICEPort     int        `json:"spice_port,omitempty"`
 	SSHPort       int        `json:"ssh_port,omitempty"`
 	VirtiofsdPIDs []int      `json:"virtiofsd_pids,omitempty"`

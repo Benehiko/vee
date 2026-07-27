@@ -3,9 +3,13 @@ package vm
 import (
 	"context"
 	"fmt"
+	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/Benehiko/vee/internal/backend"
 	"github.com/Benehiko/vee/internal/qemu"
+	"github.com/Benehiko/vee/internal/vzhelper"
 )
 
 // buildBackendMachine dispatches machine construction on the VM's backend.
@@ -21,7 +25,11 @@ func (m *Manager) buildBackendMachine(ctx context.Context, cfg *VMConfig) (backe
 		}
 		return qemuMachine{machine}, virtiofsdPIDs, nil
 	case backend.VZ:
-		return nil, nil, fmt.Errorf("backend %q is not implemented yet — Apple Virtualization.framework support is tracked in https://github.com/Benehiko/vee/issues/51", cfg.Backend)
+		machine, err := m.buildVZMachine(ctx, cfg)
+		if err != nil {
+			return nil, nil, err
+		}
+		return machine, nil, nil
 	default:
 		return nil, nil, fmt.Errorf("unknown backend %q (valid: %q, %q)", cfg.Backend, backend.QEMU, backend.VZ)
 	}
@@ -45,14 +53,33 @@ func (q qemuMachine) StartDetached(ctx context.Context) (*backend.StartResult, e
 	}, nil
 }
 
+// assignControlSockets maps a backend-neutral StartResult onto the typed
+// VMState socket fields. QMP consumers (vee qmp, monitor, dashboard) key off
+// QMPSocket, so a vz control socket must never land there.
+func assignControlSockets(state *VMState, cfg *VMConfig, result *backend.StartResult) {
+	switch cfg.BackendName() {
+	case backend.VZ:
+		state.ControlSocket = result.ControlSocket
+	default:
+		state.QMPSocket = result.ControlSocket
+		state.QGASocket = result.GuestAgentSocket
+	}
+}
+
 // gracefulShutdown asks the guest to power down via its backend's control
 // channel. Best-effort: callers follow up with a SIGKILL when the process
 // does not exit in time.
 func (m *Manager) gracefulShutdown(ctx context.Context, name string, state *VMState) {
 	switch state.BackendName() {
 	case backend.VZ:
-		// The vz helper's stop op lands with the backend implementation
-		// (issue #51 V2). Until then Stop falls through to the SIGKILL path.
+		// Ask the helper to requestStop the guest (the ACPI-powerdown
+		// analog). Best-effort like the QMP path.
+		if state.ControlSocket != "" {
+			if _, err := vzControlRequest(ctx, state.ControlSocket, vzhelper.OpStop, 5*time.Second); err != nil {
+				m.provider.Logger().Debug("vz graceful stop failed",
+					zap.String("vm", name), zap.Error(err))
+			}
+		}
 	default:
 		// QEMU — and any unrecognized backend value (hand-edited state,
 		// version skew): preserve the legacy best-effort QMP powerdown for

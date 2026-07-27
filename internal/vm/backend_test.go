@@ -39,13 +39,17 @@ func TestVMStateBackendName(t *testing.T) {
 }
 
 func TestBuildBackendMachineDispatch(t *testing.T) {
-	// The vz and unknown-backend branches must fail before touching any
-	// manager internals, so a zero Manager is enough here.
+	// The early vz guards (host check, missing macos: section) and the
+	// unknown-backend branch all fail before touching manager internals, so
+	// a zero Manager is enough here.
 	m := &Manager{}
 
+	// On a non-mac host this hits the host guard; on Apple Silicon it hits
+	// the missing macos: section guard. Both are "the vz backend requires"
+	// errors.
 	_, _, err := m.buildBackendMachine(context.Background(), &VMConfig{Backend: "vz"})
-	if err == nil || !strings.Contains(err.Error(), "not implemented") {
-		t.Errorf("vz backend: got err %v, want not-implemented error", err)
+	if err == nil || !strings.Contains(err.Error(), "vz backend requires") {
+		t.Errorf("vz backend without prerequisites: got err %v, want vz-requirements error", err)
 	}
 
 	_, _, err = m.buildBackendMachine(context.Background(), &VMConfig{Backend: "bhyve"})
