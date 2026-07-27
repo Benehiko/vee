@@ -20,7 +20,7 @@ LDFLAGS     := -s -w \
 CONTAINER_RUNTIME := $(shell command -v nerdctl 2>/dev/null || command -v docker 2>/dev/null)
 HUGO_IMAGE        := hugomods/hugo:go-git-0.147.0
 
-.PHONY: all build build-windows install clean e2e site lint fmt test hooks licenses
+.PHONY: all build build-windows vz-helper install clean e2e site lint fmt test hooks licenses
 
 all: build
 
@@ -32,6 +32,18 @@ build:
 # the produced vee.exe directly. Runs from any host with the Go toolchain.
 build-windows:
 	GOOS=windows GOARCH=amd64 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BINARY).exe .
+
+# Build and ad-hoc sign the Virtualization.framework helper (macOS guests,
+# Apple Silicon hosts only — issue #51). The entitlement is honored under
+# ad-hoc signatures; without it the helper cannot create a VZVirtualMachine.
+# cgo is required (Objective-C bindings), hence the darwin-only target.
+vz-helper:
+	CGO_ENABLED=1 $(GO) build $(GOFLAGS) -o vee-vz-helper ./cmd/vee-vz-helper
+	codesign --force --sign - --timestamp=none \
+	  --entitlements internal/vzhelper/vz.entitlements vee-vz-helper
+	install -d $(INSTALL_DIR)
+	install -m 755 vee-vz-helper $(INSTALL_DIR)/vee-vz-helper
+	@echo "Installed to $(INSTALL_DIR)/vee-vz-helper"
 
 # Mirror the CI lint job locally: format check (gofumpt + goimports) then lint.
 lint:

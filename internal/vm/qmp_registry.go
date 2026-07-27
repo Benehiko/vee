@@ -176,24 +176,32 @@ func (m *Manager) handleShutdownEvent(name string, ev qemu.QMPEvent) bool {
 		return true
 	}
 
+	m.recordGuestShutdown(name)
+	return true
+}
+
+// recordGuestShutdown marks a VM's state as guest-initiated shutdown so the
+// daemon's autostart pass will not restart it. Shared by the QMP SHUTDOWN
+// watcher and the vz shutdown watcher. Best-effort.
+func (m *Manager) recordGuestShutdown(name string) {
+	log := m.provider.Logger()
 	state, loadErr := m.loadState(name)
 	if loadErr != nil {
-		log.Debug("QMP owner: loadState failed",
+		log.Debug("shutdown watcher: loadState failed",
 			zap.String("vm", name), zap.Error(loadErr))
-		return true
+		return
 	}
 	if state.LastShutdownReason == "" {
 		state.LastShutdownReason = ShutdownReasonGuest
 	}
 	state.DesiredState = DesiredStateStopped
 	if err := m.saveState(name, state); err != nil {
-		log.Warn("QMP owner: saveState failed",
+		log.Warn("shutdown watcher: saveState failed",
 			zap.String("vm", name), zap.Error(err))
-		return true
+		return
 	}
-	log.Info("QMP owner: recorded guest-initiated shutdown",
+	log.Info("shutdown watcher: recorded guest-initiated shutdown",
 		zap.String("vm", name))
-	return true
 }
 
 // adoptRunningVMs opens owner connections for VMs that are already running when

@@ -111,6 +111,24 @@ type GPUConfig struct {
 	HostMem string `yaml:"host_mem,omitempty" json:"host_mem,omitempty"`
 }
 
+// MacOSConfig carries the artifacts a macOS guest needs, in backend-neutral
+// form (issue #51). The blobs are the opaque Virtualization.framework
+// hardware-model and machine-identifier values produced at restore time —
+// base64 in JSON, !!binary in YAML, the same encoding macosvm.json uses, so
+// macosvm bundles import directly. A future QEMU vmapple backend (issue #50)
+// derives its ECID and trimmed aux image from these same artifacts.
+type MacOSConfig struct {
+	// AuxiliaryStorage is the path to the untrimmed auxiliary storage image
+	// (NVRAM analog) created by the macOS restore.
+	AuxiliaryStorage  string `yaml:"auxiliary_storage"  json:"auxiliary_storage"`
+	HardwareModel     []byte `yaml:"hardware_model"     json:"hardware_model"`
+	MachineIdentifier []byte `yaml:"machine_identifier" json:"machine_identifier"`
+	// Display sizes the mandatory guest display; zero values pick defaults.
+	DisplayWidthPx  int64 `yaml:"display_width_px,omitempty"  json:"display_width_px,omitempty"`
+	DisplayHeightPx int64 `yaml:"display_height_px,omitempty" json:"display_height_px,omitempty"`
+	DisplayPPI      int64 `yaml:"display_ppi,omitempty"       json:"display_ppi,omitempty"`
+}
+
 type UEFIConfig struct {
 	Enabled  bool   `yaml:"enabled"            json:"enabled"`
 	CodePath string `yaml:"code_path,omitempty" json:"code_path,omitempty"`
@@ -195,11 +213,13 @@ type VMConfig struct {
 	MachineType string `yaml:"machine_type,omitempty" json:"machine_type,omitempty"`
 	// Globals are extra -global args (e.g. the secure-pflash global that arms
 	// SMM-based Secure Boot).
-	Globals        []string         `yaml:"globals,omitempty" json:"globals,omitempty"`
-	Disks          []DiskConfig     `yaml:"disks"                   json:"disks"`
-	NIC            NICConfig        `yaml:"nic"                     json:"nic"`
-	GPU            GPUConfig        `yaml:"gpu,omitempty"           json:"gpu,omitempty"`
-	UEFI           UEFIConfig       `yaml:"uefi,omitempty"          json:"uefi,omitempty"`
+	Globals []string     `yaml:"globals,omitempty" json:"globals,omitempty"`
+	Disks   []DiskConfig `yaml:"disks"                   json:"disks"`
+	NIC     NICConfig    `yaml:"nic"                     json:"nic"`
+	GPU     GPUConfig    `yaml:"gpu,omitempty"           json:"gpu,omitempty"`
+	UEFI    UEFIConfig   `yaml:"uefi,omitempty"          json:"uefi,omitempty"`
+	// MacOS holds the macOS-guest artifacts (vz backend, issue #51).
+	MacOS          *MacOSConfig     `yaml:"macos,omitempty"         json:"macos,omitempty"`
 	SPICE          *SPICEConfig     `yaml:"spice,omitempty"         json:"spice,omitempty"`
 	VirtiofsMounts []VirtiofsMount  `yaml:"virtiofs_mounts,omitempty" json:"virtiofs_mounts,omitempty"`
 	CloudInit      *CloudInitConfig `yaml:"cloud_init,omitempty"    json:"cloud_init,omitempty"`

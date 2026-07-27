@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Required to create a VZVirtualMachine. Honored under ad-hoc
+	     signatures on Apple Silicon — no paid Apple Developer account needed.
+	     Never add com.apple.vm.networking here: it is an Apple-restricted
+	     entitlement and AMFI kills ad-hoc binaries that claim it (NAT
+	     networking needs only this one). -->
+	<key>com.apple.security.virtualization</key>
+	<true/>
+</dict>
+</plist>
