@@ -1,6 +1,10 @@
 package vm
 
-import "time"
+import (
+	"time"
+
+	"github.com/Benehiko/vee/internal/backend"
+)
 
 const (
 	InstallStatePending = "pending"
@@ -30,7 +34,11 @@ type HealthCheck struct {
 }
 
 type VMState struct {
-	PID           int        `json:"pid,omitempty"`
+	PID int `json:"pid,omitempty"`
+	// Backend records which virtualization backend started the VM so stop
+	// and control paths dispatch correctly even if the config changes while
+	// the VM runs. Empty = QEMU (states written before this field existed).
+	Backend       string     `json:"backend,omitempty"`
 	QMPSocket     string     `json:"qmp_socket,omitempty"`
 	QGASocket     string     `json:"qga_socket,omitempty"`
 	SPICEPort     int        `json:"spice_port,omitempty"`
@@ -61,4 +69,13 @@ type VMState struct {
 	// Empty means the check has not been run yet.
 	PostInstallChecks    []HealthCheck `json:"post_install_checks,omitempty"`
 	PostInstallCheckedAt *time.Time    `json:"post_install_checked_at,omitempty"`
+}
+
+// BackendName resolves the backend that started this VM, defaulting to QEMU
+// for nil or legacy states written before the Backend field existed.
+func (s *VMState) BackendName() backend.Name {
+	if s == nil || s.Backend == "" {
+		return backend.QEMU
+	}
+	return backend.Name(s.Backend)
 }

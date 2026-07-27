@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
+	"github.com/Benehiko/vee/internal/backend"
 	"github.com/Benehiko/vee/internal/boot"
 	"github.com/Benehiko/vee/internal/journal"
 	"github.com/Benehiko/vee/internal/qemubin"
@@ -44,10 +45,17 @@ var startCmd = &cobra.Command{
 			return strings.TrimRight(line, "\r\n"), err
 		}
 		// Ensure the vee-managed QEMU binary is present and up-to-date.
-		if qemuPath, err := qemubin.Ensure(); err != nil {
-			return fmt.Errorf("qemu binary: %w", err)
-		} else {
-			prov.Config().QemuBinaryPath = qemuPath
+		// VMs on other backends (vz) don't use QEMU — skip the download/refresh.
+		needQEMU := true
+		if cfg, cfgErr := mgr.LoadConfig(name); cfgErr == nil && cfg.BackendName() != backend.QEMU {
+			needQEMU = false
+		}
+		if needQEMU {
+			if qemuPath, err := qemubin.Ensure(); err != nil {
+				return fmt.Errorf("qemu binary: %w", err)
+			} else {
+				prov.Config().QemuBinaryPath = qemuPath
+			}
 		}
 
 		wasInstalling := isInstalling(mgr, name)
