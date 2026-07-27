@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -28,6 +29,7 @@ import (
 	"github.com/Benehiko/vee/internal/qemu"
 	"github.com/Benehiko/vee/internal/virtiofs"
 	"github.com/Benehiko/vee/internal/virtiofsdinstall"
+	"github.com/Benehiko/vee/internal/vzhelper"
 	"github.com/Benehiko/vee/provider"
 )
 
@@ -770,7 +772,12 @@ func (m *Manager) waitIP(ctx context.Context, cfg *VMConfig, state *VMState, tim
 // ResolveIPFromMAC scans the kernel neighbour table for the IP matching a MAC.
 // If the MAC is not found on the first pass, it sends a broadcast ping on each
 // local subnet to trigger ARP responses, then retries the neighbour table once.
+// On macOS hosts (no iproute2) it consults the bootpd DHCP lease database and
+// the ARP table instead.
 func ResolveIPFromMAC(mac string) (string, error) {
+	if runtime.GOOS == "darwin" {
+		return resolveIPFromMACDarwin(mac)
+	}
 	//nolint:noctx // exported helper without ctx; adding one changes its signature and all cmd/ callers
 	out, err := exec.Command("ip", "neigh").Output()
 	if err != nil {
@@ -1123,6 +1130,18 @@ func (m *Manager) cleanupStaleVM(name string, _ *VMConfig, state *VMState) {
 		preserved.InstalledAt = state.InstalledAt
 		preserved.DesiredState = state.DesiredState
 		preserved.LastShutdownReason = state.LastShutdownReason
+		if preserved.LastShutdownReason == "" {
+			// A vz helper records the stop outcome durably before exiting;
+			// consult it so a clean guest poweroff observed by no watcher
+			// (e.g. across a daemon restart) is not misfiled as a crash —
+			// the daemon would restart a VM the user deliberately shut down.
+			if state.BackendName() == backend.VZ {
+				if res, err := vzhelper.LoadResult(m.vmDir(name)); err == nil && res.Error == "" && !res.StopRequested {
+					preserved.LastShutdownReason = ShutdownReasonGuest
+					preserved.DesiredState = DesiredStateStopped
+				}
+			}
+		}
 		if preserved.LastShutdownReason == "" {
 			preserved.LastShutdownReason = ShutdownReasonCrash
 		}

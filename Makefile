@@ -38,7 +38,7 @@ build-windows:
 # ad-hoc signatures; without it the helper cannot create a VZVirtualMachine.
 # cgo is required (Objective-C bindings), hence the darwin-only target.
 vz-helper:
-	CGO_ENABLED=1 $(GO) build $(GOFLAGS) -o vee-vz-helper ./cmd/vee-vz-helper
+	CGO_ENABLED=1 $(GO) build $(GOFLAGS) -trimpath -ldflags "-s -w" -o vee-vz-helper ./cmd/vee-vz-helper
 	codesign --force --sign - --timestamp=none \
 	  --entitlements internal/vzhelper/vz.entitlements vee-vz-helper
 	install -d $(INSTALL_DIR)
@@ -197,4 +197,4 @@ site:
 		hugo server --bind 0.0.0.0 --baseURL http://localhost:1313/vee/
 
 clean:
-	rm -f $(BINARY)
+	rm -f $(BINARY) $(BINARY).exe vee-vz-helper

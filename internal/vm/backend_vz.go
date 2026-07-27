@@ -39,13 +39,9 @@ func (m *Manager) buildVZMachine(_ context.Context, cfg *VMConfig) (backend.Mach
 	if cfg.MacOS == nil {
 		return nil, fmt.Errorf("the vz backend requires a macos: section in vm.yaml (auxiliary_storage, hardware_model, machine_identifier — produced by a macOS restore, importable from a macosvm bundle); see https://github.com/Benehiko/vee/issues/51")
 	}
-
-	helperPath, err := resolveVZHelper()
-	if err != nil {
-		return nil, err
+	if cfg.SSHPort > 0 {
+		return nil, fmt.Errorf("the vz backend does not support ssh_port: NAT has no host port-forwarding — remove ssh_port and use `vee ssh` (resolves the guest IP by MAC)")
 	}
-
-	vmDir := m.vmDir(cfg.Name)
 
 	// The NAT guest's IP is discovered by MAC, so the MAC must be stable.
 	if cfg.NIC.MAC == "" {
@@ -60,22 +56,30 @@ func (m *Manager) buildVZMachine(_ context.Context, cfg *VMConfig) (backend.Mach
 		return nil, fmt.Errorf("the vz backend requires cpus > 0")
 	}
 
+	// Paths must be absolute: vee's other disk consumers (data-presence
+	// checks, boot-disk moves) resolve relative paths against the process
+	// CWD, so accepting them here would give one field two meanings.
 	disks := make([]vzhelper.DiskSpec, 0, len(cfg.Disks))
 	for _, d := range cfg.Disks {
 		if d.Format != "" && d.Format != "raw" {
 			return nil, fmt.Errorf("the vz backend supports raw disk images only (disk %s has format %q)", d.Path, d.Format)
 		}
-		path := d.Path
-		if !filepath.IsAbs(path) {
-			path = filepath.Join(vmDir, path)
+		if !filepath.IsAbs(d.Path) {
+			return nil, fmt.Errorf("the vz backend requires absolute disk paths (got %q)", d.Path)
 		}
-		disks = append(disks, vzhelper.DiskSpec{Path: path, ReadOnly: d.Readonly})
+		disks = append(disks, vzhelper.DiskSpec{Path: d.Path, ReadOnly: d.Readonly})
 	}
-
 	auxPath := cfg.MacOS.AuxiliaryStorage
 	if auxPath != "" && !filepath.IsAbs(auxPath) {
-		auxPath = filepath.Join(vmDir, auxPath)
+		return nil, fmt.Errorf("the vz backend requires an absolute auxiliary_storage path (got %q)", auxPath)
 	}
+
+	helperPath, err := resolveVZHelper()
+	if err != nil {
+		return nil, err
+	}
+
+	vmDir := m.vmDir(cfg.Name)
 
 	display := vzhelper.DefaultDisplay
 	if cfg.MacOS.DisplayWidthPx > 0 && cfg.MacOS.DisplayHeightPx > 0 {
@@ -149,21 +153,48 @@ func (v *vzMachine) StartDetached(ctx context.Context) (*backend.StartResult, er
 		return nil, fmt.Errorf("start %s: %w", vzHelperBinary, err)
 	}
 	pid := cmd.Process.Pid
-	_ = cmd.Process.Release()
+	// Reap the child when it exits (mirrors the QEMU launch path). Without
+	// this an exited helper stays a zombie of the calling process and
+	// signal-0 liveness checks keep reporting it alive.
+	helperExited := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(helperExited)
+	}()
 
-	// The control socket appearing is the "VM is up" gate, mirroring the
-	// QMP-socket wait on the QEMU path.
+	// The control socket appearing is the "VM is up" gate: the helper binds
+	// it only after VZVirtualMachine.Start succeeds, so its existence means
+	// the VM actually started (mirrors the QMP-socket wait on QEMU).
 	deadline := time.Now().Add(vzStartTimeout)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(sockPath); err == nil {
 			return &backend.StartResult{PID: pid, ControlSocket: sockPath}, nil
 		}
-		if !isAlive(pid) {
+		select {
+		case <-helperExited:
+			if msg := vzStartFailureDetail(v.vmDir); msg != "" {
+				return nil, fmt.Errorf("%s failed to start the VM: %s (full log: %s)", vzHelperBinary, msg, logPath)
+			}
 			return nil, fmt.Errorf("%s exited during startup — check %s (a common cause is a binary missing the com.apple.security.virtualization entitlement; rebuild with `make vz-helper`)", vzHelperBinary, logPath)
+		case <-time.After(100 * time.Millisecond):
 		}
-		time.Sleep(100 * time.Millisecond)
 	}
-	return nil, fmt.Errorf("%s did not open its control socket within %s — check %s", vzHelperBinary, vzStartTimeout, logPath)
+	// Timed out with the helper still alive: kill it rather than leaving an
+	// untracked helper that could finish starting later and double-attach
+	// the raw disk images on the next vee start.
+	if proc, findErr := os.FindProcess(pid); findErr == nil {
+		_ = proc.Kill()
+	}
+	return nil, fmt.Errorf("%s did not open its control socket within %s (helper killed) — check %s", vzHelperBinary, vzStartTimeout, logPath)
+}
+
+// vzStartFailureDetail surfaces the helper's recorded start error, if any.
+func vzStartFailureDetail(vmDir string) string {
+	res, err := vzhelper.LoadResult(vmDir)
+	if err != nil {
+		return ""
+	}
+	return res.Error
 }
 
 // resolveVZHelper locates the vee-vz-helper binary: explicit override, the
@@ -223,13 +254,24 @@ func (m *Manager) watchVZShutdown(ctx context.Context, name, sockPath string) {
 	// No timeout: the op blocks for the VM's lifetime, like the QMP owner
 	// connection.
 	resp, err := vzControlRequest(ctx, sockPath, vzhelper.OpWaitShutdown, 0)
-	if err != nil {
-		log.Debug("vz shutdown watcher: wait failed",
+	switch {
+	case err != nil:
+		// The helper may have exited before its response landed (or the
+		// daemon attached mid-shutdown). The durable result file is the
+		// fallback record.
+		log.Debug("vz shutdown watcher: wait failed, checking result file",
 			zap.String("vm", name), zap.Error(err))
-		return
-	}
-	if !resp.Guest {
-		// Host-initiated: our own Stop recorded the reason already.
+		time.Sleep(500 * time.Millisecond)
+		res, loadErr := vzhelper.LoadResult(m.vmDir(name))
+		if loadErr != nil || res.Error != "" || res.StopRequested {
+			// No record / crash / host stop — leave the reason to Stop or
+			// stale-VM cleanup.
+			return
+		}
+	case resp.Reason != vzhelper.ReasonGuest:
+		// Host-initiated (Stop recorded the reason already) or an internal
+		// VM error (the crash analog — stale cleanup records it so the
+		// daemon's autostart recovery still fires).
 		return
 	}
 	m.recordGuestShutdown(name)

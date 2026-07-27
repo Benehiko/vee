@@ -215,16 +215,20 @@ func (m *Manager) adoptRunningVMs(ctx context.Context) {
 		return
 	}
 	for _, e := range entries {
-		if e.State == nil || !e.State.Running || e.State.QMPSocket == "" {
+		if e.State == nil || !e.State.Running {
 			continue
 		}
 		// vz control sockets speak a different protocol — never dial them as
-		// QMP. Unrecognized backend values keep the legacy behavior (adopt
-		// anything that recorded a QMP socket).
+		// QMP; re-attach the vz shutdown watcher instead so guest-initiated
+		// shutdowns survive a daemon restart. Unrecognized backend values
+		// keep the legacy behavior (adopt anything with a QMP socket).
 		if e.State.BackendName() == backend.VZ {
+			if e.State.ControlSocket != "" && isAlive(e.State.PID) {
+				go m.watchVZShutdown(context.WithoutCancel(ctx), e.Config.Name, e.State.ControlSocket)
+			}
 			continue
 		}
-		if !isAlive(e.State.PID) {
+		if e.State.QMPSocket == "" || !isAlive(e.State.PID) {
 			continue
 		}
 		if m.qmp != nil {

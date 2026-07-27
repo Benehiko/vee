@@ -53,6 +53,10 @@ jobs:
           cache: true
       - name: Build
         run: go build -mod=vendor ./...
+      - name: Vet
+        # The lint job runs on Linux, so darwin-only files (e.g. the cgo vz
+        # helper) get no static analysis there — vet them here.
+        run: go vet -mod=vendor ./...
       - name: Test
         run: go test -mod=vendor -race ./...
 

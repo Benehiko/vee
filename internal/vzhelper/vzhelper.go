@@ -46,6 +46,18 @@ const (
 	OpWaitShutdown = "wait-shutdown"
 )
 
+// Terminal reasons reported on the OpWaitShutdown response.
+const (
+	// ReasonGuest: the guest powered itself off (nobody sent OpStop).
+	ReasonGuest = "guest"
+	// ReasonHost: the host asked for the stop via OpStop.
+	ReasonHost = "host"
+	// ReasonError: the VM hit an internal Virtualization.framework error —
+	// the crash analog. Watchers must NOT record this as a deliberate guest
+	// shutdown (the daemon's autostart recovery keys off that distinction).
+	ReasonError = "error"
+)
+
 // Request is a single control-socket command. One JSON object per line.
 type Request struct {
 	Op string `json:"op"`
@@ -57,8 +69,11 @@ type Response struct {
 	Error string `json:"error,omitempty"`
 	// State is the VM run state for OpStatus (e.g. "running", "stopped").
 	State string `json:"state,omitempty"`
-	// Guest is set on the OpWaitShutdown response: true when the guest
-	// initiated the shutdown (nobody sent OpStop).
+	// Reason is set on the OpWaitShutdown response: ReasonGuest, ReasonHost
+	// or ReasonError.
+	Reason string `json:"reason,omitempty"`
+	// Guest mirrors Reason == ReasonGuest, kept for line-protocol
+	// readability.
 	Guest bool `json:"guest,omitempty"`
 }
 
