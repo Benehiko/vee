@@ -9,6 +9,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/Benehiko/vee/internal/backend"
 	"github.com/Benehiko/vee/internal/qemu"
 )
 
@@ -207,6 +208,12 @@ func (m *Manager) adoptRunningVMs(ctx context.Context) {
 	}
 	for _, e := range entries {
 		if e.State == nil || !e.State.Running || e.State.QMPSocket == "" {
+			continue
+		}
+		// vz control sockets speak a different protocol — never dial them as
+		// QMP. Unrecognized backend values keep the legacy behavior (adopt
+		// anything that recorded a QMP socket).
+		if e.State.BackendName() == backend.VZ {
 			continue
 		}
 		if !isAlive(e.State.PID) {

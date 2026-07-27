@@ -1,6 +1,10 @@
 package vm
 
-import "time"
+import (
+	"time"
+
+	"github.com/Benehiko/vee/internal/backend"
+)
 
 type DiskConfig struct {
 	Path        string `yaml:"path"         json:"path"`
@@ -172,8 +176,13 @@ type ServiceEntry struct {
 }
 
 type VMConfig struct {
-	Name     string   `yaml:"name"                    json:"name"`
-	Template string   `yaml:"template"                json:"template"`
+	Name     string `yaml:"name"                    json:"name"`
+	Template string `yaml:"template"                json:"template"`
+	// Backend selects the virtualization backend: "qemu" (default) or "vz"
+	// (Apple Virtualization.framework, Apple Silicon hosts — issue #51).
+	// Empty means QEMU, so configs written before this field existed keep
+	// working unchanged.
+	Backend  string   `yaml:"backend,omitempty"       json:"backend,omitempty"`
 	Memory   string   `yaml:"memory"                  json:"memory"`
 	CPUs     int      `yaml:"cpus"                    json:"cpus"`
 	Sockets  int      `yaml:"sockets"                 json:"sockets"`
@@ -228,4 +237,13 @@ type VMConfig struct {
 	// Set this when attaching a disk that already has an OS on it.
 	SkipInstall bool      `yaml:"skip_install,omitempty" json:"skip_install,omitempty"`
 	CreatedAt   time.Time `yaml:"created_at"            json:"created_at"`
+}
+
+// BackendName resolves the VM's virtualization backend, defaulting to QEMU
+// when the field is empty (configs predating backend support).
+func (c *VMConfig) BackendName() backend.Name {
+	if c.Backend == "" {
+		return backend.QEMU
+	}
+	return backend.Name(c.Backend)
 }

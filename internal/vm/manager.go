@@ -19,6 +19,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/Benehiko/vee/internal/backend"
 	"github.com/Benehiko/vee/internal/boot"
 	"github.com/Benehiko/vee/internal/cloudinit"
 	cputil "github.com/Benehiko/vee/internal/cpu"
@@ -136,6 +137,10 @@ func (m *Manager) ListAutoStart() ([]*VMConfig, error) {
 
 // Create validates and persists a new VMConfig, creating disk images and OVMF vars.
 func (m *Manager) Create(ctx context.Context, cfg *VMConfig) error {
+	if !backend.Valid(backend.Name(cfg.Backend)) {
+		return fmt.Errorf("unknown backend %q (valid: %q, %q)", cfg.Backend, backend.QEMU, backend.VZ)
+	}
+
 	dir := m.vmDir(cfg.Name)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return err
@@ -160,8 +165,10 @@ func (m *Manager) Create(ctx context.Context, cfg *VMConfig) error {
 	}
 
 	// The aarch64 "virt" board has no legacy BIOS/CSM, so UEFI is mandatory —
-	// auto-enable it regardless of the template default.
-	if platform.DefaultGuestArch() == "aarch64" {
+	// auto-enable it regardless of the template default. QEMU-only: other
+	// backends bring their own boot loader (vz uses VZMacOSBootLoader / EFI
+	// variable stores, not OVMF pflash).
+	if cfg.BackendName() == backend.QEMU && platform.DefaultGuestArch() == "aarch64" {
 		cfg.UEFI.Enabled = true
 	}
 
@@ -368,7 +375,7 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 		}
 	}
 
-	machine, virtiofsdPIDs, err := m.buildMachine(ctx, cfg)
+	machine, virtiofsdPIDs, err := m.buildBackendMachine(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -386,8 +393,9 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 		}
 		fgState := &VMState{
 			PID:          result.PID,
-			QMPSocket:    result.QMPSocket,
-			QGASocket:    result.QGASocket,
+			Backend:      string(cfg.BackendName()),
+			QMPSocket:    result.ControlSocket,
+			QGASocket:    result.GuestAgentSocket,
 			StartedAt:    ptr(time.Now()),
 			Running:      true,
 			DesiredState: DesiredStateRunning,
@@ -434,8 +442,9 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 
 	newState := &VMState{
 		PID:           result.PID,
-		QMPSocket:     result.QMPSocket,
-		QGASocket:     result.QGASocket,
+		Backend:       string(cfg.BackendName()),
+		QMPSocket:     result.ControlSocket,
+		QGASocket:     result.GuestAgentSocket,
 		VirtiofsdPIDs: virtiofsdPIDs,
 		StartedAt:     ptr(time.Now()),
 		Running:       true,
@@ -458,7 +467,8 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 	// The watcher outlives this Start call (it runs for the VM's lifetime),
 	// so detach it from the request ctx — cancelling Start must not kill the
 	// watcher — while still carrying any ctx values via WithoutCancel.
-	if newState.QMPSocket != "" {
+	// QEMU-only: the watcher speaks QMP over the control socket.
+	if cfg.BackendName() == backend.QEMU && newState.QMPSocket != "" {
 		go m.watchVMConnection(context.WithoutCancel(ctx), name, newState.QMPSocket)
 	}
 
@@ -925,9 +935,7 @@ func (m *Manager) stopWithReason(ctx context.Context, name, reason string) error
 		return fmt.Errorf("VM %q is not running", name)
 	}
 
-	if state.QMPSocket != "" {
-		m.powerdown(ctx, name, state.QMPSocket)
-	}
+	m.gracefulShutdown(ctx, name, state)
 
 	// Wait up to 30s for the process to exit.
 	deadline := time.Now().Add(30 * time.Second)

@@ -25,6 +25,11 @@ autostart=true, then polls every 30s and restarts any that have exited.
 Intended to be invoked by the systemd user service installed with:
   vee daemon install`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// The daemon hard-fails without a verified QEMU binary and relies on
+		// systemd's restart policy to retry Ensure until the download
+		// succeeds. Softening this for QEMU-less (vz-only) setups needs a
+		// lazy, per-start Ensure so a QEMU VM created later still gets the
+		// pinned binary — that lands with the vz backend (issue #51 V2).
 		if qemuPath, err := qemubin.Ensure(); err != nil {
 			return fmt.Errorf("qemu binary: %w", err)
 		} else {
