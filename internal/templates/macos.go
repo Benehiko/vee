@@ -13,6 +13,7 @@ import (
 	"github.com/Benehiko/vee/internal/platform"
 	"github.com/Benehiko/vee/internal/qemu"
 	"github.com/Benehiko/vee/internal/vm"
+	"github.com/Benehiko/vee/internal/vzfirstboot"
 	"github.com/Benehiko/vee/internal/vzhelper"
 	"github.com/Benehiko/vee/provider"
 )
@@ -31,6 +32,18 @@ type MacOSOptions struct {
 	// image's minimums).
 	Memory string
 	CPUs   int
+	// User is the admin account the first-boot patch creates (default
+	// "vee"). Ignored when SkipFirstBoot is set.
+	User string
+	// SSHPublicKeys are authorized for that account.
+	SSHPublicKeys []string
+	// Password sets the account's login password; generated when empty.
+	Password string
+	// Hostname sets the guest's LocalHostName.
+	Hostname string
+	// SkipFirstBoot leaves the restored guest untouched, so it boots into
+	// Setup Assistant and must be provisioned by hand at its display.
+	SkipFirstBoot bool
 }
 
 // NewMacOSConfig creates a macOS guest for the vz backend (issue #51):
@@ -41,6 +54,13 @@ func NewMacOSConfig(ctx context.Context, p provider.Provider, name string, opts 
 	if !platform.IsMacOS() || platform.HostArch() != "arm64" {
 		return nil, fmt.Errorf("the macos template requires an Apple Silicon macOS host (got %s/%s)",
 			platform.HostOS(), platform.HostArch())
+	}
+
+	// Validate the first-boot payload up front: a bad account name must not
+	// surface only after a 14 GB pull and a 40-minute restore.
+	fbOpts, err := firstBootOptions(name, opts)
+	if err != nil {
+		return nil, err
 	}
 
 	memory := opts.Memory
@@ -104,6 +124,8 @@ func NewMacOSConfig(ctx context.Context, p provider.Provider, name string, opts 
 			return nil, cleanup(err)
 		}
 		cfg.MacOS = macCfg
+		// An imported bundle is already set up by whoever restored it; do not
+		// rewrite its accounts or daemons.
 		return cfg, nil
 	}
 
@@ -117,7 +139,80 @@ func NewMacOSConfig(ctx context.Context, p provider.Provider, name string, opts 
 	cfg.MacOS.MinCPUs = minCPUs
 	cfg.MacOS.MinMemoryBytes = minMem
 	ClampMacOSMinimums(cfg)
+
+	if err := patchFirstBoot(ctx, cfg, vmDir, diskPath, opts, fbOpts); err != nil {
+		return nil, cleanup(err)
+	}
 	return cfg, nil
+}
+
+// firstBootOptions builds and validates the guest payload options. The
+// hostname defaults to the VM name, matching every other template.
+func firstBootOptions(name string, opts MacOSOptions) (vzfirstboot.Options, error) {
+	user := opts.User
+	if user == "" {
+		user = "vee"
+	}
+	hostname := opts.Hostname
+	if hostname == "" {
+		hostname = name
+	}
+	fb := vzfirstboot.Options{
+		User:                user,
+		Password:            opts.Password,
+		SSHPublicKeys:       opts.SSHPublicKeys,
+		Hostname:            hostname,
+		EnableScreenSharing: true,
+	}
+	if opts.SkipFirstBoot || opts.MacosvmDir != "" {
+		return fb, nil
+	}
+	if err := fb.Validate(); err != nil {
+		return fb, err
+	}
+	return fb, nil
+}
+
+// patchFirstBoot provisions the restored guest so it is reachable without a
+// GUI session. A fresh restore otherwise boots into Setup Assistant, where
+// nothing vee drives (SSH, IP resolution, health checks) is available.
+//
+// The patch needs sudo for one step — launchd only loads root-owned daemons —
+// so a refusal is reported as a warning with the manual fallback rather than
+// discarding a completed restore.
+func patchFirstBoot(ctx context.Context, cfg *vm.VMConfig, vmDir, diskPath string, opts MacOSOptions, fbOpts vzfirstboot.Options) error {
+	if opts.SkipFirstBoot {
+		fmt.Println("Skipping first-boot provisioning: the guest will boot into Setup Assistant (use `vee view` to complete it).")
+		return nil
+	}
+	fmt.Println("Provisioning the guest for headless first boot (skips Setup Assistant, creates the admin account, enables Remote Login and Screen Sharing)...")
+	res, err := vzfirstboot.Patch(ctx, diskPath, fbOpts)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: first-boot provisioning failed: %v\n"+
+			"The VM is installed and startable, but it will boot into Setup Assistant — "+
+			"complete it at the guest's display, then enable Remote Login manually.\n", err)
+		return nil
+	}
+
+	cfg.SSHUser = fbOpts.User
+	// Print the password before persisting it: if the write fails, this is
+	// the only record of a credential that already exists in the guest.
+	fmt.Printf("Guest admin account %q created. GUI login password: %s\n", fbOpts.User, res.Password)
+	if err := writeGuestCredentials(vmDir, fbOpts.User, res.Password); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not record the guest password in the VM directory (%v) — note it down now.\n", err)
+		return nil
+	}
+	fmt.Printf("Also saved to %s\n", filepath.Join(vmDir, guestCredentialsFile))
+	return nil
+}
+
+// guestCredentialsFile records the generated guest login password inside the
+// VM directory. SSH uses vee's key; this is for the GUI login window.
+const guestCredentialsFile = "macos-credentials.txt" //nolint:gosec // a file name, not a credential
+
+func writeGuestCredentials(vmDir, user, password string) error {
+	body := fmt.Sprintf("# Written by vee. GUI login for this macOS guest; SSH uses your vee key.\nuser: %s\npassword: %s\n", user, password)
+	return os.WriteFile(filepath.Join(vmDir, guestCredentialsFile), []byte(body), 0o600)
 }
 
 // ClampMacOSMinimums raises a macOS guest's CPU/memory to the restored
