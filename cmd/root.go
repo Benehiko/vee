@@ -20,9 +20,12 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "vee",
-	Short: "QEMU VM manager",
-	Long:  "Vee manages QEMU virtual machines with GPU passthrough, virtiofs sharing, and cloud-init templates.",
+	// Runtime failures are not usage errors — printing the full flag list
+	// after, say, a failed VM start buries the actual message.
+	SilenceUsage: true,
+	Use:          "vee",
+	Short:        "QEMU VM manager",
+	Long:         "Vee manages QEMU virtual machines with GPU passthrough, virtiofs sharing, and cloud-init templates.",
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		p, err := provider.New(verbose)
 		if err != nil {

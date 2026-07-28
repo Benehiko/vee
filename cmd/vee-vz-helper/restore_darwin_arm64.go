@@ -103,6 +103,10 @@ func runRestore(vmDir, ipswPath, diskPath, auxPath string, cpus uint, memoryByte
 		return fmt.Errorf("install: %w", err)
 	}
 
+	if err := shutDownRestoreVM(machine); err != nil {
+		fmt.Fprintln(os.Stderr, "vee-vz-helper: warning:", err)
+	}
+
 	osv := img.OperatingSystemVersion()
 	if err := vzhelper.WriteRestoreResult(vmDir, &vzhelper.RestoreResult{
 		HardwareModel:     hardwareModel.DataRepresentation(),
@@ -116,6 +120,31 @@ func runRestore(vmDir, ipswPath, diskPath, auxPath string, cpus uint, memoryByte
 	}
 	fmt.Println("vee-vz-helper: restore complete")
 	return nil
+}
+
+// shutDownRestoreVM stops the VM the installer used and waits for the
+// framework to finish tearing it down. Without this the caller's next start
+// races that teardown: the auxiliary storage stays locked, and a start that
+// gets past the lock lands in an error state.
+func shutDownRestoreVM(machine *vz.VirtualMachine) error {
+	if machine.State() == vz.VirtualMachineStateStopped {
+		return nil
+	}
+	if machine.CanStop() {
+		if err := machine.Stop(); err != nil {
+			return fmt.Errorf("stop the restore VM: %w", err)
+		}
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		if machine.State() == vz.VirtualMachineStateStopped {
+			// The lock is released a moment after the state settles.
+			time.Sleep(2 * time.Second)
+			return nil
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	return fmt.Errorf("the restore VM did not stop within 30s (state %v); the next start may need a retry", machine.State())
 }
 
 // restoreConfig builds the VM configuration the installer runs against —
