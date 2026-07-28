@@ -5,6 +5,8 @@ weight: 40
 
 vee runs on Apple Silicon Macs using Hypervisor.framework (**HVF**) with aarch64 guests and accelerated virtio-gpu.
 
+For **macOS guests**, vee uses Apple's Virtualization.framework instead of QEMU — see [macOS guests](../macos-guests/).
+
 ## Requirements
 
 - Apple Silicon (arm64). Intel Macs may work under TCG but are untested.
@@ -37,7 +39,7 @@ Ubuntu and Fedora cloud images ship arm64 builds and work out of the box. The `u
 
 ## Accelerated graphics — current limitation
 
-The accelerated `vee-qemu` bundle for macOS is **not currently buildable**: QEMU 10.0.2 (pinned for apple-gfx) and the only macOS-patched virglrenderer (a 2021-era fork around QEMU 6.2) do not compile together, so no `darwin-arm64` QEMU asset is published yet. Venus/Vulkan and apple-gfx (macOS-guest Metal graphics) are experimental.
+The virgl-accelerated `vee-qemu` bundle for macOS is **not currently buildable**: QEMU 10.0.2 and the only macOS-patched virglrenderer (a 2021-era fork around QEMU 6.2) do not compile together. Venus/Vulkan is experimental. QEMU's own macOS-guest path (`apple-gfx` + `vmapple`) is unusable upstream — macOS guests run on the [`vz` backend](../macos-guests/) instead.
 
 The QEMU binary vee uses is code-signed with the `com.apple.security.hypervisor` entitlement (vee applies an ad-hoc signature automatically).
 
