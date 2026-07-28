@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/Benehiko/vee/internal/backend"
 )
 
 // DiskWarning describes a disk that appears to contain existing data.
@@ -25,6 +27,14 @@ type DiskWarning struct {
 // Disks that will be freshly created (image file does not yet exist) are
 // skipped — they cannot contain data.
 func CheckDisksForData(cfg *VMConfig) ([]DiskWarning, error) {
+	// vz (macOS) guests are created FROM data: the template restores or
+	// imports an installed disk image before Manager.Create runs, so "this
+	// disk contains data" is the expected state, not an accident to warn
+	// about.
+	if cfg.BackendName() == backend.VZ {
+		return nil, nil
+	}
+
 	var warnings []DiskWarning
 	for _, d := range cfg.Disks {
 		if d.IsInstallISO() {

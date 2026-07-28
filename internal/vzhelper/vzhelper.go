@@ -8,10 +8,13 @@
 package vzhelper
 
 import (
+	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -233,6 +236,104 @@ func LoadResult(vmDir string) (*Result, error) {
 		return nil, err
 	}
 	return &res, nil
+}
+
+// RestoreResultFileName is written by `vee-vz-helper --restore` next to the
+// restored images: the artifacts vee must persist into the VM config.
+const RestoreResultFileName = "vz-restore.json"
+
+// RestoreResult carries the Virtualization.framework artifacts produced by an
+// IPSW restore. Blob fields marshal as base64 (macosvm.json-compatible).
+type RestoreResult struct {
+	HardwareModel     []byte `json:"hardware_model"`
+	MachineIdentifier []byte `json:"machine_identifier"`
+	// Minimums the restore image's configuration requires; vee raises the VM
+	// config to at least these.
+	MinCPUs        uint64 `json:"min_cpus"`
+	MinMemoryBytes uint64 `json:"min_memory_bytes"`
+	// OSVersion/Build identify what was restored (e.g. "15.5" / "24F74").
+	OSVersion string `json:"os_version,omitempty"`
+	Build     string `json:"build,omitempty"`
+}
+
+// WriteRestoreResult persists the restore artifacts into a VM directory.
+func WriteRestoreResult(vmDir string, res *RestoreResult) error {
+	data, err := json.MarshalIndent(res, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(vmDir, RestoreResultFileName), data, 0o600)
+}
+
+// LoadRestoreResult reads the restore artifacts written by the helper.
+func LoadRestoreResult(vmDir string) (*RestoreResult, error) {
+	data, err := os.ReadFile(filepath.Join(vmDir, RestoreResultFileName)) //nolint:gosec // vee-managed VM directory
+	if err != nil {
+		return nil, err
+	}
+	var res RestoreResult
+	if err := json.Unmarshal(data, &res); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", RestoreResultFileName, err)
+	}
+	if len(res.HardwareModel) == 0 || len(res.MachineIdentifier) == 0 {
+		return nil, fmt.Errorf("%s is missing the hardware model or machine identifier blob", RestoreResultFileName)
+	}
+	return &res, nil
+}
+
+// HelperBinary is the name of the Virtualization.framework helper.
+const HelperBinary = "vee-vz-helper"
+
+// ResolveHelper locates the helper binary: explicit override, the directory
+// of the running vee binary (release tarballs ship them side by side), the
+// vee-managed bin dir, then PATH.
+func ResolveHelper() (string, error) {
+	if p := os.Getenv("VEE_VZ_HELPER"); p != "" {
+		if _, err := os.Stat(p); err != nil { //nolint:gosec // deliberate operator-provided override
+			return "", fmt.Errorf("VEE_VZ_HELPER: %w", err)
+		}
+		return p, nil
+	}
+	var candidates []string
+	if exe, err := os.Executable(); err == nil {
+		candidates = append(candidates, filepath.Join(filepath.Dir(exe), HelperBinary))
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		candidates = append(candidates, filepath.Join(home, ".vee", "bin", HelperBinary))
+	}
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err == nil {
+			return c, nil
+		}
+	}
+	if p, err := exec.LookPath(HelperBinary); err == nil {
+		return p, nil
+	}
+	return "", fmt.Errorf("%s not found (looked in $VEE_VZ_HELPER, next to the vee binary, ~/.vee/bin, $PATH) — install it from the darwin-arm64 release tarball or build it with `make vz-helper`", HelperBinary)
+}
+
+// LatestRestoreImageURL asks the helper for the newest macOS restore-image
+// URL this HOST supports (the Virtualization.framework answer — more
+// accurate than any global "latest", which a host on an older macOS may not
+// be able to restore). The helper is required because the query is a cgo
+// framework call and the vee binary builds with CGO_ENABLED=0.
+func LatestRestoreImageURL(ctx context.Context, helperPath string) (string, error) {
+	//nolint:gosec // helperPath comes from ResolveHelper / operator override
+	out, err := exec.CommandContext(ctx, helperPath, "--print-restore-url").Output()
+	if err != nil {
+		// Surface the helper's stderr (the actual diagnostic — e.g. the
+		// framework's network error) instead of a bare "exit status 1".
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
+			return "", fmt.Errorf("%s --print-restore-url: %w: %s", HelperBinary, err, strings.TrimSpace(string(ee.Stderr)))
+		}
+		return "", fmt.Errorf("%s --print-restore-url: %w", HelperBinary, err)
+	}
+	url := strings.TrimSpace(string(out))
+	if !strings.HasPrefix(url, "https://") {
+		return "", fmt.Errorf("unexpected restore-url output %q", url)
+	}
+	return url, nil
 }
 
 // ParseMemoryBytes converts vee memory strings ("16G", "4096M", bare MiB

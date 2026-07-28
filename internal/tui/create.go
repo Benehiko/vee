@@ -38,6 +38,7 @@ var templateNames = []string{
 	"passthrough",
 	"truenas",
 	"windows",
+	"macos",
 }
 
 // distroAwareTemplates are templates that support --distro selection.
@@ -875,6 +876,11 @@ func (m createModel) doSubmit() tea.Cmd {
 		ctx := context.Background()
 		if opts.Template == "torrent" {
 			return createDoneMsg{err: fmt.Errorf("torrent template requires interactive prompts; use the CLI: vee create %s --template torrent", opts.Name)}
+		}
+		if opts.Template == "macos" {
+			// The IPSW pull + restore stream ~40 minutes of raw progress to
+			// stdout, which the TUI terminal cannot host.
+			return createDoneMsg{err: fmt.Errorf("the macos template restores a full guest (long-running, streamed progress); use the CLI: vee create %s --template macos [--ipsw latest|<url>|<path> | --macosvm-dir <dir>]", opts.Name)}
 		}
 		cfg, err := build.Build(ctx, prov, opts)
 		if err != nil {

@@ -47,7 +47,7 @@ Run 'vee pull --list' to see all supported distros and versions.`,
 
 		distro, version := parsePullArgs(args)
 		if !isSupportedDistro(distro) {
-			return fmt.Errorf("unknown distro %q; supported: %s", distro, strings.Join(images.SupportedDistros(), ", "))
+			return fmt.Errorf("unknown distro %q; supported: %s", distro, strings.Join(images.PullableDistros(), ", "))
 		}
 
 		img, err := images.NewImage(prov, distro, version)
@@ -83,13 +83,13 @@ func parsePullArgs(args []string) (distro, version string) {
 }
 
 func isSupportedDistro(distro string) bool {
-	return slices.Contains(images.SupportedDistros(), distro)
+	return slices.Contains(images.PullableDistros(), distro)
 }
 
 func printPullList(cmd *cobra.Command) error {
 	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
 	_, _ = fmt.Fprintln(w, "DISTRO\tVERSIONS (newest first)")
-	distros := images.SupportedDistros()
+	distros := images.PullableDistros()
 	sort.Strings(distros)
 	for _, d := range distros {
 		versions := images.DistroVersions(d)
@@ -104,7 +104,7 @@ func completePullArgs(_ *cobra.Command, args []string, toComplete string) ([]str
 	switch len(args) {
 	case 0:
 		var out []string
-		for _, d := range images.SupportedDistros() {
+		for _, d := range images.PullableDistros() {
 			out = append(out, d)
 			for _, v := range images.DistroVersions(d) {
 				out = append(out, d+"-"+v)

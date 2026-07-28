@@ -20,10 +20,33 @@ import (
 
 func run() int {
 	vmDir := flag.String("vm-dir", "", "VM directory containing "+vzhelper.SpecFileName)
+	printRestoreURL := flag.Bool("print-restore-url", false, "print the newest macOS restore-image (IPSW) URL this host supports and exit")
+	restore := flag.String("restore", "", "restore a macOS guest from this IPSW into --vm-dir instead of running a VM")
+	restoreDisk := flag.String("restore-disk", "", "raw disk image for --restore (must exist; sparse file is fine)")
+	restoreAux := flag.String("restore-aux", "", "auxiliary storage path for --restore (created)")
+	restoreCPUs := flag.Uint("restore-cpus", 4, "CPU count for the restore VM (raised to the image minimum)")
+	restoreMemory := flag.Uint64("restore-memory", 8<<30, "memory bytes for the restore VM (raised to the image minimum)")
 	flag.Parse()
+
+	if *printRestoreURL {
+		url, err := vz.GetLatestSupportedMacOSRestoreImageURL()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "vee-vz-helper:", err)
+			return 1
+		}
+		fmt.Println(url)
+		return 0
+	}
 	if *vmDir == "" {
-		fmt.Fprintln(os.Stderr, "usage: vee-vz-helper --vm-dir <dir>")
+		fmt.Fprintln(os.Stderr, "usage: vee-vz-helper --vm-dir <dir> [--restore <ipsw> --restore-disk <img> --restore-aux <img>]")
 		return 2
+	}
+	if *restore != "" {
+		if err := runRestore(*vmDir, *restore, *restoreDisk, *restoreAux, *restoreCPUs, *restoreMemory); err != nil {
+			fmt.Fprintln(os.Stderr, "vee-vz-helper: restore:", err)
+			return 1
+		}
+		return 0
 	}
 	if err := runVM(*vmDir); err != nil {
 		fmt.Fprintln(os.Stderr, "vee-vz-helper:", err)
