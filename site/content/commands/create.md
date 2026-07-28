@@ -20,6 +20,9 @@ vee create <name> [flags]
 | `--distro` | Linux distro for templates that support it |
 | `--data-disk` | Extra raw disk in `path:label` format (repeatable) |
 | `--nvme-dev` | Pass an NVMe device through directly (passthrough template) |
+| `--ipsw` | macos template: restore image — `latest`, an https URL, or a local `.ipsw` |
+| `--macosvm-dir` | macos template: import an existing macosvm bundle instead of restoring |
+| `--skip-first-boot` | macos template: skip offline provisioning (guest boots into Setup Assistant) |
 | `--ovmf-vars` | Custom OVMF_VARS.fd for UEFI |
 | `--gpu-pci` | GPU PCI address for passthrough, e.g. `08:00.0` |
 | `--nic-mode` | Networking mode: `user` or `bridge` |

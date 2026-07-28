@@ -126,13 +126,14 @@ check the build log for that warning if the guest reports an `llvmpipe` renderer
 
 #### Known limitations of the virgl bundle
 
-The accelerated bundle is **not yet buildable from a stock toolchain** as of this
-writing — the pinned QEMU and the only macOS-patched virglrenderer are from
-different eras and do not compile together. This is the biggest open item in the
-macOS port; the notes below are for whoever picks it up.
+The **virgl-accelerated** variant of the bundle is not buildable from a stock
+toolchain as of this writing — the pinned QEMU and the only macOS-patched
+virglrenderer are from different eras and do not compile together. The published
+bundle is therefore the plain-HVF build. Restoring GL acceleration is the biggest
+open item in the macOS port; the notes below are for whoever picks it up.
 
 - **QEMU ↔ virglrenderer version mismatch (the blocker).** The build pins
-  **QEMU 10.0.2** (needed for `apple-gfx` / `ParavirtualizedGraphics`), but the
+  **QEMU 10.0.2**, but the
   only macOS-patched virglrenderer with the ANGLE (GLES→Metal) stack is the
   `knazarov/qemu-virgl` tap's `virglrenderer 20211212.1` — a **December 2021**
   build (~QEMU 6.2 era). QEMU 10.2's `hw/display/virtio-gpu-virgl.c` calls
@@ -141,9 +142,10 @@ macOS port; the notes below are for whoever picks it up.
   own `qemu-virgl` formula sidesteps this by building QEMU from a matching 2021
   git revision. Resolving it requires one of: a newer macOS-patched
   virglrenderer, a QEMU-side shim for the old renderer API, or dropping the QEMU
-  version (which loses `apple-gfx`). Until then there is **no published
-  `darwin-arm64` asset** and `Checksums["darwin-arm64"]` in
-  `internal/qemubin/version.go` stays empty.
+  version. A `darwin-arm64` bundle **is** published and pinned in
+  `internal/qemubin/version.go` — it is simply built on the plain-HVF branch
+  (`GL_ACCEL=0`), so `gpu.mode: virtio` renders in software until an accelerated
+  bundle becomes buildable.
 
 - **Toolchain fix-ups the script now handles (but which pin it to a moving
   target).** On current Homebrew the dependency step needs: the tap formula named
@@ -167,7 +169,7 @@ macOS port; the notes below are for whoever picks it up.
 | Guest | Path | Status |
 |-------|------|--------|
 | **Linux (arm64)** | `gpu.mode: virtio` → `virtio-gpu-gl-pci` + `-display cocoa,gl=es` | ✅ OpenGL (virgl) stable; Vulkan (Venus) experimental |
-| **macOS** | `gpu.mode: apple-gfx` (ParavirtualizedGraphics.framework) | ⚠️ Building blocks present; full template wiring pending |
+| **macOS** | `vz` backend (Virtualization.framework) — see below | ✅ Metal-accelerated by the framework; QEMU's `apple-gfx`/`vmapple` path is unusable ([#50](https://github.com/Benehiko/vee/issues/50)) |
 | **Windows (arm64)** | 2D only (`virtio-gpu-pci`) + RDP | ❌ No virtio-gpu 3D driver exists for Windows; VFIO unavailable on macOS |
 
 ### Linux guest (the main use case)
@@ -189,16 +191,17 @@ Vulkan/compute apps.
 Headless or SPICE VMs fall back to a plain (2D) `virtio-gpu-pci`, since there is
 no windowed GL context.
 
-### macOS guest (apple-gfx / PVG)
+### macOS guest
 
-apple-gfx uses Apple's `ParavirtualizedGraphics.framework` for Metal-accelerated
-graphics and requires QEMU ≥ 10.0, the `vmapple` machine, AVPBooter firmware from
-the host `Virtualization.framework`, and a binary signed with both
-`com.apple.security.hypervisor` and `com.apple.security.virtualization`. It
-accelerates **macOS guests only** (single display, no live migration; macOS 12.x
-guests on the vmapple path). The device building blocks exist
-(`qemu.AppleGFXDevice`, `qemu.VMAppleMachineType`); end-to-end template wiring is
-in progress.
+macOS guests do not use QEMU at all — they run on Apple's
+Virtualization.framework via vee's `vz` backend, which brings its own
+Metal-accelerated display. See "macOS guests (Virtualization.framework)" below.
+
+QEMU's own macOS-guest path (`gpu.mode: apple-gfx` with the `vmapple` machine)
+is not usable: upstream compiles that machine out by default because it crashes
+on macOS 15.4+ hosts, and it supports macOS 12 guests only. `gpu.mode:
+apple-gfx` therefore still errors out, pointing at the vz backend. Tracked in
+[issue #50](https://github.com/Benehiko/vee/issues/50).
 
 ### Windows guest
 
@@ -238,13 +241,132 @@ vee create box --template desktop --distro ubuntu # Ubuntu arm64
 Acceleration requires a virgl-capable QEMU (see "The vee-qemu bundle" below);
 with stock/Homebrew QEMU the desktop still renders, but in software (llvmpipe).
 
+## macOS guests (Virtualization.framework)
+
+vee runs macOS guests through Apple's Virtualization.framework — the `vz`
+backend — not through QEMU. Backend selection is a per-VM field, so QEMU stays
+the default for every other guest:
+
+```sh
+vee create mymac --template macos       # restore + provision, then vee ssh mymac
+```
+
+Requirements: an Apple Silicon host on macOS 13+, the `vee-vz-helper` binary
+(shipped in the `darwin-arm64` release tarball, or `make vz-helper` from a
+checkout), ~14 GB for the cached IPSW plus the guest disk, and one `sudo`
+prompt during creation.
+
+Apple's licence permits virtualized macOS **only on Apple hardware, two
+instances at a time** — Virtualization.framework enforces the limit itself.
+
+### Architecture
+
+A `VZVirtualMachine` lives inside the process that creates it, so vee spawns
+one detached **`vee-vz-helper`** per guest — the analog of a `qemu-system`
+process. The helper owns the VM for its lifetime and serves a small
+newline-JSON control socket in the VM directory (`status`, `stop`,
+`wait-shutdown`), which is what the QMP socket does for a QEMU VM. vee's
+lifecycle model is unchanged: PID in `VMState`, liveness by signal, graceful
+stop then SIGKILL.
+
+| Concern | QEMU backend | vz backend |
+|---|---|---|
+| VM process | `qemu-system-aarch64` | `vee-vz-helper` |
+| Control channel | QMP unix socket | helper control socket |
+| Graceful stop | `system_powerdown` | `requestStop` |
+| Disk format | qcow2 (and raw) | raw only |
+| Firmware/boot | OVMF pflash pair | `VZMacOSBootLoader` + auxiliary storage |
+| Guest IP | user-mode hostfwd on 127.0.0.1 | resolved by MAC from host DHCP leases |
+| Display | SPICE / cocoa window | guest Screen Sharing (VNC) |
+| Guest agent | QGA (optional) | none |
+
+### Creating a guest
+
+1. **Restore image.** `--ipsw latest` (default) asks the host's
+   Virtualization.framework for the newest image *this host* can restore.
+   A URL or local path pins a specific version; `vee pull macos` pre-fetches.
+2. **Install.** The helper runs `VZMacOSInstaller` against a fresh sparse raw
+   disk, printing progress. CPU and memory are raised to the image's minimums,
+   which are then recorded in `vm.yaml` (`macos.min_cpus`,
+   `macos.min_memory_bytes`) and enforced on every later start.
+3. **Provision offline** (see below).
+4. **Run.** `vee start` spawns the helper; the control socket appearing is the
+   start-confirmation gate.
+
+`--macosvm-dir` imports an existing [macosvm](https://github.com/s-u/macosvm)
+bundle instead: vee copies the disk and auxiliary storage and reads the
+hardware-model and machine-identifier blobs from `macosvm.json` (the same
+base64 encoding vee's own config uses). Imported guests are never
+re-provisioned.
+
+### First-boot provisioning
+
+A freshly restored guest boots into Setup Assistant, which needs a human at a
+display — no SSH, no IP, nothing vee can drive. So before the guest's first
+boot, vee patches its disk offline:
+
+1. Attach the raw image without mounting (`hdiutil attach -nomount -plist`).
+2. Resolve the guest's APFS **Data**-role volume (`diskutil apfs list -plist`,
+   matching the container by physical store — never the host's own volume).
+3. Mount it `-o noowners`, which is what lets a non-root user write to a
+   foreign APFS volume.
+4. Write `.AppleSetupDone`, `Library/User Template/.skipbuddy`,
+   `/usr/local/sbin/vee-firstboot.sh` and its launch daemon.
+5. Unmount, then fix ownership to `root:wheel` in one batched `sudo` call —
+   launchd only loads root-owned daemon plists, and a `noowners` mount records
+   the writer's identity instead.
+
+On first boot the guest script creates the admin account (`sysadminctl`),
+authorizes your SSH keys, enables Remote Login and Screen Sharing, sets the
+hostname, and then deletes itself — it carries the account password, so it is
+mode 0700 and removed once provisioning succeeds. Its log stays at
+`/var/log/vee-firstboot.log` inside the guest.
+
+The whole step is best-effort: if it fails (sudo declined, unexpected disk
+layout) the payload is rolled back so the guest still boots into Setup
+Assistant rather than landing at a login window with no account.
+`--skip-first-boot` opts out deliberately.
+
+The generated GUI password is printed once and saved to
+`macos-credentials.txt` (mode 0600) in the VM directory. SSH uses your vee
+key.
+
+### Caveats
+
+- **Screen Sharing may refuse connections.** Since macOS 12.1 the
+  screen-sharing agent needs TCC permissions only device management can grant;
+  a VM cannot grant them to itself. `vee view` probes port 5900 and reports
+  when nothing answers. SSH is the reliable route.
+- **A per-user setup wizard may still appear at the first graphical login.**
+  Suppressing it needs version-stamped `com.apple.SetupAssistant` preferences
+  vee does not write yet (lima hits the same wall). SSH is unaffected.
+- **No secure token** on the provisioned account, because a launch daemon
+  created it rather than Setup Assistant: no FileVault, no startup-security
+  changes, no in-place macOS upgrades. Re-restore from a newer IPSW instead.
+- **Guest ≤ host.** Newer guests will not restore. Newer Apple Silicon also
+  sets a floor (an M4 host refuses guests older than macOS 13.4).
+- Not testable in CI: GitHub's macOS runners have no nested virtualization, so
+  this path is exercised manually on real hardware.
+
+### Why not QEMU's vmapple?
+
+QEMU has an experimental macOS-guest machine (`vmapple` plus `apple-gfx`), and
+vee's QEMU backend still carries the seam for it. It is unused: upstream
+compiles the machine out by default (`CONFIG_VMAPPLE=n`) because it crashes on
+macOS 15.4+ hosts, the fix has sat unmerged since March 2026, and it supports
+macOS 12 guests only. Tracked in issue #50; the backend field makes adding it
+later a matter of implementing one interface.
+
 ## Limitations summary
 
 - No VFIO GPU passthrough (Linux-host kernel feature).
 - No virtiofs shares, vhost-vsock SSH-share, swtpm TPM, or bridge networking.
 - x86 guests run under slow TCG emulation; use aarch64 guests.
 - Accelerated `gpu.mode: virtio` needs a virgl-capable QEMU; stock QEMU = software GL.
-- The accelerated **vee-qemu bundle is not currently buildable** (QEMU 10.x vs the
-  2021-era macOS virglrenderer); no `darwin-arm64` asset is published yet. See
-  "Known limitations of the virgl bundle" above.
-- Venus/Vulkan and apple-gfx are experimental.
+- The **virgl-accelerated** vee-qemu bundle is still not buildable (QEMU 10.x vs
+  the 2021-era macOS virglrenderer); see "Known limitations of the virgl bundle".
+- Venus/Vulkan is experimental. QEMU's `apple-gfx`/`vmapple` macOS-guest path is
+  unusable upstream — run macOS guests on the `vz` backend instead.
+- macOS guests: no snapshots, suspend/resume, virtiofs shares, `vee check` or
+  `vee ports` yet; no SPICE/QMP-derived features (`vee monitor`, `vee qmp`,
+  dashboard stats).

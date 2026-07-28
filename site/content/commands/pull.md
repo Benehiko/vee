@@ -24,7 +24,19 @@ vee pull ubuntu            # newest known Ubuntu
 vee pull ubuntu 22.04      # a specific version
 vee pull ubuntu-24.04      # same, as a single token
 vee pull windows win10     # build the Windows 10 ISO
+vee pull macos             # newest macOS restore image this host can install
 vee pull --list            # list every supported distro and version
+```
+
+`macos` pulls an Apple Silicon **restore image** (IPSW, ~14 GB) for use with the
+[macos template](../../getting-started/macos-guests/); it requires an Apple
+Silicon macOS host. `latest` asks the host's Virtualization.framework what it can
+actually restore. For a specific version, pass an `https://…ipsw` URL — for
+example one listed by [ipsw.me](https://ipsw.me/product/Mac/) or
+[appledb.dev](https://appledb.dev):
+
+```sh
+vee pull macos https://updates.cdn-apple.com/…/UniversalMac_15.5_24F74_Restore.ipsw
 ```
 
 ## Flags

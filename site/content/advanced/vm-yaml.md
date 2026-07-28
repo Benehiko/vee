@@ -81,6 +81,19 @@ created_at: 2026-01-01T00:00:00Z
 | `extra_devices` | []string | Additional `-device` arguments passed to QEMU |
 | `created_at` | timestamp | Creation time (set automatically) |
 
+### macos
+
+Only for `backend: vz` guests (see [macOS guests](../../getting-started/macos-guests/)). Written by the `macos` template; the blobs are opaque Virtualization.framework values, base64 in JSON and `!!binary` in YAML — the same encoding `macosvm.json` uses.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `auxiliary_storage` | string | Absolute path to the guest's auxiliary storage (the NVRAM analog) |
+| `hardware_model` | binary | Hardware model the guest was restored for |
+| `machine_identifier` | binary | Machine identity bound to the installed guest |
+| `min_cpus` | int | CPU floor from the restore image; vee clamps up to it |
+| `min_memory_bytes` | int | Memory floor from the restore image; vee clamps up to it |
+| `display_width_px` / `display_height_px` / `display_ppi` | int | Guest display size (defaults 1920x1200 @ 80 ppi) |
+
 ### disks[]
 
 | Field | Description |
@@ -107,7 +120,7 @@ created_at: 2026-01-01T00:00:00Z
 
 | Field | Description |
 |-------|-------------|
-| `mode` | `none`, `virtio` (accelerated virtio-gpu), `passthrough` (VFIO, Linux host only), or `apple-gfx` (macOS guest, macOS host) |
+| `mode` | `none`, `virtio` (accelerated virtio-gpu), or `passthrough` (VFIO, Linux host only). `apple-gfx` is rejected: QEMU's macOS-guest path is unusable upstream ([#50](https://github.com/Benehiko/vee/issues/50)) — run macOS guests on `backend: vz` instead |
 | `pci_addr` | Primary GPU PCI address, e.g. `0000:08:00.0` (passthrough) |
 | `extra_vfio_addrs` | Additional IOMMU group peer addresses (passthrough) |
 | `rom_file` | Path to VBIOS dump (required for AMD Navi) |
