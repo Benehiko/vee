@@ -18,7 +18,7 @@ rather start it yourself later with `vee start mymac`.
 
 - **Apple Silicon Mac** running macOS 13 or newer. macOS guests are arm64-only, and Virtualization.framework will not restore a guest newer than the host.
 - The **`vee-vz-helper`** binary, which owns each guest VM. It ships in the `darwin-arm64` release tarball next to `vee`; from a source checkout, run `make vz-helper`.
-- Disk space for the restore image (**~14 GB** IPSW, cached under `~/.vee/iso/`) plus the guest disk (64 GB by default, sparse).
+- Disk space for the restore image (**15-20 GB** IPSW depending on the macOS version — 26.6 is 19.8 GB — cached under `~/.vee/iso/`) plus the guest disk (64 GB by default, sparse).
 - `sudo` once per guest, during creation. vee explains why when it asks: launchd only loads root-owned daemons, and the first-boot provisioning it installs into the guest is a launch daemon.
 
 ## Licensing
@@ -72,6 +72,7 @@ Virtualization.framework NAT has no host port forwarding, so macOS guests get no
 - **Screen Sharing may refuse connections.** Since macOS 12.1 the screen-sharing agent needs privacy (TCC) permissions that only device management can grant — a VM cannot grant them to itself. `vee view` tells you when nothing is listening. SSH is the reliable route; the guest's own screen is the fallback.
 - **A per-user setup wizard may still appear** at the first *graphical* login (Accessibility, Siri, Apple Pay screens). Skipping it entirely needs version-stamped preference files vee does not write yet. SSH is unaffected.
 - **The provisioned account has no secure token**, because it is created by a launch daemon rather than by Setup Assistant. FileVault, startup-security changes and in-place macOS upgrades are therefore unavailable in the guest. Restore from a newer IPSW instead of upgrading.
+- **The guest cannot run VMs of its own.** Virtualization.framework exposes nested virtualization only to *Linux* guests (`VZGenericPlatformConfiguration`); the macOS-guest platform has no such switch, and Apple states plainly that neither Virtualization.framework nor Hypervisor.framework works from inside a VM. So Docker Desktop, Podman Machine, Lima, UTM and anything else needing a hypervisor will not start in a macOS guest — Docker Desktop fails its hypervisor check outright. Run those on the host, or in a sibling Linux guest.
 - **No Apple ID / App Store** sign-in in a VM, and iCloud works only when host and guest are both recent enough.
 - Guests older than the host are fine; newer than the host is not. Some Apple Silicon generations also refuse older guests (an M4 host will not boot a guest older than macOS 13.4).
 

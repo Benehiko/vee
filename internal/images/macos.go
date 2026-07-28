@@ -63,7 +63,7 @@ func (m *MacOSImage) setURL(ipswURL string) error {
 // resolve fills in the URL for "latest" via the host's
 // Virtualization.framework (the helper binary). When the network lookup
 // fails but a restore image is already cached, the newest cached one is
-// used — a cached 14 GB IPSW must stay usable offline.
+// used — a cached multi-gigabyte IPSW must stay usable offline.
 func (m *MacOSImage) resolve(ctx context.Context) error {
 	if m.url != "" {
 		return nil
