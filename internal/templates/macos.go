@@ -57,7 +57,7 @@ func NewMacOSConfig(ctx context.Context, p provider.Provider, name string, opts 
 	}
 
 	// Validate the first-boot payload up front: a bad account name must not
-	// surface only after a 14 GB pull and a 40-minute restore.
+	// surface only after a multi-gigabyte pull and a long restore.
 	fbOpts, err := firstBootOptions(name, opts)
 	if err != nil {
 		return nil, err
@@ -238,7 +238,7 @@ func ClampMacOSMinimums(cfg *vm.VMConfig) {
 // the macos config section plus the image's CPU/memory minimums.
 func restoreMacOS(ctx context.Context, p provider.Provider, name, ipsw, diskSize, diskPath, auxPath string, cpus int, memory string) (*vm.MacOSConfig, uint64, uint64, error) {
 	// Resolve the helper BEFORE any multi-GB download: a missing helper
-	// must fail in seconds, not after a 14 GB pull.
+	// must fail in seconds, not after a multi-gigabyte pull.
 	helperPath, err := vzhelper.ResolveHelper()
 	if err != nil {
 		return nil, 0, 0, err
@@ -251,7 +251,7 @@ func restoreMacOS(ctx context.Context, p provider.Provider, name, ipsw, diskSize
 		if err != nil {
 			return nil, 0, 0, err
 		}
-		fmt.Println("Pulling the macOS restore image (IPSWs are ~14 GB; cached for reuse)...")
+		fmt.Println("Pulling the macOS restore image (15-20 GB; cached for reuse)...")
 		if err := img.Download(ctx); err != nil {
 			return nil, 0, 0, fmt.Errorf("pull macOS restore image: %w", err)
 		}

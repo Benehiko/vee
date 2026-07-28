@@ -253,7 +253,7 @@ vee create mymac --template macos       # restore + provision, then vee ssh myma
 
 Requirements: an Apple Silicon host on macOS 13+, the `vee-vz-helper` binary
 (shipped in the `darwin-arm64` release tarball, or `make vz-helper` from a
-checkout), ~14 GB for the cached IPSW plus the guest disk, and one `sudo`
+checkout), 15-20 GB for the cached IPSW plus the guest disk, and one `sudo`
 prompt during creation.
 
 Apple's licence permits virtualized macOS **only on Apple hardware, two
@@ -344,6 +344,12 @@ key.
 - **No secure token** on the provisioned account, because a launch daemon
   created it rather than Setup Assistant: no FileVault, no startup-security
   changes, no in-place macOS upgrades. Re-restore from a newer IPSW instead.
+- **No nested virtualization.** Apple exposes it only to Linux guests
+  (`VZGenericPlatformConfiguration`); `VZMacPlatformConfiguration` has no such
+  property, and per Apple neither Virtualization.framework nor
+  Hypervisor.framework functions inside a VM. Docker Desktop, Podman Machine,
+  Lima and UTM therefore cannot run in a macOS guest regardless of host chip —
+  even though the M3/M4 host itself supports nesting for Linux guests.
 - **Guest ≤ host.** Newer guests will not restore. Newer Apple Silicon also
   sets a floor (an M4 host refuses guests older than macOS 13.4).
 - Not testable in CI: GitHub's macOS runners have no nested virtualization, so

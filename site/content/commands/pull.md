@@ -28,7 +28,7 @@ vee pull macos             # newest macOS restore image this host can install
 vee pull --list            # list every supported distro and version
 ```
 
-`macos` pulls an Apple Silicon **restore image** (IPSW, ~14 GB) for use with the
+`macos` pulls an Apple Silicon **restore image** (IPSW, 15-20 GB depending on version) for use with the
 [macos template](../../getting-started/macos-guests/); it requires an Apple
 Silicon macOS host. `latest` asks the host's Virtualization.framework what it can
 actually restore. For a specific version, pass an `https://…ipsw` URL — for
