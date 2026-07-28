@@ -8,6 +8,7 @@
 package vzhelper
 
 import (
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -15,6 +16,14 @@ import (
 	"strconv"
 	"strings"
 )
+
+// Entitlements is the plist the helper must be codesigned with
+// (com.apple.security.virtualization; ad-hoc signatures suffice). Embedded so
+// vee can re-sign a helper whose signature was disturbed, mirroring the
+// qemubin hardening pattern.
+//
+//go:embed vz.entitlements
+var Entitlements []byte
 
 // Well-known file names inside a VM directory. The helper is pointed at the
 // directory (--vm-dir) and derives everything else from these.
