@@ -287,12 +287,18 @@ const HelperBinary = "vee-vz-helper"
 // ResolveHelper locates the helper binary: explicit override, the directory
 // of the running vee binary (release tarballs ship them side by side), the
 // vee-managed bin dir, then PATH.
+//
+// The resolved binary is also healed before it is returned — a helper
+// downloaded with a browser carries macOS's quarantine flag, and Gatekeeper
+// kills quarantined ad-hoc binaries on exec. Hardening here rather than at
+// the call sites means every path that runs the helper (start, IPSW
+// restore-URL query, restore) is covered.
 func ResolveHelper() (string, error) {
 	if p := os.Getenv("VEE_VZ_HELPER"); p != "" {
 		if _, err := os.Stat(p); err != nil { //nolint:gosec // deliberate operator-provided override
 			return "", fmt.Errorf("VEE_VZ_HELPER: %w", err)
 		}
-		return p, nil
+		return p, harden(p)
 	}
 	var candidates []string
 	if exe, err := os.Executable(); err == nil {
@@ -303,11 +309,11 @@ func ResolveHelper() (string, error) {
 	}
 	for _, c := range candidates {
 		if _, err := os.Stat(c); err == nil {
-			return c, nil
+			return c, harden(c)
 		}
 	}
 	if p, err := exec.LookPath(HelperBinary); err == nil {
-		return p, nil
+		return p, harden(p)
 	}
 	return "", fmt.Errorf("%s not found (looked in $VEE_VZ_HELPER, next to the vee binary, ~/.vee/bin, $PATH) — install it from the darwin-arm64 release tarball or build it with `make vz-helper`", HelperBinary)
 }

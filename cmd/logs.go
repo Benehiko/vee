@@ -9,7 +9,10 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Benehiko/vee/internal/backend"
 	"github.com/Benehiko/vee/internal/journal"
+	"github.com/Benehiko/vee/internal/vm"
+	"github.com/Benehiko/vee/internal/vzhelper"
 )
 
 var (
@@ -41,12 +44,20 @@ Examples:
 		if logsJournal || logsKernel {
 			return runJournalLogs(cmd, name)
 		}
-		return runQEMULog(cmd, name)
+		return runProcessLog(cmd, name)
 	},
 }
 
-func runQEMULog(cmd *cobra.Command, name string) error {
-	logPath := filepath.Join(prov.Config().StoragePath, name, "qemu.log")
+func runProcessLog(cmd *cobra.Command, name string) error {
+	// Each backend writes its VM process log under a different name: QEMU's
+	// stdout/stderr goes to qemu.log, the Virtualization.framework helper's to
+	// vz-helper.log.
+	logName := "qemu.log"
+	mgr := vm.NewManager(prov)
+	if state, err := mgr.LoadState(name); err == nil && state.BackendName() == backend.VZ {
+		logName = vzhelper.LogFileName
+	}
+	logPath := filepath.Join(prov.Config().StoragePath, name, logName)
 
 	f, err := os.Open(logPath) //nolint:gosec // logPath is derived from vee-managed storage path and VM name.
 	if err != nil {

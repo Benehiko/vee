@@ -1708,8 +1708,9 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 		if !platform.IsMacOS() {
 			return nil, nil, fmt.Errorf("GPU mode apple-gfx requires a macOS host (got %s)", platform.HostOS())
 		}
-		return nil, nil, fmt.Errorf("GPU mode apple-gfx is not yet wired end-to-end (requires vmapple machine + AVPBooter); " +
-			"use gpu.mode=virtio for Linux guests in the meantime")
+		return nil, nil, fmt.Errorf("GPU mode apple-gfx is unavailable: QEMU's vmapple machine is compiled out upstream " +
+			"and does not run on current macOS hosts (https://github.com/Benehiko/vee/issues/50). Run macOS guests on " +
+			"the vz backend instead (vee create <name> --template macos); for Linux guests use gpu.mode=virtio")
 	}
 
 	// Explicit VGA override (e.g. "none" for passthrough VMs using virtio-gpu-pci via ExtraDevices).

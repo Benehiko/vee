@@ -16,7 +16,7 @@ vee create <name> [flags]
 | `--template` | VM template to use (default: `ubuntu-server`) |
 | `--memory` | RAM, e.g. `4G` (default: template-specific) |
 | `--cpus` | Number of vCPUs (default: template-specific) |
-| `--disk-size` | OS disk size, e.g. `40G` |
+| `--disk` | Primary disk size, e.g. `40G` |
 | `--distro` | Linux distro for templates that support it |
 | `--data-disk` | Extra raw disk in `path:label` format (repeatable) |
 | `--nvme-dev` | Pass an NVMe device through directly (passthrough template) |

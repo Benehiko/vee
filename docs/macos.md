@@ -322,10 +322,11 @@ hostname, and then deletes itself — it carries the account password, so it is
 mode 0700 and removed once provisioning succeeds. Its log stays at
 `/var/log/vee-firstboot.log` inside the guest.
 
-The whole step is best-effort: if it fails (sudo declined, unexpected disk
-layout) the payload is rolled back so the guest still boots into Setup
-Assistant rather than landing at a login window with no account.
-`--skip-first-boot` opts out deliberately.
+The whole step is best-effort: if anything fails after the first file is
+written — a failed write, an unexpected disk layout, sudo declined — the
+payload is removed again, so the guest still boots into Setup Assistant rather
+than landing at a login window with no account. `--skip-first-boot` opts out
+deliberately.
 
 The generated GUI password is printed once and saved to
 `macos-credentials.txt` (mode 0600) in the VM directory. SSH uses your vee
