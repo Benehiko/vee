@@ -78,6 +78,12 @@ func (m *Manager) buildVZMachine(_ context.Context, cfg *VMConfig) (backend.Mach
 	if err != nil {
 		return nil, err
 	}
+	// Heal a browser-downloaded (quarantined) helper before exec. A failed
+	// heal is fatal: starting a still-quarantined helper is a guaranteed
+	// Gatekeeper SIGKILL with a misleading entitlement diagnostic.
+	if err := hardenVZHelper(helperPath); err != nil {
+		return nil, fmt.Errorf("vz helper hardening: %w", err)
+	}
 
 	vmDir := m.vmDir(cfg.Name)
 

@@ -65,6 +65,26 @@ jobs:
           if [ "${GOOS}" = "windows" ]; then BIN=vee.exe; fi
           go build -mod=vendor -trimpath -ldflags "${LDFLAGS}" -o "${BIN}" .
 
+      # The Virtualization.framework helper (macOS guests, issue #51) needs
+      # cgo (Objective-C bindings) and the com.apple.security.virtualization
+      # entitlement — ad-hoc signing is sufficient, no Apple Developer
+      # account. Apple Silicon only: macOS guests are arm64-only.
+      - name: Build vz helper (darwin/arm64 only)
+        if: matrix.goos == 'darwin' && matrix.goarch == 'arm64'
+        env:
+          GOOS: darwin
+          GOARCH: arm64
+          CGO_ENABLED: "1"
+        run: |
+          go build -mod=vendor -trimpath -ldflags "-s -w" -o vee-vz-helper ./cmd/vee-vz-helper
+          # Guard against the !(darwin && arm64 && cgo) refusal stub sneaking
+          # into a release: the real helper links Virtualization.framework.
+          otool -L vee-vz-helper | grep -q Virtualization
+          codesign --force --sign - --timestamp=none \
+            --entitlements internal/vzhelper/vz.entitlements vee-vz-helper
+          # Fail the release if the entitlement did not land.
+          codesign -d --entitlements - vee-vz-helper 2>&1 | grep -q com.apple.security.virtualization
+
       - name: Package binary
         id: package
         run: |
@@ -72,7 +92,10 @@ jobs:
           ASSET="vee-${{ github.ref_name }}-${{ matrix.goos }}-${{ matrix.goarch }}"
           BIN=vee
           if [ "${{ matrix.goos }}" = "windows" ]; then BIN=vee.exe; fi
-          tar czf "dist/${ASSET}.tar.gz" "${BIN}" LICENSE README.md THIRD_PARTY_LICENSES
+          # darwin/arm64 also ships the signed Virtualization.framework helper.
+          EXTRA=""
+          if [ -f vee-vz-helper ]; then EXTRA="vee-vz-helper"; fi
+          tar czf "dist/${ASSET}.tar.gz" "${BIN}" ${EXTRA} LICENSE README.md THIRD_PARTY_LICENSES
           ( cd dist && shasum -a 256 "${ASSET}.tar.gz" > "${ASSET}.tar.gz.sha256" )
 
           # Also publish an unversioned copy so the install docs can use
@@ -154,8 +177,14 @@ jobs:
             echo "curl -LO ${REL}/vee-${TAG}-darwin-arm64.tar.gz.sha256"
             echo "shasum -a 256 -c vee-${TAG}-darwin-arm64.tar.gz.sha256"
             echo "tar xzf vee-${TAG}-darwin-arm64.tar.gz"
-            echo 'install -Dm755 vee "$HOME/.vee/bin/vee"'
+            echo 'mkdir -p "$HOME/.vee/bin"   # stock BSD install(1) has no GNU -D'
+            echo 'install -m755 vee "$HOME/.vee/bin/vee"'
             echo 'xattr -d com.apple.quarantine "$HOME/.vee/bin/vee" 2>/dev/null || true   # unsigned binary'
+            echo '# Apple Silicon only: the macOS-guest helper ships in the same tarball.'
+            echo 'if [ -f vee-vz-helper ]; then'
+            echo '  install -m755 vee-vz-helper "$HOME/.vee/bin/vee-vz-helper"'
+            echo '  xattr -d com.apple.quarantine "$HOME/.vee/bin/vee-vz-helper" 2>/dev/null || true'
+            echo 'fi'
             echo '```'
             echo
             echo "### Windows (PowerShell)"
