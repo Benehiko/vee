@@ -328,7 +328,10 @@ payload is removed again, so the guest still boots into Setup Assistant rather
 than landing at a login window with no account. `--skip-first-boot` opts out
 deliberately.
 
-The generated GUI password is printed once and saved to
+The guest password defaults to the account name — it is typed by hand at the
+guest login window and at Screen Sharing prompts, and these guests live on a
+host-only network. `--password` overrides it, which is worth doing for a
+long-lived guest since Remote Login is on. It is printed once and saved to
 `macos-credentials.txt` (mode 0600) in the VM directory. SSH uses your vee
 key.
 

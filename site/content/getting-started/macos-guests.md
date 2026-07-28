@@ -32,7 +32,7 @@ Apple's macOS software licence agreement permits running macOS in a virtual mach
 3. **Provision.** Before the guest ever boots, vee patches its disk offline: it marks Setup Assistant as already done and installs a first-boot launch daemon. That daemon, on the guest's first boot, creates the admin account, authorizes your vee SSH key, and enables Remote Login and Screen Sharing — which is what makes `vee ssh` work without a GUI session.
 4. **Run.** `vee start` launches a `vee-vz-helper` process that owns the VM for its lifetime, exactly as a `qemu-system` process does for a QEMU VM.
 
-The generated GUI login password is printed once and saved to `macos-credentials.txt` in the VM directory (mode 0600). SSH uses your vee key, not the password.
+The guest's login password defaults to the account name (`vee`), because you type it at the guest's login window and at every Screen Sharing prompt. Pass `--password` for something stronger — worthwhile if the guest is long-lived, since Remote Login is enabled. Either way it is printed once and saved to `macos-credentials.txt` in the VM directory (mode 0600). SSH uses your vee key, not the password.
 
 ### Importing an existing guest
 
@@ -69,7 +69,7 @@ Virtualization.framework NAT has no host port forwarding, so macOS guests get no
 
 ## Known caveats
 
-- **Screen Sharing may refuse connections.** Since macOS 12.1 the screen-sharing agent needs privacy (TCC) permissions that only device management can grant — a VM cannot grant them to itself. `vee view` tells you when nothing is listening. SSH is the reliable route; the guest's own screen is the fallback.
+- **Screen Sharing can still refuse a session.** vee configures Remote Management with ARD's `kickstart` during provisioning, which is what makes headless Screen Sharing work at all — enabling the service alone yields "Screen Sharing is not permitted on <host>". If a session is still refused, toggle Screen Sharing off and on in the guest's System Settings > General > Sharing; macOS also gates the agent behind privacy permissions a VM cannot grant itself. `vee view` reports when nothing is listening at all. SSH is the dependable route.
 - **A per-user setup wizard may still appear** at the first *graphical* login (Accessibility, Siri, Apple Pay screens). Skipping it entirely needs version-stamped preference files vee does not write yet. SSH is unaffected.
 - **The provisioned account has no secure token**, because it is created by a launch daemon rather than by Setup Assistant. FileVault, startup-security changes and in-place macOS upgrades are therefore unavailable in the guest. Restore from a newer IPSW instead of upgrading.
 - **The guest cannot run VMs of its own.** Virtualization.framework exposes nested virtualization only to *Linux* guests (`VZGenericPlatformConfiguration`); the macOS-guest platform has no such switch, and Apple states plainly that neither Virtualization.framework nor Hypervisor.framework works from inside a VM. So Docker Desktop, Podman Machine, Lima, UTM and anything else needing a hypervisor will not start in a macOS guest — Docker Desktop fails its hypervisor check outright. Run those on the host, or in a sibling Linux guest.

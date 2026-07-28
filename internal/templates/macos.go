@@ -157,9 +157,15 @@ func firstBootOptions(name string, opts MacOSOptions) (vzfirstboot.Options, erro
 	if hostname == "" {
 		hostname = name
 	}
+	password := opts.Password
+	if password == "" {
+		// Typed at the guest's login window and at Screen Sharing prompts;
+		// keep it memorable. Override with --password.
+		password = user
+	}
 	fb := vzfirstboot.Options{
 		User:                user,
-		Password:            opts.Password,
+		Password:            password,
 		SSHPublicKeys:       opts.SSHPublicKeys,
 		Hostname:            hostname,
 		EnableScreenSharing: true,

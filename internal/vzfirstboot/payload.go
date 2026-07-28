@@ -121,6 +121,13 @@ log "enabling Remote Login"
 #    connection may still be refused; the guest's own display remains the
 #    fallback.
 log "enabling Screen Sharing"
+# kickstart both activates and CONFIGURES Remote Management. Enabling the
+# service with launchctl alone leaves it unconfigured, and sessions are then
+# refused with "Screen Sharing is not permitted on <host>".
+ARD=/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart
+if [ -x "${ARD}" ]; then
+	"${ARD}" -activate -configure -access -on -restart -agent -privs -all -allowAccessFor -allUsers 2>/dev/null
+fi
 /bin/launchctl enable system/com.apple.screensharing
 /bin/launchctl bootstrap system /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null
 /bin/launchctl kickstart system/com.apple.screensharing 2>/dev/null
