@@ -24,7 +24,7 @@ func resolveIPFromMACDarwin(mac string) (string, error) {
 		return "", err
 	}
 	if data, readErr := os.ReadFile(dhcpdLeasesPath); readErr == nil {
-		if ip, ok := lookupDHCPDLease(string(data), want); ok {
+		if ip, _, ok := lookupDHCPDLease(string(data), want); ok {
 			return ip, nil
 		}
 	}
@@ -54,13 +54,35 @@ func arpAnOutput() (string, error) {
 	return string(out), err
 }
 
+// dhcpLeaseExpiry returns the freshest lease=0x… expiry recorded for a MAC
+// in bootpd's lease database, or 0 when no entry matches. bootpd keeps
+// entries across guest shutdowns (even past expiry), so a bare match proves
+// nothing about the guest being up — but the expiry ADVANCING does: every
+// DHCP grant/renewal rewrites it. Readiness probes compare against a
+// baseline taken before boot.
+func dhcpLeaseExpiry(mac string) uint64 {
+	want, err := normalizeMAC(mac)
+	if err != nil {
+		return 0
+	}
+	data, err := os.ReadFile(dhcpdLeasesPath)
+	if err != nil {
+		return 0
+	}
+	_, lease, ok := lookupDHCPDLease(string(data), want)
+	if !ok {
+		return 0
+	}
+	return lease
+}
+
 // lookupDHCPDLease scans bootpd's lease database: brace-delimited blocks of
 // key=value lines. hw_address is "1,f6:38:41:1:e9:e6" — a hardware-type
 // prefix, then octets WITHOUT leading zeros. DUID clients overwrite
 // hw_address with identifier, so both fields are matched. When several
 // blocks match (recreated VMs, stale 24h leases), the freshest lease=0x...
-// expiry wins.
-func lookupDHCPDLease(content, wantMAC string) (string, bool) {
+// expiry wins; the winning expiry is returned alongside the IP.
+func lookupDHCPDLease(content, wantMAC string) (string, uint64, bool) {
 	var bestIP string
 	var bestLease uint64
 	found := false
@@ -102,7 +124,7 @@ func lookupDHCPDLease(content, wantMAC string) (string, bool) {
 			}
 		}
 	}
-	return bestIP, found
+	return bestIP, bestLease, found
 }
 
 // stripHWType drops bootpd's leading hardware-type field ("1,aa:bb:…" → "aa:bb:…").

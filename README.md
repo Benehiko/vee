@@ -212,7 +212,7 @@ See [docs/gpu-passthrough-gaming.md](docs/gpu-passthrough-gaming.md) for Sunshin
 | `vee ssh-share <name>` | Share host SSH agent into the VM via AF_VSOCK |
 | `vee tunnel <name> [service]` | List VM services, or open/connect to one |
 | `vee ports <name>` | List bound TCP ports and process names in a running VM |
-| `vee ip <name>` | Show network interfaces and IP addresses inside a VM |
+| `vee ip <name>` | Show a VM's IP addresses (guest agent, or host lease/ARP tables by MAC) |
 | `vee logs <name>` | Stream QEMU output |
 | `vee monitor <name>` | Real-time CPU / memory / disk / network stats |
 | `vee qmp <name> <command>` | Send a QMP (QEMU Machine Protocol) command to a running VM |

@@ -246,6 +246,57 @@ func vzControlRequest(ctx context.Context, sockPath, op string, timeout time.Dur
 	return &resp, nil
 }
 
+// waitReadyVZ polls until the vz guest is reachable: readiness means the
+// guest acquired a FRESH DHCP lease. bootpd keeps stale entries in
+// /var/db/dhcpd_leases across shutdowns (even past expiry), so a bare MAC
+// match proves nothing on a restart — instead the lease expiry recorded for
+// the MAC must ADVANCE past the baseline taken when the wait begins (every
+// DHCP grant/renewal rewrites it). A fresh macOS guest has no SSH enabled
+// yet, so the lease is the strongest "the guest is up" signal available.
+func (m *Manager) waitReadyVZ(ctx context.Context, name string, state *VMState, timeout time.Duration) error {
+	exitedErr := func() error {
+		return fmt.Errorf("VM %q process (PID %d) exited — check %s", name, state.PID, vzhelper.LogPath(m.vmDir(name)))
+	}
+	if !isAlive(state.PID) {
+		return exitedErr()
+	}
+
+	var mac string
+	if cfg, err := m.loadConfig(name); err == nil {
+		mac = cfg.NIC.MAC
+	}
+	if mac == "" {
+		// Nothing to probe; process liveness is the best available signal.
+		return m.markReady(name)
+	}
+
+	baseline := dhcpLeaseExpiry(mac)
+	probe := func() bool {
+		exp := dhcpLeaseExpiry(mac)
+		return exp > 0 && exp > baseline
+	}
+
+	deadline := time.Now().Add(timeout)
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case t := <-ticker.C:
+			if !isAlive(state.PID) {
+				return exitedErr()
+			}
+			if probe() {
+				return m.markReady(name)
+			}
+			if t.After(deadline) {
+				return fmt.Errorf("VM %q did not acquire a DHCP lease within %s (MAC %s) — the guest may still be booting; check its screen or %s", name, timeout, mac, vzhelper.LogPath(m.vmDir(name)))
+			}
+		}
+	}
+}
+
 // watchVZShutdown blocks on the helper's wait-shutdown op and records a
 // guest-initiated shutdown the same way the QMP SHUTDOWN watcher does for
 // QEMU VMs. Best-effort; runs in a goroutine that outlives Start.

@@ -560,6 +560,15 @@ func (m *Manager) WaitReadyWithPhases(ctx context.Context, name string, timeout 
 			return
 		}
 
+		// vz VMs write no serial.log (macOS guests have no virtio console)
+		// and have no host port-forward or QGA — skip the serial phase
+		// watcher and probe DHCP-lease acquisition instead.
+		if state.BackendName() == backend.VZ {
+			close(phaseCh)
+			errCh <- m.waitReadyVZ(ctx, name, state, timeout)
+			return
+		}
+
 		watchCtx, cancelWatch := context.WithCancel(ctx)
 
 		// Phase watcher: tail serial.log and forward events both to the caller
