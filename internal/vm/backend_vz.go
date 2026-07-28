@@ -18,9 +18,9 @@ import (
 	"github.com/Benehiko/vee/internal/vzhelper"
 )
 
-// vzHelperBinary is the name of the Virtualization.framework helper that
-// hosts one macOS guest per process (cmd/vee-vz-helper).
-const vzHelperBinary = "vee-vz-helper"
+// vzHelperBinary aliases the shared helper name (resolution lives in
+// vzhelper.ResolveHelper so images/templates can reuse it).
+const vzHelperBinary = vzhelper.HelperBinary
 
 // vzStartTimeout bounds how long StartDetached waits for the helper's
 // control socket to appear (the QMP-socket-appears analog).
@@ -55,6 +55,16 @@ func (m *Manager) buildVZMachine(_ context.Context, cfg *VMConfig) (backend.Mach
 	if cfg.CPUs <= 0 {
 		return nil, fmt.Errorf("the vz backend requires cpus > 0")
 	}
+	// Enforce the restored image's recorded minimums at start too — configs
+	// can be hand-edited below them, and a guest under the minimums will
+	// not boot.
+	cpus := uint64(cfg.CPUs) //nolint:gosec // guarded > 0 above
+	if cfg.MacOS.MinCPUs > 0 && cpus < cfg.MacOS.MinCPUs {
+		cpus = cfg.MacOS.MinCPUs
+	}
+	if cfg.MacOS.MinMemoryBytes > 0 && memBytes < cfg.MacOS.MinMemoryBytes {
+		memBytes = cfg.MacOS.MinMemoryBytes
+	}
 
 	// Paths must be absolute: vee's other disk consumers (data-presence
 	// checks, boot-disk moves) resolve relative paths against the process
@@ -74,7 +84,7 @@ func (m *Manager) buildVZMachine(_ context.Context, cfg *VMConfig) (backend.Mach
 		return nil, fmt.Errorf("the vz backend requires an absolute auxiliary_storage path (got %q)", auxPath)
 	}
 
-	helperPath, err := resolveVZHelper()
+	helperPath, err := vzhelper.ResolveHelper()
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +111,7 @@ func (m *Manager) buildVZMachine(_ context.Context, cfg *VMConfig) (backend.Mach
 
 	spec := &vzhelper.MachineSpec{
 		Name:              cfg.Name,
-		CPUs:              uint(cfg.CPUs), //nolint:gosec // guarded > 0 above; VM CPU counts are tiny
+		CPUs:              uint(cpus), //nolint:gosec // VM CPU counts are tiny
 		MemoryBytes:       memBytes,
 		MAC:               cfg.NIC.MAC,
 		Disks:             disks,
@@ -201,33 +211,6 @@ func vzStartFailureDetail(vmDir string) string {
 		return ""
 	}
 	return res.Error
-}
-
-// resolveVZHelper locates the vee-vz-helper binary: explicit override, the
-// directory of the running vee binary, the vee-managed bin dir, then PATH.
-func resolveVZHelper() (string, error) {
-	if p := os.Getenv("VEE_VZ_HELPER"); p != "" {
-		if _, err := os.Stat(p); err != nil { //nolint:gosec // deliberate operator-provided override, same trust model as QemuBinaryPath
-			return "", fmt.Errorf("VEE_VZ_HELPER: %w", err)
-		}
-		return p, nil
-	}
-	var candidates []string
-	if exe, err := os.Executable(); err == nil {
-		candidates = append(candidates, filepath.Join(filepath.Dir(exe), vzHelperBinary))
-	}
-	if home, err := os.UserHomeDir(); err == nil {
-		candidates = append(candidates, filepath.Join(home, ".vee", "bin", vzHelperBinary))
-	}
-	for _, c := range candidates {
-		if _, err := os.Stat(c); err == nil {
-			return c, nil
-		}
-	}
-	if p, err := exec.LookPath(vzHelperBinary); err == nil {
-		return p, nil
-	}
-	return "", fmt.Errorf("%s not found (looked in $VEE_VZ_HELPER, next to the vee binary, ~/.vee/bin, $PATH) — build and sign it with `make vz-helper`", vzHelperBinary)
 }
 
 // vzControlRequest sends one op to a helper control socket and returns the

@@ -17,9 +17,18 @@ const (
 	DistroBazzite = "bazzite"
 )
 
-// SupportedDistros returns all known distro slugs.
+// SupportedDistros returns the distro slugs usable as GUEST DISTROS for the
+// distro-aware templates (devbox/server/desktop/...). DistroMacOS is
+// deliberately absent: a macOS IPSW is not a bootable distro image for those
+// templates — it is pullable only via PullableDistros / the macos template.
 func SupportedDistros() []string {
 	return []string{DistroUbuntu, DistroArch, DistroFedora, DistroTrueNAS, DistroWindows, DistroAlpine, DistroBazzite}
+}
+
+// PullableDistros returns everything `vee pull` accepts: the guest distros
+// plus macOS restore images.
+func PullableDistros() []string {
+	return append(SupportedDistros(), DistroMacOS)
 }
 
 // DistroVersions returns the known version strings for a distro, newest first.
@@ -67,6 +76,10 @@ func DistroVersions(distro string) []string {
 			out[i] = string(v)
 		}
 		return out
+	case DistroMacOS:
+		// No pinned list: "latest" is resolved by the host's
+		// Virtualization.framework; older versions are pulled by URL.
+		return []string{"latest"}
 	default:
 		return nil
 	}
@@ -99,12 +112,22 @@ func NewImage(p provider.Provider, distro, version string) (Image, error) {
 		version = versions[0]
 	}
 
+	hostArch := platform.HostArch()
+
+	// macOS restore images are the inverse of the arm64 gate below: they are
+	// ONLY for Apple Silicon macOS hosts (the vz backend).
+	if distro == DistroMacOS {
+		if !platform.IsMacOS() || hostArch != "arm64" {
+			return nil, fmt.Errorf("macos restore images require an Apple Silicon macOS host")
+		}
+		return NewMacOSImage(p, version)
+	}
+
 	// On aarch64 hosts (Apple Silicon), only some distros have a wired-up arm64
 	// image. Ubuntu (cloud image) and Fedora (Cloud Base qcow2) publish aarch64
 	// builds vee can boot under HVF. The rest (Arch/Bazzite/TrueNAS official
 	// media, the Alpine x86 URL) are x86_64-only and would not boot, so refuse
 	// clearly rather than fetch an unbootable image.
-	hostArch := platform.HostArch()
 	if hostArch == "arm64" && distro != DistroUbuntu && distro != DistroFedora {
 		return nil, fmt.Errorf("distro %q is not yet available for arm64 (aarch64) guests; "+
 			"Ubuntu and Fedora are the supported arm64 guests on Apple Silicon — "+

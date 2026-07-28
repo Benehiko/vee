@@ -127,6 +127,12 @@ type MacOSConfig struct {
 	DisplayWidthPx  int64 `yaml:"display_width_px,omitempty"  json:"display_width_px,omitempty"`
 	DisplayHeightPx int64 `yaml:"display_height_px,omitempty" json:"display_height_px,omitempty"`
 	DisplayPPI      int64 `yaml:"display_ppi,omitempty"       json:"display_ppi,omitempty"`
+	// MinCPUs / MinMemoryBytes are the restored image's configuration
+	// requirements. Persisted so every consumer (create-time overrides,
+	// vee config edits, start) can clamp to them — a guest configured below
+	// these will not boot.
+	MinCPUs        uint64 `yaml:"min_cpus,omitempty"         json:"min_cpus,omitempty"`
+	MinMemoryBytes uint64 `yaml:"min_memory_bytes,omitempty" json:"min_memory_bytes,omitempty"`
 }
 
 type UEFIConfig struct {

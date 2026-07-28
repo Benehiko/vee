@@ -17,6 +17,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/Benehiko/vee/internal/backend"
 	"github.com/Benehiko/vee/internal/gpu"
 	"github.com/Benehiko/vee/internal/images"
 	"github.com/Benehiko/vee/internal/media"
@@ -110,6 +111,17 @@ type Opts struct {
 	TorrentExtras  *TorrentExtras
 	JellyfinExtras *JellyfinExtras
 	RunnerExtras   *RunnerExtras
+
+	// MacOSExtras selects the macOS guest's image source (vz backend).
+	MacOSExtras *MacOSExtras
+}
+
+// MacOSExtras carries the macos template's image-source options.
+type MacOSExtras struct {
+	// IPSW is "latest" (default), an https URL, or a local .ipsw path.
+	IPSW string
+	// MacosvmDir imports an existing macosvm bundle instead of restoring.
+	MacosvmDir string
 }
 
 // TorrentExtras carries the data that the torrent template needs to be built,
@@ -294,6 +306,17 @@ func configFromTemplate(ctx context.Context, prov provider.Provider, opts Opts, 
 			spicePort = *opts.SPICEPort
 		}
 		return templates.NewTruenasConfig(ctx, prov, opts.Name, opts.DistroVersion, opts.NICBridge, spicePort, opts.DataDisks)
+	case "macos":
+		mopts := templates.MacOSOptions{
+			DiskSize: opts.Disk,
+			Memory:   opts.Memory,
+			CPUs:     opts.CPUs,
+		}
+		if opts.MacOSExtras != nil {
+			mopts.IPSW = opts.MacOSExtras.IPSW
+			mopts.MacosvmDir = opts.MacOSExtras.MacosvmDir
+		}
+		return templates.NewMacOSConfig(ctx, prov, opts.Name, mopts)
 	case "windows":
 		// Default to Windows 10: its classic Setup honours the generated
 		// Autounattend.xml and installs fully unattended. Windows 11's 24H2
@@ -413,7 +436,10 @@ func applyOverrides(cfg *vm.VMConfig, opts Opts, prov provider.Provider) {
 			Tag:       tag,
 		})
 	}
-	if opts.Disk != "" {
+	// vz (macOS) guests already consumed opts.Disk as the raw restore-disk
+	// size inside the template; prepending a generic qcow2 disk here would
+	// make every start fail (the vz backend is raw-only).
+	if opts.Disk != "" && cfg.BackendName() != backend.VZ {
 		cfg.Disks = append([]vm.DiskConfig{{
 			Size:      opts.Disk,
 			Format:    "qcow2",
@@ -507,6 +533,11 @@ func applyOverrides(cfg *vm.VMConfig, opts Opts, prov provider.Provider) {
 	if opts.NoAutoInstall || (opts.Template == "" && opts.BootDisk != "") {
 		cfg.SkipInstall = true
 	}
+
+	// Overrides must never push a macOS guest below its restored image's
+	// requirements — the failure would only surface at start, long after
+	// the expensive restore.
+	templates.ClampMacOSMinimums(cfg)
 }
 
 // resolveGPUVendor turns the user-provided vendor string into the strongly

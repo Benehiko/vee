@@ -1,7 +1,10 @@
 package cmd
 
 import (
+	"context"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/spf13/cobra"
 
@@ -38,7 +41,13 @@ var rootCmd = &cobra.Command{
 }
 
 func Execute() {
-	if err := rootCmd.Execute(); err != nil {
+	// Ctrl-C / SIGTERM cancel the command context so long-running child
+	// processes (image downloads, the vz restore helper) are killed and
+	// their cleanup paths run instead of being orphaned mid-write.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	err := rootCmd.ExecuteContext(ctx)
+	stop()
+	if err != nil {
 		os.Exit(1)
 	}
 }
