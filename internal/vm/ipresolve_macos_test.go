@@ -47,7 +47,7 @@ func TestLookupDHCPDLease(t *testing.T) {
 			if err != nil {
 				t.Fatalf("normalizeMAC(%q): %v", tt.mac, err)
 			}
-			ip, ok := lookupDHCPDLease(leasesFixture, want)
+			ip, _, ok := lookupDHCPDLease(leasesFixture, want)
 			if ok != tt.wantOK || ip != tt.wantIP {
 				t.Errorf("lookupDHCPDLease(%q) = (%q, %v), want (%q, %v)", tt.mac, ip, ok, tt.wantIP, tt.wantOK)
 			}
@@ -59,9 +59,12 @@ func TestLookupDHCPDLeaseFreshest(t *testing.T) {
 	// Both fixture blocks for f6:38:41:1:e9:e6 match; the higher lease
 	// expiry (0x64b5c92a → .5) must win over the stale one (.9).
 	want, _ := normalizeMAC("f6:38:41:01:e9:e6")
-	ip, ok := lookupDHCPDLease(leasesFixture, want)
+	ip, lease, ok := lookupDHCPDLease(leasesFixture, want)
 	if !ok || ip != "192.168.64.5" {
 		t.Errorf("freshest lease: got (%q, %v), want (192.168.64.5, true)", ip, ok)
+	}
+	if lease != 0x64b5c92a {
+		t.Errorf("freshest lease expiry = %#x, want 0x64b5c92a", lease)
 	}
 }
 

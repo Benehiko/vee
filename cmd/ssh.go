@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Benehiko/vee/internal/backend"
 	"github.com/Benehiko/vee/internal/vm"
 )
 
@@ -26,8 +27,8 @@ var sshCmd = &cobra.Command{
 	Long: `Connects to a running VM via SSH.
 
 For headless VMs with a port-forward (--ssh-port), connects to 127.0.0.1 on
-that port. For bridge-mode VMs, resolves the guest IP from the ARP/neighbour
-table using the VM's MAC address.
+that port. For bridge-mode and vz (macOS guest) VMs, resolves the guest IP
+by MAC address from the host's DHCP lease and ARP/neighbour tables.
 
 The username defaults to the cloud-init user configured at creation time.
 Override with --user. Pass extra ssh(1) flags after --.
@@ -74,14 +75,21 @@ Examples:
 		var host string
 		var port int
 
+		// Dispatch on state, which records the backend that actually started
+		// the VM. vz NAT has no host port-forwarding, so a recorded SSHPort
+		// (states written before vz configs rejected ssh_port) must never
+		// win — nothing listens on 127.0.0.1.
+		vzBackend := state.BackendName() == backend.VZ
+
 		switch {
-		case state.SSHPort > 0:
+		case !vzBackend && state.SSHPort > 0:
 			// Headless user-mode port-forward.
 			host = "127.0.0.1"
 			port = state.SSHPort
 
-		case cfg.NIC.Mode == "bridge" || cfg.NIC.Mode == "":
-			// Bridge mode — try ARP/neighbour table first, fall back to QGA.
+		case vzBackend || cfg.NIC.Mode == "bridge" || cfg.NIC.Mode == "":
+			// Bridge mode and vz NAT guests — resolve the IP from the host's
+			// lease/neighbour tables by MAC first, fall back to QGA.
 			mac := cfg.NIC.MAC
 			if mac == "" {
 				return fmt.Errorf("VM %q has no MAC address recorded; cannot resolve IP", name)
