@@ -187,6 +187,50 @@ jobs:
             echo 'fi'
             echo '```'
             echo
+            echo "#### macOS guests: \`vee-vz-helper\`"
+            echo
+            echo 'The `darwin-arm64` tarball also contains **`vee-vz-helper`**, the binary that'
+            echo 'hosts macOS guests on Apple'"'"'s Virtualization.framework (one helper process per'
+            echo 'running guest, the way `qemu-system` backs a QEMU VM). You only need it for'
+            echo '`--template macos`; every other guest runs on QEMU and ignores it.'
+            echo
+            echo '**Install it next to `vee`.** vee looks for the helper in this order:'
+            echo
+            echo '1. `$VEE_VZ_HELPER` (an explicit path, for a self-built helper)'
+            echo '2. the directory containing the running `vee` binary'
+            echo '3. `$HOME/.vee/bin`'
+            echo '4. `$PATH`'
+            echo
+            echo 'So keeping both binaries in `$HOME/.vee/bin` — as the snippet above does — is'
+            echo 'all that is required. **When you upgrade, replace both**: copying only `vee`'
+            echo 'leaves the previous helper in place (see #61).'
+            echo
+            echo '**About the signature.** The helper is ad-hoc codesigned with the'
+            echo '`com.apple.security.virtualization` entitlement, which macOS honours without a'
+            echo 'paid Apple Developer account — it cannot create a VM otherwise. The signature'
+            echo 'lives inside the binary and survives download and extraction. Downloading with'
+            echo 'a browser instead of `curl` adds a quarantine flag that would make Gatekeeper'
+            echo 'kill it; the `xattr -d` line above clears that, and vee also clears it and'
+            echo 're-signs the helper automatically before the first guest start if needed.'
+            echo
+            echo 'Verify it yourself:'
+            echo
+            echo '```sh'
+            echo 'codesign -d --entitlements - "$HOME/.vee/bin/vee-vz-helper" | grep virtualization'
+            echo 'otool -L "$HOME/.vee/bin/vee-vz-helper" | grep Virtualization   # links the framework'
+            echo '```'
+            echo
+            echo 'Building it from a source checkout instead (needs Xcode command-line tools,'
+            echo 'since the framework bindings are cgo):'
+            echo
+            echo '```sh'
+            echo 'make vz-helper      # builds, signs, and installs into $HOME/.vee/bin'
+            echo '```'
+            echo
+            echo '**Intel Macs get no helper**, deliberately: macOS guests are Apple Silicon only.'
+            echo 'If the helper is missing, vee refuses to start a macOS guest and lists every'
+            echo 'location it searched — no other command is affected.'
+            echo
             echo "### Windows (PowerShell)"
             echo
             echo '```powershell'
