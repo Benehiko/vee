@@ -89,9 +89,9 @@ type Opts struct {
 	// Hostname.
 	Hostname string
 
-	// User overrides the guest login username. Only the gaming-arch template
-	// honors this — other cloud-init templates hard-code their username in
-	// systemd units and file paths.
+	// User overrides the guest login username. Honored by the gaming-arch and
+	// macos templates — the other cloud-init templates hard-code their
+	// username in systemd units and file paths.
 	User string
 	// Password sets the guest login password (chpasswd) for any cloud-init
 	// template. Empty means no password is set (SSH key-only).
@@ -116,12 +116,16 @@ type Opts struct {
 	MacOSExtras *MacOSExtras
 }
 
-// MacOSExtras carries the macos template's image-source options.
+// MacOSExtras carries the macos template's image-source and first-boot
+// options.
 type MacOSExtras struct {
 	// IPSW is "latest" (default), an https URL, or a local .ipsw path.
 	IPSW string
 	// MacosvmDir imports an existing macosvm bundle instead of restoring.
 	MacosvmDir string
+	// SkipFirstBoot leaves the restored guest at Setup Assistant instead of
+	// provisioning an admin account, SSH and Screen Sharing offline.
+	SkipFirstBoot bool
 }
 
 // TorrentExtras carries the data that the torrent template needs to be built,
@@ -311,10 +315,18 @@ func configFromTemplate(ctx context.Context, prov provider.Provider, opts Opts, 
 			DiskSize: opts.Disk,
 			Memory:   opts.Memory,
 			CPUs:     opts.CPUs,
+			User:     opts.User,
+			Password: opts.Password,
+			// Authorize every key the caller configured: vee ssh presents the
+			// vee-managed key, which loadSSHKeys appends last, so passing only
+			// the first would lock vee out whenever --ssh-keys is used.
+			SSHPublicKeys: sshKeys,
+			Hostname:      opts.Hostname,
 		}
 		if opts.MacOSExtras != nil {
 			mopts.IPSW = opts.MacOSExtras.IPSW
 			mopts.MacosvmDir = opts.MacOSExtras.MacosvmDir
+			mopts.SkipFirstBoot = opts.MacOSExtras.SkipFirstBoot
 		}
 		return templates.NewMacOSConfig(ctx, prov, opts.Name, mopts)
 	case "windows":

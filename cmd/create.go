@@ -48,6 +48,7 @@ var (
 	createDistroVersion string
 	createIPSW          string
 	createMacosvmDir    string
+	createSkipFirstBoot bool
 	createDataDisks     []string
 	createHostname      string
 	createNVMeDev       string
@@ -96,8 +97,12 @@ Templates apply sane defaults automatically:
   macos           8G / 4 CPUs, macOS guest on Apple's Virtualization.framework
                   (Apple Silicon hosts only). Restores from an IPSW (--ipsw latest
                   by default; ~14 GB download, cached) or imports a macosvm bundle
-                  (--macosvm-dir). First boot lands in Setup Assistant — enable
-                  Remote Login/Screen Sharing there for vee ssh / vee ip.
+                  (--macosvm-dir). The restored guest is provisioned offline:
+                  Setup Assistant is skipped, an admin account (--user, default
+                  vee) is created with your vee SSH key authorized, and Remote
+                  Login + Screen Sharing are enabled, so vee ssh works on first
+                  boot. The generated GUI password is saved in the VM directory.
+                  Pass --skip-first-boot to leave the guest at Setup Assistant.
 
 Supported distros for devbox/server: ubuntu, arch, fedora
 Supported distros for desktop: fedora (default), ubuntu
@@ -127,7 +132,8 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
 			!cmd.Flags().Changed("boot-disk") &&
 			!cmd.Flags().Changed("data-disk") &&
 			!cmd.Flags().Changed("ipsw") &&
-			!cmd.Flags().Changed("macosvm-dir") {
+			!cmd.Flags().Changed("macosvm-dir") &&
+			!cmd.Flags().Changed("skip-first-boot") {
 			return tui.RunCreate(cmd.Context(), prov, name, optsFromFlags(cmd, name))
 		}
 
@@ -418,10 +424,11 @@ func optsFromFlags(cmd *cobra.Command, name string) build.Opts {
 	if cmd.Flags().Changed("boot-disk-path") {
 		opts.BootDiskPath = createBootDiskPath
 	}
-	if cmd.Flags().Changed("ipsw") || cmd.Flags().Changed("macosvm-dir") {
+	if cmd.Flags().Changed("ipsw") || cmd.Flags().Changed("macosvm-dir") || cmd.Flags().Changed("skip-first-boot") {
 		opts.MacOSExtras = &build.MacOSExtras{
-			IPSW:       createIPSW,
-			MacosvmDir: createMacosvmDir,
+			IPSW:          createIPSW,
+			MacosvmDir:    createMacosvmDir,
+			SkipFirstBoot: createSkipFirstBoot,
 		}
 		// These flags only mean anything for the macos template; imply it so
 		// the values are never silently dropped on the TUI-prefill path.
@@ -509,7 +516,7 @@ func init() {
 	createCmd.Flags().StringVar(&createVirtiofsDir, "virtiofs-dir", "", "Host directory to share via virtiofsd")
 	createCmd.Flags().StringVar(&createVirtiofsTag, "virtiofs-tag", "share", "Mount tag for the virtiofs share")
 	createCmd.Flags().StringVar(&createSSHKeyFile, "ssh-keys", "", "Path to file containing SSH public keys (one per line)")
-	createCmd.Flags().StringVar(&createUser, "user", "", "Guest login username (gaming-arch only; other templates hard-code their user)")
+	createCmd.Flags().StringVar(&createUser, "user", "", "Guest login username (gaming-arch and macos templates; others hard-code their user)")
 	createCmd.Flags().StringVar(&createPassword, "password", "", "Guest login password (chpasswd via cloud-init; gaming-arch defaults to the username)")
 	createCmd.Flags().BoolVar(&createSSHShare, "ssh-share", false, "Enable SSH agent sharing into VM via AF_VSOCK")
 	createCmd.Flags().BoolVar(&createHeadless, "headless", false, "Run VM headless (no display window); SSH-only access")
@@ -518,6 +525,7 @@ func init() {
 	createCmd.Flags().StringVar(&createDistroVersion, "distro-version", "latest", "ISO version for the selected distro (e.g. 24.04, 2025.05.01, 42) or 'latest'")
 	createCmd.Flags().StringVar(&createIPSW, "ipsw", "", "macos template: restore image — 'latest', an https URL, or a local .ipsw path")
 	createCmd.Flags().StringVar(&createMacosvmDir, "macosvm-dir", "", "macos template: import an existing macosvm bundle directory instead of restoring")
+	createCmd.Flags().BoolVar(&createSkipFirstBoot, "skip-first-boot", false, "macos template: skip offline provisioning (guest boots into Setup Assistant)")
 	createCmd.Flags().StringArrayVar(&createDataDisks, "data-disk", nil, "Host block device for passthrough data disk, optionally with serial: path[:serial] (repeatable)")
 	createCmd.Flags().StringVar(&createBootDisk, "boot-disk", "", "Host block device to boot from (implies --data-disk; sets UEFI bootindex=1)")
 	createCmd.Flags().StringVar(&createBootDiskPath, "boot-disk-path", "", "Host directory for the managed boot qcow2 disk (default: <storage_path>/<name>/storage); no effect with raw-device --boot-disk")
