@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -86,8 +87,8 @@ func runVM(vmDir string) error {
 	// missed (the channel is buffered by the bindings).
 	stateCh := machine.StateChangedNotify()
 
-	if err := machine.Start(); err != nil {
-		return fmt.Errorf("start virtual machine: %w", err)
+	if err := startWithLockRetry(machine); err != nil {
+		return err
 	}
 	fmt.Printf("vee-vz-helper: %s started (%d cpus, %d bytes memory)\n", spec.Name, spec.CPUs, spec.MemoryBytes)
 
@@ -148,6 +149,31 @@ func runVM(vmDir string) error {
 		}
 	}
 	return nil
+}
+
+// startWithLockRetry starts the VM, retrying while the auxiliary storage is
+// still locked. Virtualization.framework releases that lock asynchronously
+// when a previous VM object is torn down, so the first start after a restore
+// routinely arrives a moment too early and fails with EAGAIN.
+func startWithLockRetry(machine *vz.VirtualMachine) error {
+	const (
+		attempts = 6
+		backoff  = 2 * time.Second
+	)
+	var err error
+	for attempt := range attempts {
+		if err = machine.Start(); err == nil {
+			return nil
+		}
+		if !strings.Contains(err.Error(), "lock auxiliary storage") {
+			return fmt.Errorf("start virtual machine: %w", err)
+		}
+		if attempt < attempts-1 {
+			fmt.Printf("vee-vz-helper: auxiliary storage still locked by a previous VM, retrying in %s\n", backoff)
+			time.Sleep(backoff)
+		}
+	}
+	return fmt.Errorf("start virtual machine: auxiliary storage stayed locked after %d attempts: %w", attempts, err)
 }
 
 // buildConfig translates the machine spec into a Virtualization.framework

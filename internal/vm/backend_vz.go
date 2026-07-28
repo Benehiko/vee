@@ -128,6 +128,7 @@ func (m *Manager) buildVZMachine(_ context.Context, cfg *VMConfig) (backend.Mach
 		name:       cfg.Name,
 		vmDir:      vmDir,
 		helperPath: helperPath,
+		mac:        cfg.NIC.MAC,
 	}, nil
 }
 
@@ -138,6 +139,9 @@ type vzMachine struct {
 	name       string
 	vmDir      string
 	helperPath string
+	// mac is the guest NIC address, used to snapshot its DHCP lease before
+	// the guest can boot.
+	mac string
 }
 
 func (v *vzMachine) StartDetached(ctx context.Context) (*backend.StartResult, error) {
@@ -156,8 +160,17 @@ func (v *vzMachine) StartDetached(ctx context.Context) (*backend.StartResult, er
 		zap.String("binary", v.helperPath),
 		zap.String("vm_dir", v.vmDir))
 
+	// Snapshot the guest's DHCP-lease expiry before the VM can possibly boot:
+	// readiness is "the lease expiry advanced past this", and a guest can
+	// acquire its lease within a second of starting.
+	leaseBaseline := dhcpLeaseExpiry(v.mac)
+
+	// The helper owns the VM for its lifetime, so it must outlive the CLI that
+	// started it: exec.CommandContext kills the child when its context is
+	// cancelled, and vee's root command cancels its signal context as soon as
+	// the command returns.
 	//nolint:gosec // helperPath is resolved from vee-managed locations, vmDir from vee storage
-	cmd := exec.CommandContext(ctx, v.helperPath, "--vm-dir", v.vmDir)
+	cmd := exec.CommandContext(context.WithoutCancel(ctx), v.helperPath, "--vm-dir", v.vmDir)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	setDetachAttrs(cmd)
@@ -180,7 +193,7 @@ func (v *vzMachine) StartDetached(ctx context.Context) (*backend.StartResult, er
 	deadline := time.Now().Add(vzStartTimeout)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(sockPath); err == nil {
-			return &backend.StartResult{PID: pid, ControlSocket: sockPath}, nil
+			return &backend.StartResult{PID: pid, ControlSocket: sockPath, LeaseBaseline: leaseBaseline}, nil
 		}
 		select {
 		case <-helperExited:
@@ -235,7 +248,7 @@ func vzControlRequest(ctx context.Context, sockPath, op string, timeout time.Dur
 // guest acquired a FRESH DHCP lease. bootpd keeps stale entries in
 // /var/db/dhcpd_leases across shutdowns (even past expiry), so a bare MAC
 // match proves nothing on a restart — instead the lease expiry recorded for
-// the MAC must ADVANCE past the baseline taken when the wait begins (every
+// the MAC must ADVANCE past the baseline taken before the VM started (every
 // DHCP grant/renewal rewrites it). A fresh macOS guest has no SSH enabled
 // yet, so the lease is the strongest "the guest is up" signal available.
 func (m *Manager) waitReadyVZ(ctx context.Context, name string, state *VMState, timeout time.Duration) error {
@@ -255,7 +268,9 @@ func (m *Manager) waitReadyVZ(ctx context.Context, name string, state *VMState, 
 		return m.markReady(name)
 	}
 
-	baseline := dhcpLeaseExpiry(mac)
+	// The baseline was taken before the VM started (see StartDetached); a lease
+	// the guest acquired during startup therefore still counts as ready.
+	baseline := state.LeaseBaseline
 	probe := func() bool {
 		exp := dhcpLeaseExpiry(mac)
 		return exp > 0 && exp > baseline

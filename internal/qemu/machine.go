@@ -446,8 +446,18 @@ func (q *BaseMachine) start(ctx context.Context, detach bool) (*StartResult, err
 		zap.String("binary", binary),
 		zap.Strings("args", args))
 
+	// A detached VM must outlive the CLI that started it, so it is spawned with
+	// a context that is never cancelled. exec.CommandContext kills the child
+	// when its context is cancelled, and vee's root command cancels its signal
+	// context as soon as the command returns — which would SIGKILL the VM the
+	// instant `vee start` exits. A foreground run keeps the real context: there,
+	// cancelling the command should stop the VM.
+	spawnCtx := ctx
+	if detach {
+		spawnCtx = context.WithoutCancel(ctx)
+	}
 	//nolint:gosec // binary/args are the operator-configured QEMU command for this VM manager, not user shell input.
-	cmd := exec.CommandContext(ctx, binary, args...)
+	cmd := exec.CommandContext(spawnCtx, binary, args...)
 	cmd.Env = qemuEnv(binary)
 
 	if detach {

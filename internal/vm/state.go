@@ -44,7 +44,10 @@ type VMState struct {
 	// ControlSocket is the non-QEMU backend control channel (the vz helper
 	// socket). Kept separate from QMPSocket so QMP consumers (vee qmp,
 	// monitor, dashboard) never dial a socket speaking another protocol.
-	ControlSocket string     `json:"control_socket,omitempty"`
+	ControlSocket string `json:"control_socket,omitempty"`
+	// LeaseBaseline is the guest's DHCP-lease expiry captured just before the
+	// VM started; readiness means the lease advanced past it.
+	LeaseBaseline uint64     `json:"lease_baseline,omitempty"`
 	SPICEPort     int        `json:"spice_port,omitempty"`
 	SSHPort       int        `json:"ssh_port,omitempty"`
 	VirtiofsdPIDs []int      `json:"virtiofsd_pids,omitempty"`

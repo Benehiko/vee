@@ -51,6 +51,10 @@ type StartResult struct {
 	// GuestAgentSocket is the QGA unix socket for QEMU guests running
 	// qemu-guest-agent. Empty for backends without a guest agent.
 	GuestAgentSocket string
+	// LeaseBaseline is the guest's DHCP-lease expiry as it was immediately
+	// before the VM started, for backends whose readiness signal is the guest
+	// acquiring a lease. Zero when unused.
+	LeaseBaseline uint64
 }
 
 // Machine is a fully-configured VM ready to launch — the only surface the
