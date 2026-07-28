@@ -2,10 +2,15 @@ package cmd
 
 import (
 	"fmt"
+	"net"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/Benehiko/vee/internal/backend"
 	"github.com/Benehiko/vee/internal/vm"
 )
 
@@ -17,6 +22,7 @@ var viewCmd = &cobra.Command{
 	ValidArgsFunction: completeVMNames,
 	Long: `Open the display for a running VM:
 
+  macOS guest (vz) Opens Screen Sharing (VNC) to the guest's own IP.
   GPU passthrough  Prints Moonlight/Sunshine connection instructions.
   SPICE            Opens remote-viewer (must be installed).
   virtio-gpu       Informs the user the display is in the QEMU GTK window.
@@ -24,15 +30,20 @@ var viewCmd = &cobra.Command{
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
-		mgr := vm.NewManager(prov)
 
-		cfg, err := mgr.LoadConfig(name)
+		// loadRunningVM reconciles the recorded state against the actual
+		// process, unlike a bare LoadState: a crashed VM whose state still
+		// says Running would otherwise send the viewer at a stale address.
+		cfg, state, err := loadRunningVM(name)
 		if err != nil {
-			return fmt.Errorf("load config for %q: %w", name, err)
+			return err
 		}
-		state, err := mgr.LoadState(name)
-		if err != nil || !state.Running {
-			return fmt.Errorf("VM %q is not running", name)
+
+		// macOS guests have no SPICE server: the screen is reached through the
+		// guest's own Screen Sharing service, which the guest must have
+		// enabled (vee's first-boot provisioning does that when available).
+		if state.BackendName() == backend.VZ {
+			return viewVZ(cmd, cfg, name)
 		}
 
 		// GPU passthrough — Sunshine/Moonlight streaming.
@@ -68,6 +79,61 @@ var viewCmd = &cobra.Command{
 
 		return fmt.Errorf("VM %q has no SPICE port configured and no GPU display; use --foreground to run it in the terminal", name)
 	},
+}
+
+// viewVZ connects to the guest's Screen Sharing service. macOS registers
+// Screen Sharing.app as the vnc:// handler, so `open` is enough on the host;
+// other hosts cannot run vz VMs at all.
+func viewVZ(cmd *cobra.Command, cfg *vm.VMConfig, name string) error {
+	if cfg.NIC.MAC == "" {
+		return fmt.Errorf("VM %q has no MAC address recorded; cannot resolve its IP", name)
+	}
+	ip, err := vm.ResolveIPFromMAC(cfg.NIC.MAC)
+	if err != nil {
+		return fmt.Errorf("could not resolve the guest IP for %q (MAC %s): %w\n"+
+			"The guest has not requested a DHCP lease yet — a freshly restored macOS guest takes "+
+			"a few minutes on its first boot. Helper log: %s", name, cfg.NIC.MAC, err,
+			filepath.Join(prov.Config().StoragePath, name, "vz-helper.log"))
+	}
+
+	uri := "vnc://" + ip
+	user := cfg.SSHUser
+	if user == "" {
+		user = "the guest admin account"
+	}
+	// Probe the screen-sharing port before launching a client. `open` hands
+	// the URL to Screen Sharing.app and exits 0 whether or not the guest is
+	// reachable, so its exit status proves nothing — and launching blind
+	// leaves the user with an opaque "Connection failed" dialog.
+	addr := net.JoinHostPort(ip, "5900")
+	dialer := net.Dialer{Timeout: 3 * time.Second}
+	conn, dialErr := dialer.DialContext(cmd.Context(), "tcp", addr)
+	if dialErr != nil {
+		return fmt.Errorf("nothing is listening on %s: %w\n"+
+			"The guest's Screen Sharing service is not reachable yet. A freshly restored guest takes "+
+			"a few minutes on its first boot; after that, enable Screen Sharing inside the guest "+
+			"(System Settings > General > Sharing > Screen Sharing) — note macOS also gates the "+
+			"screen-sharing agent behind privacy permissions a VM cannot grant itself, so SSH "+
+			"(vee ssh %s) may be the more reliable route.\nHelper log: %s", addr, dialErr, name,
+			filepath.Join(prov.Config().StoragePath, name, "vz-helper.log"))
+	}
+	_ = conn.Close()
+
+	opener, lookErr := exec.LookPath("open")
+	if lookErr != nil {
+		// No `open` (vz VMs cannot run on such a host anyway): the address is
+		// what the user needs, and any VNC client accepts it.
+		fmt.Printf("Connect a VNC client to %s (log in as %s)\n", uri, user)
+		return nil //nolint:nilerr // missing viewer is not a failure; the address was printed
+	}
+	fmt.Printf("Opening %s (log in as %s)\n", uri, user)
+	//nolint:gosec // opener resolved via LookPath; uri is a vee-constructed vnc:// URL
+	launch := exec.CommandContext(cmd.Context(), opener, uri)
+	launch.Stderr = os.Stderr
+	if err := launch.Run(); err != nil {
+		return fmt.Errorf("launch a VNC client for %s: %w (is a vnc:// handler registered?)", uri, err)
+	}
+	return nil
 }
 
 func init() {
