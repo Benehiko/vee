@@ -84,15 +84,11 @@ func (m *Manager) buildVZMachine(_ context.Context, cfg *VMConfig) (backend.Mach
 		return nil, fmt.Errorf("the vz backend requires an absolute auxiliary_storage path (got %q)", auxPath)
 	}
 
+	// ResolveHelper also heals a quarantined helper; a failure there is fatal
+	// because Gatekeeper would SIGKILL the helper on exec.
 	helperPath, err := vzhelper.ResolveHelper()
 	if err != nil {
 		return nil, err
-	}
-	// Heal a browser-downloaded (quarantined) helper before exec. A failed
-	// heal is fatal: starting a still-quarantined helper is a guaranteed
-	// Gatekeeper SIGKILL with a misleading entitlement diagnostic.
-	if err := hardenVZHelper(helperPath); err != nil {
-		return nil, fmt.Errorf("vz helper hardening: %w", err)
 	}
 
 	vmDir := m.vmDir(cfg.Name)

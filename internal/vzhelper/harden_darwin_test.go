@@ -1,6 +1,6 @@
 //go:build darwin
 
-package vm
+package vzhelper
 
 import (
 	"crypto/sha256"
@@ -41,8 +41,8 @@ func TestHardenVZHelper(t *testing.T) {
 		t.Fatal("quarantine xattr did not stick")
 	}
 
-	if err := hardenVZHelper(target); err != nil {
-		t.Fatalf("hardenVZHelper: %v", err)
+	if err := harden(target); err != nil {
+		t.Fatalf("harden: %v", err)
 	}
 	if quarantined(t, target) {
 		t.Error("quarantine xattr survived")
@@ -56,8 +56,8 @@ func TestHardenVZHelper(t *testing.T) {
 	}
 
 	// Non-quarantined binaries are a no-op (no codesign cost on every start).
-	if err := hardenVZHelper(target); err != nil {
-		t.Fatalf("hardenVZHelper (clean): %v", err)
+	if err := harden(target); err != nil {
+		t.Fatalf("harden (clean): %v", err)
 	}
 }
 
@@ -81,8 +81,8 @@ func TestHardenVZHelperPreservesValidSignature(t *testing.T) {
 	if out, err := testExec(t, "xattr", "-w", "com.apple.quarantine", "0083;00000000;TestBrowser;", target); err != nil {
 		t.Fatalf("set quarantine: %v\n%s", err, out)
 	}
-	if err := hardenVZHelper(target); err != nil {
-		t.Fatalf("hardenVZHelper: %v", err)
+	if err := harden(target); err != nil {
+		t.Fatalf("harden: %v", err)
 	}
 	if quarantined(t, target) {
 		t.Error("quarantine xattr survived")
@@ -108,7 +108,7 @@ func TestHardenVZHelperUnwritable(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(target, 0o755) }) //nolint:gosec // restore exec perms so TempDir cleanup works
 
-	err := hardenVZHelper(target)
+	err := harden(target)
 	if err == nil || !strings.Contains(err.Error(), "sudo xattr") {
 		t.Fatalf("expected hard failure with sudo xattr guidance, got: %v", err)
 	}
@@ -138,7 +138,7 @@ func copyTestBinary(t *testing.T) string {
 
 func entitlementsForTest(t *testing.T) []byte {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "vzhelper", "vz.entitlements"))
+	data, err := os.ReadFile("vz.entitlements")
 	if err != nil {
 		t.Fatal(err)
 	}

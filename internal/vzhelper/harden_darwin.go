@@ -1,6 +1,6 @@
 //go:build darwin
 
-package vm
+package vzhelper
 
 import (
 	"fmt"
@@ -9,8 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
-
-	"github.com/Benehiko/vee/internal/vzhelper"
 )
 
 // hardenVZHelper heals a quarantined helper binary. A browser-downloaded
@@ -31,35 +29,35 @@ import (
 //     ad-hoc (that would also strip flags like hardened runtime).
 //   - A file lock serializes concurrent starts: two racing codesign --force
 //     invocations on one binary can leave a corrupt signature behind.
-func hardenVZHelper(path string) error {
+func harden(path string) error {
 	xattr, err := exec.LookPath("xattr")
 	if err != nil {
 		return nil // no xattr tool, nothing to heal
 	}
-	if !vzHelperQuarantined(xattr, path) {
+	if !helperQuarantined(xattr, path) {
 		return nil
 	}
 
-	unlock, err := lockVZHarden()
+	unlock, err := lockHarden()
 	if err != nil {
 		return err
 	}
 	defer unlock()
 
 	// Re-check under the lock — another vee may have healed it already.
-	if !vzHelperQuarantined(xattr, path) {
+	if !helperQuarantined(xattr, path) {
 		return nil
 	}
 
 	//nolint:noctx,gosec // fixed args on a vee-resolved helper path; no ctx in this call chain (mirrors qemubin hardenBinary)
 	_ = exec.Command(xattr, "-d", "com.apple.quarantine", path).Run()
-	if vzHelperQuarantined(xattr, path) {
+	if helperQuarantined(xattr, path) {
 		return fmt.Errorf("%s is quarantined (browser download) and not writable by this user — Gatekeeper would kill it on start; clear it with: sudo xattr -d com.apple.quarantine %s", path, path)
 	}
 
 	// A valid signature that already carries the entitlement needs nothing
 	// more; leave stronger-than-ad-hoc signatures untouched.
-	if vzHelperSignatureOK(path) {
+	if helperSignatureOK(path) {
 		return nil
 	}
 
@@ -72,7 +70,7 @@ func hardenVZHelper(path string) error {
 		return err
 	}
 	defer func() { _ = os.Remove(tmp.Name()) }()
-	if _, err := tmp.Write(vzhelper.Entitlements); err != nil {
+	if _, err := tmp.Write(Entitlements); err != nil {
 		_ = tmp.Close()
 		return err
 	}
@@ -87,17 +85,17 @@ func hardenVZHelper(path string) error {
 	return nil
 }
 
-// vzHelperQuarantined probes the com.apple.quarantine xattr. Reading needs
+// helperQuarantined probes the com.apple.quarantine xattr. Reading needs
 // only read permission, so the probe works even where the strip cannot.
-func vzHelperQuarantined(xattr, path string) bool {
+func helperQuarantined(xattr, path string) bool {
 	//nolint:noctx,gosec // fixed args, vee-resolved path
 	out, err := exec.Command(xattr, "-p", "com.apple.quarantine", path).Output()
 	return err == nil && len(out) > 0
 }
 
-// vzHelperSignatureOK reports whether the binary carries a valid signature
+// helperSignatureOK reports whether the binary carries a valid signature
 // that includes the virtualization entitlement.
-func vzHelperSignatureOK(path string) bool {
+func helperSignatureOK(path string) bool {
 	codesign, err := exec.LookPath("codesign")
 	if err != nil {
 		return false
@@ -111,11 +109,11 @@ func vzHelperSignatureOK(path string) bool {
 	return err == nil && strings.Contains(string(out), "com.apple.security.virtualization")
 }
 
-// lockVZHarden serializes the strip+re-sign sequence across vee processes.
+// lockHarden serializes the strip+re-sign sequence across vee processes.
 // Two concurrent codesign --force runs on one binary can leave a corrupt
 // signature that fails every later start (and, quarantine already stripped,
 // would never be re-healed).
-func lockVZHarden() (func(), error) {
+func lockHarden() (func(), error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err

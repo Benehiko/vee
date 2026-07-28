@@ -6,11 +6,13 @@ weight: 45
 vee can run **macOS guests** on Apple Silicon hosts using Apple's Virtualization.framework (the `vz` backend). QEMU remains the backend for every other guest.
 
 ```sh
-vee create mymac --template macos      # restore the newest macOS this host supports
-vee start mymac
+vee create mymac --template macos      # restore the newest macOS this host supports, then start it
 vee ssh mymac                          # works on first boot — no GUI setup needed
 vee view mymac                         # the guest's screen over Screen Sharing
 ```
+
+`vee create` starts the guest when it finishes; pass `--no-start` if you would
+rather start it yourself later with `vee start mymac`.
 
 ## Requirements
 
@@ -27,7 +29,7 @@ Apple's macOS software licence agreement permits running macOS in a virtual mach
 
 1. **Restore image.** `--ipsw latest` (the default) asks the host's Virtualization.framework for the newest restore image *this host* can install — more accurate than a global "latest". Pass an `https://…ipsw` URL or a local path for a specific version; [ipsw.me](https://ipsw.me/product/Mac/) and [appledb.dev](https://appledb.dev) index older releases. Pre-fetch with `vee pull macos`.
 2. **Install.** `vee-vz-helper` runs `VZMacOSInstaller` against a fresh sparse disk. This takes tens of minutes and prints progress; the guest's CPU and memory are raised to the image's minimums automatically.
-3. **Provision.** Before the guest ever boots, vee patches its disk offline: Setup Assistant is skipped, an admin account is created, your vee SSH key is authorized, and Remote Login plus Screen Sharing are enabled. This is what makes `vee ssh` work on the first boot.
+3. **Provision.** Before the guest ever boots, vee patches its disk offline: it marks Setup Assistant as already done and installs a first-boot launch daemon. That daemon, on the guest's first boot, creates the admin account, authorizes your vee SSH key, and enables Remote Login and Screen Sharing — which is what makes `vee ssh` work without a GUI session.
 4. **Run.** `vee start` launches a `vee-vz-helper` process that owns the VM for its lifetime, exactly as a `qemu-system` process does for a QEMU VM.
 
 The generated GUI login password is printed once and saved to `macos-credentials.txt` in the VM directory (mode 0600). SSH uses your vee key, not the password.
@@ -87,8 +89,8 @@ macos:
   min_memory_bytes: 4294967296
 ```
 
-vee refuses to start a macOS guest configured below `min_cpus` / `min_memory_bytes` — a guest under the restore image's requirements will not boot.
+vee raises a guest's CPU count and memory to `min_cpus` / `min_memory_bytes` — both when the config is written and again at every start, since a guest below its restore image's requirements will not boot. Your `vm.yaml` is left as you wrote it; the clamp is applied to what the VM is actually given.
 
-The helper is ad-hoc codesigned with `com.apple.security.virtualization`, which macOS honours without a paid Apple Developer account. If you downloaded the release tarball with a browser, macOS quarantines it; vee clears that and re-signs the helper automatically before the first start.
+The helper is ad-hoc codesigned with `com.apple.security.virtualization`, which macOS honours without a paid Apple Developer account. If you downloaded the release tarball with a browser, macOS quarantines the helper, which Gatekeeper would then refuse to run; vee clears that flag (re-signing only if the signature is missing the entitlement) every time it resolves the helper, so the restore and start paths are both covered.
 
 QEMU also has an experimental macOS-guest path (`vmapple` + `apple-gfx`), which vee does **not** use: upstream QEMU compiles that machine out by default and it does not run on current macOS hosts. It is tracked in [issue #50](https://github.com/Benehiko/vee/issues/50) and the seam for it is still in place.

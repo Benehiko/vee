@@ -67,6 +67,17 @@ func Patch(ctx context.Context, diskPath string, opts Options) (*Result, error) 
 
 	written, err := writePayload(mnt, script)
 	if err != nil {
+		// The Setup Assistant marker is written first, so a partial payload
+		// would leave the guest at a login window with no account. Undo it
+		// while the volume is still mounted.
+		for _, f := range payloadFiles(script) {
+			if f.Keep {
+				continue
+			}
+			abs := filepath.Join(mnt, f.Path)
+			_ = os.Chmod(abs, 0o600) // 0400 markers deny even owner writes
+			_ = os.Remove(abs)
+		}
 		return nil, err
 	}
 
@@ -167,6 +178,10 @@ func fixOwnership(ctx context.Context, attached attachedDisk, files []payloadFil
 		fmt.Fprintf(&sb, "chmod %o %s\n", f.Mode.Perm(), target)
 	}
 
+	// Explain the prompt before it appears: an unexplained sudo request in the
+	// middle of a long restore is alarming.
+	fmt.Fprintln(os.Stderr, "vee needs sudo once to set root:wheel on the guest's first-boot launch daemon "+
+		"(launchd refuses to load daemons that are not root-owned).")
 	//nolint:gosec // fixed sudo/sh invocation; the script is built from vee-derived paths
 	cmd := exec.CommandContext(ctx, "sudo", "sh", "-c", sb.String())
 	cmd.Stdin = os.Stdin
