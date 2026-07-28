@@ -308,6 +308,10 @@ func TestRenderFirstBootScript(t *testing.T) {
 		"launchctl bootstrap system /System/Library/LaunchDaemons/ssh.plist",
 		"launchctl enable system/com.openssh.sshd",
 		"launchctl bootstrap system /System/Library/LaunchDaemons/com.apple.screensharing.plist",
+		// Enabling the service is not enough: unconfigured Remote Management
+		// refuses sessions with "Screen Sharing is not permitted".
+		"ARDAgent.app/Contents/Resources/kickstart",
+		"-configure -access -on",
 		"scutil --set LocalHostName 'mymac'",
 		// The payload removes itself once provisioning succeeds: it holds the
 		// account password.
