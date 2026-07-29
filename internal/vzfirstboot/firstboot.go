@@ -18,9 +18,17 @@ package vzfirstboot
 
 import (
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"math/big"
 )
+
+// ErrGuestDiskBusy reports that vee could not release the guest disk it
+// attached to the host. Nothing else releases it, and neither
+// Virtualization.framework nor a later attach can use a disk the host's
+// DiskImages driver still owns, so callers must abort rather than boot the VM
+// and must tell the user to run `hdiutil detach` on it.
+var ErrGuestDiskBusy = errors.New("guest disk is still attached to the host")
 
 // Options configures the guest payload.
 type Options struct {

@@ -12,3 +12,8 @@ import (
 func Patch(_ context.Context, _ string, _ Options) (*Result, error) {
 	return nil, fmt.Errorf("macOS guest first-boot patching requires a macOS host")
 }
+
+// EnsureScreenSharingGrants is darwin-only, like Patch.
+func EnsureScreenSharingGrants(_ context.Context, _ string) (bool, error) {
+	return false, fmt.Errorf("macOS guest privacy grants require a macOS host")
+}

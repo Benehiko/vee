@@ -8,7 +8,7 @@ vee can run **macOS guests** on Apple Silicon hosts using Apple's Virtualization
 ```sh
 vee create mymac --template macos      # restore the newest macOS this host supports, then start it
 vee ssh mymac                          # works on first boot — no GUI setup needed
-vee view mymac                         # the guest's screen over Screen Sharing
+vee view mymac                         # the guest's screen over Screen Sharing (works from its second boot)
 ```
 
 `vee create` starts the guest when it finishes; pass `--no-start` if you would
@@ -42,11 +42,11 @@ If you already restored a macOS VM with [macosvm](https://github.com/s-u/macosvm
 vee create mymac --template macos --macosvm-dir ~/my-macosvm-vm
 ```
 
-vee copies the disk and auxiliary storage and reads the hardware-model and machine-identifier blobs out of `macosvm.json`. Imported guests are left exactly as they are — vee does not re-provision an installation someone else set up.
+vee copies the disk and auxiliary storage and reads the hardware-model and machine-identifier blobs out of `macosvm.json`. Imported guests are left exactly as they are — vee does not re-provision an installation someone else set up. It also writes no privacy grants for such a guest, so `vee view` will not work until you enable Screen Sharing, and its screen-recording permission, inside the guest yourself.
 
 ### Opting out of provisioning
 
-`--skip-first-boot` leaves the restored guest untouched. It will boot into Setup Assistant, which you must complete at its screen; `vee ssh` will not work until you enable Remote Login inside the guest.
+`--skip-first-boot` leaves the restored guest untouched. It will boot into Setup Assistant, which you must complete at its screen; `vee ssh` will not work until you enable Remote Login inside the guest, and `vee view` will not work until you enable Screen Sharing and its screen-recording permission there too.
 
 ## Stopping a guest
 
@@ -79,7 +79,7 @@ Virtualization.framework NAT has no host port forwarding, so macOS guests get no
 
 ## Known caveats
 
-- **Screen Sharing works without a manual step, because vee grants the permissions offline.** Enabling the service is not enough: since macOS 12.1 the screen-sharing agent also needs privacy (TCC) permissions, which macOS only offers through System Settings or MDM — neither reachable on a headless guest, and ARD's `kickstart` says as much (*"must be enabled from System Settings or via MDM"*). So while the guest disk is mounted, vee authorizes `com.apple.screensharing.agent` for screen capture, event posting and accessibility directly in the guest's privacy database, which SIP protects at runtime but not offline. Only those three rows for that one client are touched, they are removed again if provisioning is rolled back, and nothing is written when Screen Sharing is not requested. `vee view` still reports when nothing is listening at all.
+- **Screen Sharing needs no manual step on a guest vee provisioned, but it starts working on that guest's second boot.** Enabling the service is not enough: since macOS 12.1 the screen-sharing agent also needs privacy (TCC) permissions, which macOS only offers through System Settings or MDM — neither reachable on a headless guest, and ARD's `kickstart` says as much (*"must be enabled from System Settings or via MDM"*). So vee grants them directly in the guest's privacy database, which SIP protects while the guest runs but not while its disk sits idle on the host. macOS creates that database on the guest's *first* boot rather than during the restore, so `screen_sharing_grant_pending` in the config records that vee still owes the guest its grants, and every `vee start` retries until they land — after which the flag is cleared and later starts do not touch the disk at all. So the guest has to be stopped and started once: `vee create` restores and boots it, `vee ssh` works immediately, and the next `vee start` after a `vee stop` writes the grants, so `vee view` works from that boot onwards. Only three rows for that one client are ever touched, they are removed again if provisioning is rolled back, and nothing is written when Screen Sharing is not requested — including for imported and `--skip-first-boot` guests, which vee never provisions. `vee view` still reports when nothing is listening at all.
 - **A per-user setup wizard may still appear** at the first *graphical* login (Accessibility, Siri, Apple Pay screens). Skipping it entirely needs version-stamped preference files vee does not write yet. SSH is unaffected.
 - **The provisioned account has no secure token**, because it is created by a launch daemon rather than by Setup Assistant. FileVault, startup-security changes and in-place macOS upgrades are therefore unavailable in the guest. Restore from a newer IPSW instead of upgrading.
 - **The guest cannot run VMs of its own.** Virtualization.framework exposes nested virtualization only to *Linux* guests (`VZGenericPlatformConfiguration`); the macOS-guest platform has no such switch, and Apple states plainly that neither Virtualization.framework nor Hypervisor.framework works from inside a VM. So Docker Desktop, Podman Machine, Lima, UTM and anything else needing a hypervisor will not start in a macOS guest — Docker Desktop fails its hypervisor check outright. Run those on the host, or in a sibling Linux guest.
@@ -98,6 +98,7 @@ macos:
   machine_identifier: !!binary "…"
   min_cpus: 2
   min_memory_bytes: 4294967296
+  screen_sharing_grant_pending: true   # vee still owes this guest its Screen Sharing grants
 ```
 
 vee raises a guest's CPU count and memory to `min_cpus` / `min_memory_bytes` — both when the config is written and again at every start, since a guest below its restore image's requirements will not boot. Your `vm.yaml` is left as you wrote it; the clamp is applied to what the VM is actually given.

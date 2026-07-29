@@ -186,14 +186,16 @@ func TestPrivacyGrantsLeaveOtherRowsAlone(t *testing.T) {
 func TestPrivacyGrantsWithoutDatabase(t *testing.T) {
 	opts := Options{User: "vee", EnableScreenSharing: true}
 
-	// A guest with no privacy database at all must produce errNoTCCDB, which
+	// A guest with no privacy database at all must produce ErrNoTCCDB, which
 	// the caller downgrades to a warning rather than failing the patch.
 	err := applyPrivacyGrants(t.Context(), t.TempDir(), opts)
-	if !errors.Is(err, errNoTCCDB) {
-		t.Errorf("missing database: got %v, want errNoTCCDB", err)
+	if !errors.Is(err, ErrNoTCCDB) {
+		t.Errorf("missing database: got %v, want ErrNoTCCDB", err)
 	}
 
-	// So must a database whose schema vee does not recognize.
+	// A database whose schema vee does not recognize is a different case: it
+	// never becomes usable, so the start path must stop retrying rather than
+	// attach the guest disk forever.
 	mnt := t.TempDir()
 	dbPath := filepath.Join(mnt, tccDBPath)
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil { //nolint:gosec // test fixture
@@ -209,7 +211,107 @@ func TestPrivacyGrantsWithoutDatabase(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := applyPrivacyGrants(t.Context(), mnt, opts); !errors.Is(err, errNoTCCDB) {
-		t.Errorf("unknown schema: got %v, want errNoTCCDB", err)
+	err = applyPrivacyGrants(t.Context(), mnt, opts)
+	if !errors.Is(err, ErrUnknownTCCSchema) {
+		t.Errorf("unknown schema: got %v, want ErrUnknownTCCSchema", err)
+	}
+	if errors.Is(err, ErrNoTCCDB) {
+		t.Error("an unrecognized schema reported as a missing database, so the start path would retry it forever")
+	}
+}
+
+func TestScreenSharingGrantedReportsState(t *testing.T) {
+	mnt := newGuestVolume(t)
+	opts := Options{User: "vee", EnableScreenSharing: true}
+
+	// An empty database — what macOS creates on first boot — is not granted.
+	granted, err := screenSharingGranted(t.Context(), mnt)
+	if err != nil {
+		t.Fatalf("screenSharingGranted: %v", err)
+	}
+	if granted {
+		t.Error("an empty database reported as granted")
+	}
+
+	if err := applyPrivacyGrants(t.Context(), mnt, opts); err != nil {
+		t.Fatal(err)
+	}
+	granted, err = screenSharingGranted(t.Context(), mnt)
+	if err != nil {
+		t.Fatalf("screenSharingGranted after apply: %v", err)
+	}
+	if !granted {
+		t.Error("grants were applied but not reported as granted")
+	}
+
+	// A partial state must not count, whether the row is missing or present
+	// and denied — a guest whose owner said no is not a granted guest.
+	for _, tc := range []struct {
+		name string
+		stmt string
+	}{
+		{"row deleted", `DELETE FROM access WHERE service = ?`},
+		{"row denied", `UPDATE access SET auth_value = 0 WHERE service = ?`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mnt := newGuestVolume(t)
+			if err := applyPrivacyGrants(t.Context(), mnt, opts); err != nil {
+				t.Fatal(err)
+			}
+			db, err := sql.Open("sqlite", filepath.Join(mnt, tccDBPath))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.ExecContext(t.Context(), tc.stmt, screenSharingServices[0]); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if granted, err := screenSharingGranted(t.Context(), mnt); err != nil || granted {
+				t.Errorf("partial grants reported as complete (granted=%v, err=%v)", granted, err)
+			}
+		})
+	}
+}
+
+func TestScreenSharingGrantedIgnoresUnrelatedRows(t *testing.T) {
+	// The access table's primary key is wider than (service, client), so a
+	// guest can hold more than one row per service. An allowed row that is not
+	// the one vee writes must not answer for vee's own grant, or a guest would
+	// be recorded as done while Screen Sharing stays refused.
+	mnt := newGuestVolume(t)
+	db, err := sql.Open("sqlite", filepath.Join(mnt, tccDBPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, service := range screenSharingServices {
+		// client_type 1 is a path-keyed client, not the bundle identifier vee
+		// grants, and the indirect object makes it a distinct primary key.
+		if _, err := db.ExecContext(t.Context(), `INSERT INTO access
+			(service, client, client_type, auth_value, auth_reason, auth_version, indirect_object_identifier)
+			VALUES (?, ?, 1, 2, 2, 1, 'com.example.other')`, service, screenSharingClient); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	granted, err := screenSharingGranted(t.Context(), mnt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if granted {
+		t.Error("an unrelated allowed row was read as vee's grant")
+	}
+}
+
+func TestScreenSharingGrantedWithoutDatabase(t *testing.T) {
+	// The pre-first-boot state must be distinguishable, since the start path
+	// treats it as "retry later" rather than an error worth reporting.
+	_, err := screenSharingGranted(t.Context(), t.TempDir())
+	if !errors.Is(err, ErrNoTCCDB) {
+		t.Errorf("missing database: got %v, want ErrNoTCCDB", err)
 	}
 }

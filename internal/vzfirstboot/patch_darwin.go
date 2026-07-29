@@ -45,7 +45,15 @@ func Patch(ctx context.Context, diskPath string, opts Options) (*Result, error) 
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = detachImage(context.WithoutCancel(ctx), attached) }()
+	// vee create starts the guest as soon as this returns, and
+	// Virtualization.framework cannot open a disk the host still has attached,
+	// so the image must be released on every path out of here.
+	released := false
+	defer func() {
+		if !released {
+			_ = detachImage(context.WithoutCancel(ctx), attached)
+		}
+	}()
 
 	mnt, err := os.MkdirTemp(filepath.Dir(diskPath), "mnt-")
 	if err != nil {
@@ -86,12 +94,19 @@ func Patch(ctx context.Context, diskPath string, opts Options) (*Result, error) 
 	// Enabling the service alone leaves the guest listening but refusing every
 	// session, and the alternative remedy needs a GUI session a headless guest
 	// cannot offer.
-	if err := applyPrivacyGrants(ctx, mnt, opts); err != nil {
-		if !errors.Is(err, errNoTCCDB) {
-			return nil, err
-		}
-		fmt.Fprintf(os.Stderr, "warning: could not authorize Screen Sharing in the guest (%v); "+
-			"enable it from the guest's System Settings if you need its screen\n", err)
+	//
+	// A restored guest has not booted yet, so macOS has not created the privacy
+	// database and this is expected to find nothing: the grant is retried at
+	// every start until it lands (MacOSConfig.ScreenSharingGrantPending).
+	switch err := applyPrivacyGrants(ctx, mnt, opts); {
+	case errors.Is(err, ErrNoTCCDB):
+		fmt.Println("The guest has no privacy database yet — macOS creates it on the first boot — " +
+			"so vee will authorize Screen Sharing at the next `vee start`.")
+	case errors.Is(err, ErrUnknownTCCSchema):
+		fmt.Fprintf(os.Stderr, "warning: this guest's privacy database is not one vee recognizes (%v), "+
+			"so Screen Sharing must be enabled from the guest's System Settings; everything else works.\n", err)
+	case err != nil:
+		return nil, err
 	}
 
 	if out, err := run(ctx, "umount", mnt); err != nil {
@@ -111,7 +126,97 @@ func Patch(ctx context.Context, diskPath string, opts Options) (*Result, error) 
 		}
 		return nil, err
 	}
+
+	if err := detachImage(ctx, attached); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrGuestDiskBusy, err)
+	}
+	released = true
 	return &Result{Password: password}, nil
+}
+
+// EnsureScreenSharingGrants authorizes the guest's screen-sharing agent on an
+// already-installed guest, and reports whether it had to change anything.
+//
+// It exists because a freshly restored image has no privacy database at all:
+// macOS creates it the first time the guest boots. Provisioning therefore
+// cannot grant these permissions, and the caller retries here — before each
+// start, while the disk is free — until the database exists.
+//
+// The VM must not be running: the caller boots this disk immediately
+// afterwards, so releasing it again is part of the contract rather than a
+// cleanup detail. A release failure is reported as ErrGuestDiskBusy and must
+// abort the start.
+func EnsureScreenSharingGrants(ctx context.Context, diskPath string) (bool, error) {
+	attached, err := attachImage(ctx, diskPath)
+	if err != nil {
+		return false, err
+	}
+
+	mnt, err := os.MkdirTemp(filepath.Dir(diskPath), "tcc-")
+	if err != nil {
+		return false, errors.Join(err, releaseGuestDisk(ctx, attached, ""))
+	}
+
+	if err := mountData(ctx, attached, mnt); err != nil {
+		_ = os.Remove(mnt)
+		return false, errors.Join(err, releaseGuestDisk(ctx, attached, ""))
+	}
+
+	granted, workErr := grantMissingScreenSharing(ctx, mnt)
+
+	// Release before reporting anything. The grants only reach the image when
+	// the volume is unmounted, and the caller is about to hand this disk to
+	// Virtualization.framework — so a failed release outranks a failed grant.
+	if err := releaseGuestDisk(ctx, attached, mnt); err != nil {
+		return false, errors.Join(workErr, err)
+	}
+	if workErr != nil {
+		return false, workErr
+	}
+	return granted, nil
+}
+
+// grantMissingScreenSharing grants whatever the mounted guest volume is
+// missing, and reports whether it wrote anything.
+func grantMissingScreenSharing(ctx context.Context, mnt string) (bool, error) {
+	granted, err := screenSharingGranted(ctx, mnt)
+	if err != nil || granted {
+		return false, err
+	}
+	if err := grantScreenSharing(ctx, mnt); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// releaseGuestDisk unmounts the guest volume and detaches the image, and
+// reports every failure as ErrGuestDiskBusy.
+//
+// Nothing else releases these: an image attached by vee stays attached for the
+// rest of the login session, and Virtualization.framework cannot open a disk
+// the host's DiskImages driver still owns — so a guest whose disk was left
+// attached fails every start until someone runs `hdiutil detach` by hand.
+// Worse, a live mount point inside the VM directory turns a later
+// `vee delete` into a walk through the guest's own file system.
+//
+// mnt may be empty, for a failure that happened before anything was mounted.
+func releaseGuestDisk(ctx context.Context, attached attachedDisk, mnt string) error {
+	// The release must run even when the start that asked for it was cancelled.
+	ctx = context.WithoutCancel(ctx)
+
+	var errs []error
+	if mnt != "" {
+		if out, err := run(ctx, "umount", mnt); err != nil {
+			errs = append(errs, fmt.Errorf("%w: unmount %s: %v%s", ErrGuestDiskBusy, mnt, err, detail(out)))
+		} else {
+			// An empty directory left behind is untidy, never dangerous.
+			_ = os.Remove(mnt)
+		}
+	}
+	if err := detachImage(ctx, attached); err != nil {
+		errs = append(errs, fmt.Errorf("%w: %v", ErrGuestDiskBusy, err))
+	}
+	return errors.Join(errs...)
 }
 
 // writePayload writes the first-boot payload into the mounted guest volume.
@@ -149,7 +254,8 @@ func rollbackPayload(ctx context.Context, attached attachedDisk, mnt string, fil
 	var errs []error
 	// Undo the privacy grants too: a failed patch must leave the guest's
 	// database as it was found.
-	if err := dropPrivacyGrants(ctx, mnt, opts); err != nil && !errors.Is(err, errNoTCCDB) {
+	if err := dropPrivacyGrants(ctx, mnt, opts); err != nil &&
+		!errors.Is(err, ErrNoTCCDB) && !errors.Is(err, ErrUnknownTCCSchema) {
 		errs = append(errs, err)
 	}
 	for _, f := range files {

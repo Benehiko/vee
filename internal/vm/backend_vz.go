@@ -3,6 +3,7 @@ package vm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"github.com/Benehiko/vee/internal/backend"
 	"github.com/Benehiko/vee/internal/platform"
 	"github.com/Benehiko/vee/internal/qemu"
+	"github.com/Benehiko/vee/internal/vzfirstboot"
 	"github.com/Benehiko/vee/internal/vzhelper"
 )
 
@@ -130,6 +132,9 @@ func (m *Manager) buildVZMachine(_ context.Context, cfg *VMConfig) (backend.Mach
 		vmDir:      vmDir,
 		helperPath: helperPath,
 		mac:        cfg.NIC.MAC,
+		// disks[0] is the boot disk; Validate above rejects an empty list.
+		diskPath: disks[0].Path,
+		cfg:      cfg,
 	}, nil
 }
 
@@ -143,6 +148,61 @@ type vzMachine struct {
 	// mac is the guest NIC address, used to snapshot its DHCP lease before
 	// the guest can boot.
 	mac string
+	// diskPath and cfg drive the start-time Screen Sharing grant, which
+	// rewrites cfg once it succeeds so later starts skip it.
+	diskPath string
+	cfg      *VMConfig
+}
+
+// ensureScreenSharingGrants is a seam so the retry state machine can be tested
+// without a guest disk to attach.
+var ensureScreenSharingGrants = vzfirstboot.EnsureScreenSharingGrants
+
+// grantScreenSharing authorizes the guest's screen-sharing agent while the
+// disk is still idle, if provisioning could not: macOS creates the privacy
+// database vee writes into on the guest's first boot, not during the restore,
+// so the grant has to be retried later than the patch that asked for it.
+//
+// Every failure is survivable — the guest boots either way, and only Screen
+// Sharing is affected — so nothing here fails a start.
+func (v *vzMachine) grantScreenSharing(ctx context.Context) error {
+	if v.cfg.MacOS == nil || !v.cfg.MacOS.ScreenSharingGrantPending {
+		return nil
+	}
+	log := v.manager.provider.Logger()
+	granted, err := ensureScreenSharingGrants(ctx, v.diskPath)
+	switch {
+	case errors.Is(err, vzfirstboot.ErrGuestDiskBusy):
+		// The only failure that must stop the start: booting a disk the host
+		// still has attached fails in Virtualization.framework anyway, and a
+		// mount left inside the VM directory is worse than a failed start.
+		return fmt.Errorf("%w\nRun `hdiutil detach` on the guest disk (%s), then start the VM again", err, v.diskPath)
+	case errors.Is(err, vzfirstboot.ErrNoTCCDB):
+		// The normal state until the guest has booted once.
+		log.Debug("vz: guest has no privacy database yet; Screen Sharing will be authorized at a later start",
+			zap.String("vm", v.name))
+		return nil
+	case errors.Is(err, vzfirstboot.ErrUnknownTCCSchema):
+		// Never resolves on its own, so stop attaching the disk for it.
+		log.Warn("vz: this guest's privacy database is not one vee recognizes; enable Screen Sharing from the guest's System Settings",
+			zap.String("vm", v.name), zap.Error(err))
+	case err != nil:
+		log.Warn("vz: could not authorize Screen Sharing in the guest",
+			zap.String("vm", v.name), zap.Error(err))
+		return nil
+	case granted:
+		log.Info("vz: authorized Screen Sharing in the guest",
+			zap.String("vm", v.name))
+	}
+
+	// Stop attaching the disk at every start, now that there is nothing left to
+	// write. A failed record only costs one redundant check next time.
+	v.cfg.MacOS.ScreenSharingGrantPending = false
+	if err := v.manager.saveConfig(v.cfg); err != nil {
+		log.Warn("vz: could not record that Screen Sharing needs no further attempt",
+			zap.String("vm", v.name), zap.Error(err))
+	}
+	return nil
 }
 
 func (v *vzMachine) StartDetached(ctx context.Context) (*backend.StartResult, error) {
@@ -160,6 +220,10 @@ func (v *vzMachine) StartDetached(ctx context.Context) (*backend.StartResult, er
 		zap.String("machine", v.name),
 		zap.String("binary", v.helperPath),
 		zap.String("vm_dir", v.vmDir))
+
+	if err := v.grantScreenSharing(ctx); err != nil {
+		return nil, err
+	}
 
 	// Snapshot the guest's DHCP-lease expiry before the VM can possibly boot:
 	// readiness is "the lease expiry advanced past this", and a guest can

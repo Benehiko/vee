@@ -123,6 +123,13 @@ type MacOSConfig struct {
 	AuxiliaryStorage  string `yaml:"auxiliary_storage"  json:"auxiliary_storage"`
 	HardwareModel     []byte `yaml:"hardware_model"     json:"hardware_model"`
 	MachineIdentifier []byte `yaml:"machine_identifier" json:"machine_identifier"`
+	// ScreenSharingGrantPending records that vee owes this guest the privacy
+	// grants its Screen Sharing service needs. Provisioning cannot write them:
+	// macOS creates the database they live in on the guest's first boot, and a
+	// restored guest has never booted. So provisioning sets this, and every
+	// start retries the grant while the disk is idle, clearing the flag once it
+	// lands — a granted guest never attaches its disk again.
+	ScreenSharingGrantPending bool `yaml:"screen_sharing_grant_pending,omitempty" json:"screen_sharing_grant_pending,omitempty"`
 	// Display sizes the mandatory guest display; zero values pick defaults.
 	DisplayWidthPx  int64 `yaml:"display_width_px,omitempty"  json:"display_width_px,omitempty"`
 	DisplayHeightPx int64 `yaml:"display_height_px,omitempty" json:"display_height_px,omitempty"`
