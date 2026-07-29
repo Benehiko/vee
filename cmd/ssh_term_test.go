@@ -51,3 +51,20 @@ func TestSSHEnvOverridesUnknownTermForVZOnly(t *testing.T) {
 		t.Errorf("known TERM was rewritten: %v", got)
 	}
 }
+
+func TestSSHEnvReadsTermFromItsArgument(t *testing.T) {
+	// Regression test: sshEnv read TERM from the process environment, so it
+	// silently did nothing wherever TERM is unset — including CI, which is
+	// where it was caught.
+	t.Setenv("TERM", "")
+	got := sshEnv([]string{"TERM=xterm-ghostty"}, true)
+	if !slices.Contains(got, "TERM=xterm-256color") {
+		t.Errorf("TERM from the argument was ignored: %v", got)
+	}
+
+	// And with no TERM in the argument there is nothing to fix up.
+	t.Setenv("TERM", "xterm-ghostty")
+	if got := sshEnv([]string{"PATH=/usr/bin"}, true); !slices.Equal(got, []string{"PATH=/usr/bin"}) {
+		t.Errorf("process TERM leaked into the result: %v", got)
+	}
+}

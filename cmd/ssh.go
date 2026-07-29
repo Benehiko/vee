@@ -148,7 +148,12 @@ func sshEnv(env []string, vzGuest bool) []string {
 	if !vzGuest {
 		return env
 	}
-	term := os.Getenv("TERM")
+	term := ""
+	for _, kv := range env {
+		if v, ok := strings.CutPrefix(kv, "TERM="); ok {
+			term = v
+		}
+	}
 	if term == "" || knownToMacOSTerminfo(term) {
 		return env
 	}
