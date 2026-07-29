@@ -620,6 +620,20 @@ func init() {
 			"macos\tmacOS guest via Virtualization.framework (Apple Silicon hosts)",
 		}, cobra.ShellCompDirectiveNoFileComp
 	})
+	_ = createCmd.RegisterFlagCompletionFunc("ipsw", func(_ *cobra.Command, _ []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		// The value is either the literal "latest" or a path to a restore
+		// image. Once it starts to look like a path, narrow file completion to
+		// .ipsw rather than offering every file on the host.
+		if strings.ContainsAny(toComplete, "/.~") {
+			return []string{"ipsw"}, cobra.ShellCompDirectiveFilterFileExt
+		}
+		return []string{"latest\tthe newest restore image this host can install"},
+			cobra.ShellCompDirectiveNoFileComp
+	})
+	_ = createCmd.RegisterFlagCompletionFunc("macosvm-dir", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+		// A macosvm bundle is a directory (disk image, aux storage, macosvm.json).
+		return nil, cobra.ShellCompDirectiveFilterDirs
+	})
 	_ = createCmd.RegisterFlagCompletionFunc("gpu-vendor", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 		return []string{"amd", "nvidia", "virtio"}, cobra.ShellCompDirectiveNoFileComp
 	})

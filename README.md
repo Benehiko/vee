@@ -1,6 +1,8 @@
 # vee
 
-A command-line VM manager built on QEMU/KVM. Create, start, SSH into, and monitor virtual machines from a single lightweight tool — with GPU passthrough, virtiofs sharing, SPICE display, and SSH tunnelling wired in.
+A command-line VM manager built on QEMU/KVM, and on Apple's Virtualization.framework for macOS guests. Create, start, SSH into, and monitor virtual machines from a single lightweight tool — with GPU passthrough, virtiofs sharing, SPICE display, and SSH tunnelling wired in.
+
+The backend is a per-VM choice, independent of the guest OS. Every guest runs on QEMU except macOS guests, which run on Virtualization.framework because QEMU's experimental macOS machine does not work on current macOS hosts.
 
 ```sh
 vee create myvm    # create an Ubuntu 24.04 server VM
@@ -21,7 +23,9 @@ vee stop myvm      # graceful shutdown
 
 > **Prerequisites:** KVM access, bridge networking, disk group membership, and OVMF firmware. See [docs/prerequisites.md](docs/prerequisites.md).
 >
-> **macOS (Apple Silicon):** vee also runs on Apple Silicon Macs via Hypervisor.framework (HVF) with aarch64 guests and accelerated virtio-gpu. See [docs/macos.md](docs/macos.md) for setup, the per-guest GPU matrix, and limitations.
+> **macOS as a host (Apple Silicon):** vee runs on Apple Silicon Macs, driving QEMU through Hypervisor.framework (HVF) with aarch64 guests. GPU acceleration is the weak spot — the published QEMU bundle is a plain-HVF build, because the pinned QEMU and the only macOS-patched virglrenderer cannot currently be compiled together. See [docs/macos.md](docs/macos.md) for setup, the per-guest GPU matrix, and limitations.
+>
+> **macOS as a guest (Apple Silicon):** vee can also restore and run a macOS VM — `vee create mymac --template macos` — on Apple's Virtualization.framework. This is a different thing from the note above, and it needs the `vee-vz-helper` binary, which ships beside `vee` in the `darwin-arm64` release tarball or can be built from a checkout with `make vz-helper` (`make install` alone does not build it). Apple's licence permits macOS VMs only on Apple hardware and at most two at a time. See [macOS guests](https://vee.benehiko.com/getting-started/macos-guests/) or [docs/macos.md](docs/macos.md#macos-guests-virtualizationframework).
 >
 > **Windows:** vee also runs on Windows (amd64) via the Windows Hypervisor Platform (WHPX) with x86-64 guests. VFIO, virtiofs, vsock, bridge networking, and swtpm are Linux-only and degrade gracefully. See [docs/windows.md](docs/windows.md) for prerequisites and limitations.
 
@@ -45,6 +49,7 @@ Templates apply sane defaults (memory, CPUs, disks, networking, cloud-init) auto
 | `windows` | Windows · UEFI secure boot · TPM 2.0 |
 | `docker` | Alpine Linux · Docker daemon on `tcp://localhost:2375` |
 | `github-runner` | Self-hosted Actions runner · outbound HTTPS long-polling |
+| `macos` | macOS guest on Apple's Virtualization.framework · 8G / 4 CPUs · Apple Silicon hosts only · restores from an IPSW or imports a [macosvm](https://github.com/s-u/macosvm) bundle |
 
 ```sh
 vee create mynas --template truenas \
@@ -72,6 +77,7 @@ vee pull ubuntu            # newest known Ubuntu cloud image
 vee pull ubuntu 22.04      # a specific version
 vee pull ubuntu-24.04      # same, as a single token
 vee pull windows win10     # build the Windows 10 ISO (see below)
+vee pull macos             # newest macOS restore image this host can install
 vee pull --list            # list every supported distro and version
 ```
 
@@ -86,6 +92,7 @@ Both the distro and `distro-version` forms shell-complete from the built-in list
 | `bazzite` | Fedora Atomic gaming ISO |
 | `truenas` | TrueNAS SCALE installer ISO |
 | `windows` | Built on demand — `win11`, `win10`, `server2025`, `server2022` |
+| `macos` | Restore image (IPSW, 15-20 GB) — `latest` asks the host which image it can install; an `https://…ipsw` URL from [ipsw.me](https://ipsw.me/product/Mac/) pins an older one · Apple Silicon macOS hosts only |
 
 ### Windows ISOs
 
@@ -203,7 +210,7 @@ See [docs/gpu-passthrough-gaming.md](docs/gpu-passthrough-gaming.md) for Sunshin
 | Command | Description |
 |---------|-------------|
 | `vee create <name>` | Provision a new VM |
-| `vee pull <distro> [version]` | Download or build a base image into the cache |
+| `vee pull <distro> [version]` | Download or build a base image into the cache (`vee pull macos` fetches a macOS restore image) |
 | `vee start <name>` | Boot a VM (detached by default) |
 | `vee stop <name>` | Graceful shutdown |
 | `vee list` | List all VMs and status |
@@ -213,10 +220,10 @@ See [docs/gpu-passthrough-gaming.md](docs/gpu-passthrough-gaming.md) for Sunshin
 | `vee tunnel <name> [service]` | List VM services, or open/connect to one |
 | `vee ports <name>` | List bound TCP ports and process names in a running VM |
 | `vee ip <name>` | Show a VM's IP addresses (guest agent, or host lease/ARP tables by MAC) |
-| `vee logs <name>` | Stream QEMU output |
+| `vee logs <name>` | Stream QEMU output, or the helper log for a macOS guest |
 | `vee monitor <name>` | Real-time CPU / memory / disk / network stats |
 | `vee qmp <name> <command>` | Send a QMP (QEMU Machine Protocol) command to a running VM |
-| `vee view <name>` | Open or connect to a VM's display (SPICE or GPU) |
+| `vee view <name>` | Open or connect to a VM's display (SPICE, GPU, or Screen Sharing for a macOS guest) |
 | `vee config <name>` | Edit a VM's configuration in an interactive TUI |
 | `vee check <name>` | Run health checks on an installed VM |
 | `vee backup <name>` | Back up directories from a running VM |
@@ -237,6 +244,12 @@ See [docs/gpu-passthrough-gaming.md](docs/gpu-passthrough-gaming.md) for Sunshin
 | `vee runner snapshot <name>` | Persist a runner's credentials to the host (encrypted) |
 | `vee version` | Print version, commit, and build date |
 
+Some of these are QEMU-only, because they are built on QEMU interfaces a macOS
+guest has no equivalent of: `vee monitor`, `vee qmp` and the dashboard's live
+stats need QMP, and `vee check` and `vee ports` need the QEMU guest agent. See
+[macOS guests](https://vee.benehiko.com/getting-started/macos-guests/) for the
+full matrix of what that backend supports.
+
 ## Shell completion
 
 ```sh
@@ -255,6 +268,12 @@ make build   # build the vee binary
 make test    # go test -race ./...
 ```
 
+On an Apple Silicon Mac, `make vz-helper` builds `vee-vz-helper` — the binary that
+hosts macOS guests — and installs it beside `vee` in `~/.vee/bin`. It needs cgo
+(the Virtualization.framework bindings are Objective-C) and is ad-hoc codesigned
+with the `com.apple.security.virtualization` entitlement, which macOS honours
+without a paid Apple Developer account. Only `--template macos` needs it.
+
 Formatting (`gofumpt` + `goimports`) and linting are enforced by a strict
 `.golangci.yml`. `make lint` runs `golangci-lint fmt --diff` (fails on any
 unformatted code) followed by `golangci-lint run`; run `make fmt` to fix
@@ -271,7 +290,7 @@ Pushing a `v*` tag triggers the release workflow
 ([.github/workflows/release.yml](.github/workflows/release.yml)):
 
 ```sh
-git tag v0.4.0
+git tag -s v0.4.0
 git push origin v0.4.0
 ```
 
@@ -279,9 +298,18 @@ It cross-compiles the `vee` binary for every supported host — `linux/amd64`,
 `linux/arm64`, `darwin/amd64`, `darwin/arm64`, `windows/amd64` — with the tag,
 commit, and build date injected via `-ldflags` (so `vee version` reports the
 release identity). Each build is packaged as a `.tar.gz` (binary + `LICENSE` +
-`README.md` + `THIRD_PARTY_LICENSES`) alongside a `.sha256` checksum, and a
-GitHub Release is published whose body lists the commits since the previous tag.
+`README.md` + `THIRD_PARTY_LICENSES`), published twice with a `.sha256` beside
+each: `vee-<tag>-<os>-<arch>.tar.gz` and an unversioned `vee-<os>-<arch>.tar.gz`,
+so install docs can use a stable `releases/latest/download/…` URL. A GitHub
+Release is published whose body lists the commits since the previous tag.
 Tags containing a hyphen (e.g. `v0.4.0-rc1`) are marked as pre-releases.
+
+The `darwin/arm64` archive additionally contains `vee-vz-helper`, built with cgo
+and ad-hoc codesigned in the workflow; the release fails if the
+`com.apple.security.virtualization` entitlement did not land, since macOS would
+refuse to run the helper without it. When `docs/release-notes/<tag>.md` exists it
+is prepended to the release body, so a release whose story is larger than its
+commit subjects can lead with the story.
 
 On Windows, VFIO passthrough, virtiofs, vsock, swtpm, bridge networking, and the
 systemd daemon are Linux-only and degrade gracefully; the binary runs x86-64
@@ -296,13 +324,21 @@ host QEMU packages. Full step-by-step instructions (Linux, macOS, Windows) plus
 how to run vee as a daemon are in the
 [Installation guide](https://vee.benehiko.com/getting-started/installation/).
 
+Apple Silicon users who want macOS guests should install the tarball's second
+binary, `vee-vz-helper`, into the same directory as `vee` (vee also accepts an
+explicit path in `$VEE_VZ_HELPER`, and falls back to `~/.vee/bin` and `$PATH`).
+A browser download arrives quarantined, which Gatekeeper would refuse to run;
+vee clears that flag itself every time it resolves the helper, re-signing only if
+the signature is missing the entitlement. No other platform ships the helper, and
+no other guest needs it.
+
 ## Docs
 
 The full documentation site is published at **<https://vee.benehiko.com/>**. Deep-dive
 docs also live in this repo:
 
 - [docs/prerequisites.md](docs/prerequisites.md) — system setup, groups, bridge networking, OVMF
-- [docs/macos.md](docs/macos.md) — macOS (Apple Silicon / HVF) host support and the per-guest GPU matrix
+- [docs/macos.md](docs/macos.md) — macOS on Apple Silicon: HVF host support, the per-guest GPU matrix, and macOS guests on Virtualization.framework
 - [docs/windows.md](docs/windows.md) — Windows (WHPX) host support, feature matrix, and the nested-virtualization limitation
 - [docs/windows-guests.md](docs/windows-guests.md) — the on-demand Windows guest ISO build pipeline
 - [docs/windows-24h2-install.md](docs/windows-24h2-install.md) — full writeup of the Windows 11 24H2 install debugging

@@ -1,11 +1,18 @@
 # macOS (Apple Silicon) support
 
-vee can run QEMU virtual machines on an Apple Silicon Mac using the
-**Hypervisor.framework (HVF)** accelerator. This document covers how the macOS
-host port works, how to get GPU acceleration inside the guest, and the honest
-limitations of each path.
+This document covers both of vee's macOS stories, which are unrelated to each
+other:
 
-> **Scope.** Apple Silicon (arm64) hosts are the supported target. Intel Macs may
+1. **macOS as a host** — running QEMU virtual machines on an Apple Silicon Mac
+   through the **Hypervisor.framework (HVF)** accelerator. How the host port
+   works, how to get GPU acceleration inside the guest, and the honest
+   limitations of each path. That is everything up to "macOS guests" below.
+2. **macOS as a guest** — running a macOS VM on Apple's
+   **Virtualization.framework**, a second backend with its own helper binary.
+   See [macOS guests (Virtualization.framework)](#macos-guests-virtualizationframework).
+
+> **Scope.** Both stories need an Apple Silicon (arm64) host; macOS guests
+> require one, since Apple only permits macOS VMs on Apple hardware. Intel Macs may
 > work but are not actively tested. VFIO GPU passthrough, virtiofs, vhost-vsock,
 > swtpm, and bridge networking are Linux-host features and are unavailable on
 > macOS — vee degrades gracefully (warns and falls back) rather than emitting
