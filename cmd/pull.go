@@ -32,6 +32,8 @@ Accepted argument forms:
   vee pull ubuntu 24.04         — a specific version
   vee pull ubuntu-24.04         — same, as a single token
   vee pull windows win10        — build the Windows 10 ISO
+  vee pull macos                — the newest macOS restore image this host can
+                                  install (Apple Silicon; ~15-20 GB IPSW)
   vee pull --list               — list every pullable image
 
 Run 'vee pull --list' to see all supported distros and versions.`,
