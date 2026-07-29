@@ -23,9 +23,9 @@ vee stop myvm      # graceful shutdown
 
 > **Prerequisites:** KVM access, bridge networking, disk group membership, and OVMF firmware. See [docs/prerequisites.md](docs/prerequisites.md).
 >
-> **macOS as a host (Apple Silicon):** vee runs on Apple Silicon Macs, driving QEMU through Hypervisor.framework (HVF) with aarch64 guests and accelerated virtio-gpu. See [docs/macos.md](docs/macos.md) for setup, the per-guest GPU matrix, and limitations.
+> **macOS as a host (Apple Silicon):** vee runs on Apple Silicon Macs, driving QEMU through Hypervisor.framework (HVF) with aarch64 guests. GPU acceleration is the weak spot — the published QEMU bundle is a plain-HVF build, because the pinned QEMU and the only macOS-patched virglrenderer cannot currently be compiled together. See [docs/macos.md](docs/macos.md) for setup, the per-guest GPU matrix, and limitations.
 >
-> **macOS as a guest (Apple Silicon):** vee can also restore and run a macOS VM — `vee create mymac --template macos` — on Apple's Virtualization.framework. This is a different thing from the note above, and it needs the `vee-vz-helper` binary that ships beside `vee` in the `darwin-arm64` release tarball. Apple's licence permits macOS VMs only on Apple hardware and at most two at a time. See [macOS guests](https://vee.benehiko.com/getting-started/macos-guests/) or [docs/macos.md](docs/macos.md#macos-guests-virtualizationframework).
+> **macOS as a guest (Apple Silicon):** vee can also restore and run a macOS VM — `vee create mymac --template macos` — on Apple's Virtualization.framework. This is a different thing from the note above, and it needs the `vee-vz-helper` binary, which ships beside `vee` in the `darwin-arm64` release tarball or can be built from a checkout with `make vz-helper` (`make install` alone does not build it). Apple's licence permits macOS VMs only on Apple hardware and at most two at a time. See [macOS guests](https://vee.benehiko.com/getting-started/macos-guests/) or [docs/macos.md](docs/macos.md#macos-guests-virtualizationframework).
 >
 > **Windows:** vee also runs on Windows (amd64) via the Windows Hypervisor Platform (WHPX) with x86-64 guests. VFIO, virtiofs, vsock, bridge networking, and swtpm are Linux-only and degrade gracefully. See [docs/windows.md](docs/windows.md) for prerequisites and limitations.
 
@@ -77,6 +77,7 @@ vee pull ubuntu            # newest known Ubuntu cloud image
 vee pull ubuntu 22.04      # a specific version
 vee pull ubuntu-24.04      # same, as a single token
 vee pull windows win10     # build the Windows 10 ISO (see below)
+vee pull macos             # newest macOS restore image this host can install
 vee pull --list            # list every supported distro and version
 ```
 
@@ -91,6 +92,7 @@ Both the distro and `distro-version` forms shell-complete from the built-in list
 | `bazzite` | Fedora Atomic gaming ISO |
 | `truenas` | TrueNAS SCALE installer ISO |
 | `windows` | Built on demand — `win11`, `win10`, `server2025`, `server2022` |
+| `macos` | Restore image (IPSW, 15-20 GB) — `latest` asks the host which image it can install; an `https://…ipsw` URL from [ipsw.me](https://ipsw.me/product/Mac/) pins an older one · Apple Silicon macOS hosts only |
 
 ### Windows ISOs
 
@@ -242,6 +244,12 @@ See [docs/gpu-passthrough-gaming.md](docs/gpu-passthrough-gaming.md) for Sunshin
 | `vee runner snapshot <name>` | Persist a runner's credentials to the host (encrypted) |
 | `vee version` | Print version, commit, and build date |
 
+Some of these are QEMU-only, because they are built on QEMU interfaces a macOS
+guest has no equivalent of: `vee monitor`, `vee qmp` and the dashboard's live
+stats need QMP, and `vee check` and `vee ports` need the QEMU guest agent. See
+[macOS guests](https://vee.benehiko.com/getting-started/macos-guests/) for the
+full matrix of what that backend supports.
+
 ## Shell completion
 
 ```sh
@@ -290,8 +298,10 @@ It cross-compiles the `vee` binary for every supported host — `linux/amd64`,
 `linux/arm64`, `darwin/amd64`, `darwin/arm64`, `windows/amd64` — with the tag,
 commit, and build date injected via `-ldflags` (so `vee version` reports the
 release identity). Each build is packaged as a `.tar.gz` (binary + `LICENSE` +
-`README.md` + `THIRD_PARTY_LICENSES`) alongside a `.sha256` checksum, and a
-GitHub Release is published whose body lists the commits since the previous tag.
+`README.md` + `THIRD_PARTY_LICENSES`), published twice with a `.sha256` beside
+each: `vee-<tag>-<os>-<arch>.tar.gz` and an unversioned `vee-<os>-<arch>.tar.gz`,
+so install docs can use a stable `releases/latest/download/…` URL. A GitHub
+Release is published whose body lists the commits since the previous tag.
 Tags containing a hyphen (e.g. `v0.4.0-rc1`) are marked as pre-releases.
 
 The `darwin/arm64` archive additionally contains `vee-vz-helper`, built with cgo
