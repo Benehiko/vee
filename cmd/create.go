@@ -3,6 +3,7 @@ package cmd
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
+	"github.com/Benehiko/vee/internal/backend"
 	"github.com/Benehiko/vee/internal/blockdev"
 	"github.com/Benehiko/vee/internal/gpu"
 	"github.com/Benehiko/vee/internal/images"
@@ -322,6 +324,13 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
 			if err := runStartSpinner(cmd, mgr, name); err != nil {
 				return err
 			}
+			// A macOS guest cannot be granted its Screen Sharing permissions
+			// until it has booted once, because macOS only creates the privacy
+			// database those grants live in during that boot. Complete the cycle
+			// here rather than leaving the user to discover that a brand-new
+			// guest refuses every Screen Sharing session.
+			authorizeGuestScreenSharing(cmd, mgr, name)
+
 			// For a freshly-registered runner, capture its credentials to the
 			// host so a later `vee create --reinstall` can restore them. A
 			// restore run already has the creds, so skip. Best-effort: a
@@ -333,6 +342,60 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
 		}
 		return nil
 	},
+}
+
+// authorizeGuestScreenSharing finishes the two-boot cycle a macOS guest needs
+// before Screen Sharing works: wait for provisioning to complete inside the
+// guest, then stop and start it, which is where vee writes the grants.
+//
+// It is best-effort and never fails the create. The guest is already installed
+// and running by this point, SSH works regardless, and any later `vee start`
+// retries the grant — so a guest that was slow to provision, or unreachable,
+// costs the user one restart rather than a failed create.
+func authorizeGuestScreenSharing(cmd *cobra.Command, mgr *vm.Manager, name string) {
+	cfg, err := mgr.LoadConfig(name)
+	if err != nil || cfg.BackendName() != backend.VZ || cfg.MacOS == nil || !cfg.MacOS.ScreenSharingGrantPending {
+		return
+	}
+
+	fmt.Println("Authorizing Screen Sharing in the guest (macOS only creates the privacy database this needs on the first boot, so the guest is restarted once)...")
+	out, err := mgr.AuthorizeScreenSharing(cmd.Context(), name, func(step string) {
+		fmt.Printf("  %s\n", step)
+	})
+	reportScreenSharing(name, out, err)
+}
+
+// reportScreenSharing tells the user what the create-time grant achieved. Each
+// outcome needs its own words: the guest may have been left stopped, the grant
+// may be deferred to a later start, or vee may have given up on this guest for
+// good — and a single "it did not work" message for all three would send the
+// user looking in the wrong place.
+func reportScreenSharing(name string, out vm.ScreenSharingOutcome, err error) {
+	switch {
+	case errors.Is(err, vm.ErrGuestLeftStopped):
+		// The worst outcome to get wrong: the user asked for a running VM.
+		fmt.Fprintf(os.Stderr, "Warning: %v\n"+
+			"The guest is installed and provisioned but is NOT running. Start it with `vee start %s`, "+
+			"which also authorizes Screen Sharing.\n", err, name)
+	case err != nil && !out.GuestRunning:
+		fmt.Fprintf(os.Stderr, "Warning: %v\n"+
+			"The guest is not running — check `vee status %s`, then `vee start %s`.\n", err, name, name)
+	case err != nil:
+		// The guest is up either way; only Screen Sharing is deferred.
+		fmt.Fprintf(os.Stderr, "Warning: Screen Sharing is not authorized yet: %v\n"+
+			"The guest is running. Its provisioning log is /var/log/vee-firstboot.log inside the guest "+
+			"(reachable with `vee ssh %s` once provisioning finishes), and vee's own log is ~/.vee/logs/vee.log. "+
+			"Screen Sharing is authorized by the next `vee start %s`.\n", err, name, name)
+	case out.Unsupported:
+		fmt.Fprintf(os.Stderr, "Warning: this guest's privacy database is not one vee recognizes, so it cannot authorize "+
+			"Screen Sharing (see ~/.vee/logs/vee.log). Enable Screen Sharing inside the guest instead; "+
+			"`vee ssh %s` is unaffected.\n", name)
+	case !out.Granted:
+		fmt.Fprintf(os.Stderr, "Warning: Screen Sharing is not authorized yet — see ~/.vee/logs/vee.log. "+
+			"The next `vee start %s` retries it.\n", name)
+	default:
+		fmt.Println("Screen Sharing is authorized: `vee view " + name + "`")
+	}
 }
 
 // snapshotRunnerCreds polls the freshly-started runner until config.sh has

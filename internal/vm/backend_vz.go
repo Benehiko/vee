@@ -183,9 +183,11 @@ func (v *vzMachine) grantScreenSharing(ctx context.Context) error {
 			zap.String("vm", v.name))
 		return nil
 	case errors.Is(err, vzfirstboot.ErrUnknownTCCSchema):
-		// Never resolves on its own, so stop attaching the disk for it.
+		// Never resolves on its own, so stop attaching the disk for it — and
+		// record why, so nothing downstream reports this guest as authorized.
 		log.Warn("vz: this guest's privacy database is not one vee recognizes; enable Screen Sharing from the guest's System Settings",
 			zap.String("vm", v.name), zap.Error(err))
+		v.cfg.MacOS.ScreenSharingUnsupported = true
 	case err != nil:
 		log.Warn("vz: could not authorize Screen Sharing in the guest",
 			zap.String("vm", v.name), zap.Error(err))
