@@ -337,8 +337,8 @@ key.
 
 ### Caveats
 
-- **Screen Sharing works from the second boot of a guest vee provisioned,**
-  because vee has to write its privacy grants offline and the database it
+- **Screen Sharing needs the guest to boot twice, which `vee create` does for
+  you,** because vee has to write its privacy grants offline and the database it
   writes into does not exist any earlier. (An imported or `--skip-first-boot`
   guest gets no grants at all — see below.) Enabling the service leaves the
   guest listening on 5900
@@ -360,10 +360,23 @@ key.
   attaches its disk again; measured on a macOS 26 guest, that
   attach-mount-write-detach cycle costs about 1.7 s of start time.
 
-  In practice the guest has to be stopped and started once: `vee create`
-  restores it and boots it, `vee ssh` works immediately, and the next
-  `vee start` after a `vee stop` writes the grants, so `vee view` works from
-  that boot onwards.
+  So the guest has to boot twice, and `vee create` completes that cycle itself
+  rather than leaving it to be discovered: it waits for the guest's provisioning
+  script to write `/var/db/.vee-firstboot-done` (probed over SSH, up to six
+  minutes — the wait exists because stopping a guest mid-provisioning would
+  leave it without the account and key it is being given), then stops the guest,
+  starts it — which is where the grants are written — and waits for it to be
+  ready again before claiming anything. `vee view` works when create returns.
+  `--no-start` skips the cycle, so those guests get their grants at the second
+  `vee start`.
+
+  The step is best-effort: the guest is already installed, so nothing here fails
+  a create. Each outcome is reported in its own words, because they send the
+  user to different places — provisioning that did not finish in time (with what
+  the last probe actually saw), a restart that failed and left the guest
+  stopped, a privacy database vee does not recognize (recorded as
+  `macos.screen_sharing_unsupported` and never retried), or a grant simply
+  deferred to the next start.
 
   Scope is deliberately narrow: three rows for one client, removed again if
   provisioning rolls back, and nothing written at all when Screen Sharing was

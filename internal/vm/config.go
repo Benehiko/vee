@@ -130,6 +130,11 @@ type MacOSConfig struct {
 	// start retries the grant while the disk is idle, clearing the flag once it
 	// lands — a granted guest never attaches its disk again.
 	ScreenSharingGrantPending bool `yaml:"screen_sharing_grant_pending,omitempty" json:"screen_sharing_grant_pending,omitempty"`
+	// ScreenSharingUnsupported records that vee gave up authorizing Screen
+	// Sharing because the guest's privacy database is not one it can write.
+	// That never becomes writable, so the grant is not retried — and callers
+	// must not read the cleared pending flag above as "authorized".
+	ScreenSharingUnsupported bool `yaml:"screen_sharing_unsupported,omitempty" json:"screen_sharing_unsupported,omitempty"`
 	// Display sizes the mandatory guest display; zero values pick defaults.
 	DisplayWidthPx  int64 `yaml:"display_width_px,omitempty"  json:"display_width_px,omitempty"`
 	DisplayHeightPx int64 `yaml:"display_height_px,omitempty" json:"display_height_px,omitempty"`
