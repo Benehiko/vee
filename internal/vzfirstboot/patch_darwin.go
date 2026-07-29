@@ -81,6 +81,18 @@ func Patch(ctx context.Context, diskPath string, opts Options) (*Result, error) 
 		return nil, err
 	}
 
+	// Authorize the screen-sharing agent while the volume is still mounted.
+	// Enabling the service alone leaves the guest listening but refusing every
+	// session, and the alternative remedy needs a GUI session a headless guest
+	// cannot offer.
+	if err := applyPrivacyGrants(ctx, mnt, opts); err != nil {
+		if !errors.Is(err, errNoTCCDB) {
+			return nil, err
+		}
+		fmt.Fprintf(os.Stderr, "warning: could not authorize Screen Sharing in the guest (%v); "+
+			"enable it from the guest's System Settings if you need its screen\n", err)
+	}
+
 	if out, err := run(ctx, "umount", mnt); err != nil {
 		return nil, fmt.Errorf("unmount guest data volume: %w\n%s", err, out)
 	}
@@ -93,7 +105,7 @@ func Patch(ctx context.Context, diskPath string, opts Options) (*Result, error) 
 		// A half-patched guest is worse than an unpatched one: the Setup
 		// Assistant marker is already in place, so the guest would boot to a
 		// login window with no account. Undo the payload.
-		if rollbackErr := rollbackPayload(context.WithoutCancel(ctx), attached, mnt, written); rollbackErr != nil {
+		if rollbackErr := rollbackPayload(context.WithoutCancel(ctx), attached, mnt, written, opts); rollbackErr != nil {
 			return nil, fmt.Errorf("%w (and rolling the guest changes back failed: %v — the guest may boot to a login window with no usable account; delete and recreate it)", err, rollbackErr)
 		}
 		return nil, err
@@ -127,13 +139,18 @@ func writePayload(mnt, script string) ([]payloadFile, error) {
 
 // rollbackPayload removes everything the patch wrote, so a failed patch
 // leaves the guest as the restore left it: booting into Setup Assistant.
-func rollbackPayload(ctx context.Context, attached attachedDisk, mnt string, files []payloadFile) error {
+func rollbackPayload(ctx context.Context, attached attachedDisk, mnt string, files []payloadFile, opts Options) error {
 	if err := mountData(ctx, attached, mnt); err != nil {
 		return err
 	}
 	defer func() { _, _ = run(ctx, "umount", mnt) }()
 
 	var errs []error
+	// Undo the privacy grants too: a failed patch must leave the guest's
+	// database as it was found.
+	if err := dropPrivacyGrants(ctx, mnt, opts); err != nil && !errors.Is(err, errNoTCCDB) {
+		errs = append(errs, err)
+	}
 	for _, f := range files {
 		if f.Keep {
 			continue
