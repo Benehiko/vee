@@ -110,11 +110,11 @@ func viewVZ(cmd *cobra.Command, cfg *vm.VMConfig, name string) error {
 	conn, dialErr := dialer.DialContext(cmd.Context(), "tcp", addr)
 	if dialErr != nil {
 		return fmt.Errorf("nothing is listening on %s: %w\n"+
-			"The guest's Screen Sharing service is not reachable yet. A freshly restored guest takes "+
-			"a few minutes on its first boot; after that, enable Screen Sharing inside the guest "+
-			"(System Settings > General > Sharing > Screen Sharing) — note macOS also gates the "+
-			"screen-sharing agent behind privacy permissions a VM cannot grant itself, so SSH "+
-			"(vee ssh %s) may be the more reliable route.\nHelper log: %s", addr, dialErr, name,
+			"The guest's Screen Sharing service is not reachable yet. A freshly restored guest needs "+
+			"a few minutes on its first boot, while the provisioning daemon enables the service. "+
+			"If it stays unreachable, check that provisioning finished (vee ssh %s, then look for "+
+			"/private/var/db/.vee-firstboot-done) — a guest created with --skip-first-boot was never "+
+			"provisioned at all.\nHelper log: %s", addr, dialErr, name,
 			filepath.Join(prov.Config().StoragePath, name, "vz-helper.log"))
 	}
 	_ = conn.Close()
