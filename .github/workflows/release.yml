@@ -134,7 +134,18 @@ jobs:
           # vee releases and would otherwise be picked as the "previous tag",
           # producing a wrong changelog range and compare link.
           PREV="$(git describe --tags --abbrev=0 --match 'v*' "${TAG}^" 2>/dev/null || true)"
+          # An optional hand-written summary, so a release whose story is bigger
+          # than its commit subjects can lead with the story. Commit subjects are
+          # a change log, not release notes: a feature developed over twenty
+          # commits reads as twenty fixes to code nobody has ever run.
+          NOTES="docs/release-notes/${TAG}.md"
           {
+            if [ -f "${NOTES}" ]; then
+              cat "${NOTES}"
+              echo
+              echo "---"
+              echo
+            fi
             echo "## What's changed"
             echo
             if [ -n "${PREV}" ]; then
