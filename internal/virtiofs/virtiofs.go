@@ -95,11 +95,21 @@ func (v *Virtiofsd) Start(ctx context.Context) error {
 	return exec.CommandContext(ctx, binary, v.args()...).Run()
 }
 
-// StartDetached launches virtiofsd as a detached background process and returns its PID.
+// StartDetached launches virtiofsd as a detached background process and returns
+// its PID.
+//
+// The spawn context is deliberately detached from the caller's. virtiofsd has to
+// live as long as the VM it backs — QEMU wires the share as a vhost-user-fs-pci
+// device over a chardev socket with no reconnect, so a virtiofsd that dies takes
+// the guest's mount with it for the rest of the VM's life. exec.CommandContext
+// kills the child when its context is cancelled, and vee's root command cancels
+// its signal context as soon as the command returns, which would SIGKILL
+// virtiofsd the instant `vee start` exited. Setsid does not help: the kill goes
+// to this exact pid, not to the process group.
 func (v *Virtiofsd) StartDetached(ctx context.Context) (int, error) {
 	binary := v.provider.Config().VirtiofsdPath
 	//nolint:gosec // G204: binary is the operator-configured virtiofsd path and args are built from validated struct fields, not untrusted input.
-	cmd := exec.CommandContext(ctx, binary, v.args()...)
+	cmd := exec.CommandContext(context.WithoutCancel(ctx), binary, v.args()...)
 	setDetachAttrs(cmd)
 	if err := cmd.Start(); err != nil {
 		return 0, err
