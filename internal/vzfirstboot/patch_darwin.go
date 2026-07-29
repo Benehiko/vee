@@ -65,12 +65,13 @@ func Patch(ctx context.Context, diskPath string, opts Options) (*Result, error) 
 		}
 	}()
 
-	written, err := writePayload(mnt, script)
+	sudoers := renderSudoers(opts.User)
+	written, err := writePayload(mnt, script, sudoers)
 	if err != nil {
 		// The Setup Assistant marker is written first, so a partial payload
 		// would leave the guest at a login window with no account. Undo it
 		// while the volume is still mounted.
-		for _, f := range payloadFiles(script) {
+		for _, f := range payloadFiles(script, sudoers) {
 			if f.Keep {
 				continue
 			}
@@ -114,8 +115,8 @@ func Patch(ctx context.Context, diskPath string, opts Options) (*Result, error) 
 }
 
 // writePayload writes the first-boot payload into the mounted guest volume.
-func writePayload(mnt, script string) ([]payloadFile, error) {
-	files := payloadFiles(script)
+func writePayload(mnt, script, sudoers string) ([]payloadFile, error) {
+	files := payloadFiles(script, sudoers)
 	for _, f := range files {
 		abs := filepath.Join(mnt, f.Path)
 		if f.Dir {

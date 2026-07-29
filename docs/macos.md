@@ -273,7 +273,7 @@ stop then SIGKILL.
 |---|---|---|
 | VM process | `qemu-system-aarch64` | `vee-vz-helper` |
 | Control channel | QMP unix socket | helper control socket |
-| Graceful stop | `system_powerdown` | `requestStop` |
+| Graceful stop | `system_powerdown` | guest `shutdown -h now` over SSH (macOS ignores `requestStop`) |
 | Disk format | qcow2 (and raw) | raw only |
 | Firmware/boot | OVMF pflash pair | `VZMacOSBootLoader` + auxiliary storage |
 | Guest IP | user-mode hostfwd on 127.0.0.1 | resolved by MAC from host DHCP leases |

@@ -352,7 +352,7 @@ func TestPayloadFilesProtectPassword(t *testing.T) {
 	// unprivileged guest processes; pre-existing directories must survive a
 	// rollback.
 	var sawScript, sawDir bool
-	for _, f := range payloadFiles("#!/bin/sh\n") {
+	for _, f := range payloadFiles("#!/bin/sh\n", renderSudoers("vee")) {
 		if f.Path == scriptPath {
 			sawScript = true
 			if f.Mode.Perm() != 0o700 {
@@ -392,5 +392,47 @@ func TestQuoteAllSkipsBlanks(t *testing.T) {
 	got := quoteAll([]string{"a", "", "  ", "b"})
 	if len(got) != 2 || got[0] != "'a'" || got[1] != "'b'" {
 		t.Errorf("quoteAll = %v", got)
+	}
+}
+
+func TestRenderSudoersGrantsOnlyShutdown(t *testing.T) {
+	got := renderSudoers("vee")
+	if !strings.Contains(got, "vee ALL=(ALL) NOPASSWD: /sbin/shutdown") {
+		t.Errorf("sudoers rule missing or malformed:\n%s", got)
+	}
+	// Nothing else may be granted: this is the guest's only privileged path.
+	for _, forbidden := range []string{"ALL) NOPASSWD: ALL", "NOPASSWD:ALL", "/bin/sh", "/usr/bin/sudo"} {
+		if strings.Contains(got, forbidden) {
+			t.Errorf("sudoers grants more than shutdown (%q):\n%s", forbidden, got)
+		}
+	}
+	if renderSudoers("") != "" {
+		t.Error("no user should mean no sudoers file")
+	}
+}
+
+func TestPayloadIncludesSudoersOnlyWhenRendered(t *testing.T) {
+	withRule := payloadFiles("#!/bin/sh\n", renderSudoers("vee"))
+	var found *payloadFile
+	for i := range withRule {
+		if withRule[i].Path == sudoersPath {
+			found = &withRule[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("sudoers file missing from the payload")
+	}
+	// sudo ignores a rule file that is group- or world-writable.
+	if found.Mode.Perm() != 0o440 {
+		t.Errorf("sudoers mode = %o, want 0440", found.Mode.Perm())
+	}
+	if found.Keep {
+		t.Error("sudoers must be removed on rollback")
+	}
+
+	for _, f := range payloadFiles("#!/bin/sh\n", "") {
+		if f.Path == sudoersPath {
+			t.Error("sudoers file written even though no rule was rendered")
+		}
 	}
 }

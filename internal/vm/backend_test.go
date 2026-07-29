@@ -2,10 +2,14 @@ package vm
 
 import (
 	"context"
+	"database/sql"
 	"strings"
 	"testing"
 
+	"go.uber.org/zap"
+
 	"github.com/Benehiko/vee/internal/backend"
+	"github.com/Benehiko/vee/provider"
 )
 
 func TestVMConfigBackendName(t *testing.T) {
@@ -58,9 +62,28 @@ func TestBuildBackendMachineDispatch(t *testing.T) {
 	}
 }
 
-func TestGracefulShutdownNonQEMUIsNoop(t *testing.T) {
-	// A vz-backend state must not dial QMP (there is nothing to dial yet);
-	// the call must be a safe no-op even on a zero Manager.
-	m := &Manager{}
-	m.gracefulShutdown(context.Background(), "some-vm", &VMState{Backend: "vz", QMPSocket: "/tmp/nope.sock"})
+// testProvider is the minimum a Manager needs to run the code paths below.
+type testProvider struct {
+	cfg *provider.Config
+	log *zap.Logger
+}
+
+func (p *testProvider) Config() *provider.Config { return p.cfg }
+func (p *testProvider) Logger() *zap.Logger      { return p.log }
+func (p *testProvider) DB() *sql.DB              { return nil }
+
+func newTestManager(t *testing.T) *Manager {
+	t.Helper()
+	return NewManager(&testProvider{
+		cfg: &provider.Config{StoragePath: t.TempDir()},
+		log: zap.NewNop(),
+	})
+}
+
+func TestGracefulShutdownVZDoesNotDialQMP(t *testing.T) {
+	// A vz VM must never have its QMP socket dialled — that socket belongs to
+	// another protocol — and the call must survive a VM whose config and guest
+	// are both unreachable, since stop runs on the failure paths too.
+	m := newTestManager(t)
+	m.gracefulShutdown(t.Context(), "no-such-vm", &VMState{Backend: "vz", QMPSocket: "/tmp/nope.sock"})
 }
