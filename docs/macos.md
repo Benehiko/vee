@@ -337,10 +337,18 @@ key.
 
 ### Caveats
 
-- **Screen Sharing may refuse connections.** Since macOS 12.1 the
-  screen-sharing agent needs TCC permissions only device management can grant;
-  a VM cannot grant them to itself. `vee view` probes port 5900 and reports
-  when nothing answers. SSH is the reliable route.
+- **Screen Sharing usually needs one manual step.** Provisioning enables the
+  service and runs ARD's `kickstart`, so the guest listens on 5900, but since
+  macOS 12.1 the agent needs TCC grants that only device management can create.
+  On macOS 26 kickstart reports this itself ("must be enabled from System
+  Settings or via MDM") and a session is refused with "Screen Sharing is not
+  permitted on <host>"; toggling Sharing inside the guest fixes it. `vee view`
+  probes port 5900 and reports separately when nothing answers at all. SSH
+  needs no manual step and is the reliable route.
+- **Terminal type.** A guest has only Apple's terminfo database, so a modern
+  emulator's TERM (Ghostty sends `xterm-ghostty`) has no entry and zsh's line
+  editor garbles input. `vee ssh` substitutes `xterm-256color` for vz guests
+  and says so; QEMU guests are untouched.
 - **A per-user setup wizard may still appear at the first graphical login.**
   Suppressing it needs version-stamped `com.apple.SetupAssistant` preferences
   vee does not write yet (lima hits the same wall). SSH is unaffected.

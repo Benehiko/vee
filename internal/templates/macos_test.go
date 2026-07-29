@@ -83,3 +83,28 @@ func TestCreateSparseFile(t *testing.T) {
 		t.Errorf("existing larger file was shrunk to %d", info.Size())
 	}
 }
+
+func TestDefaultGuestPassword(t *testing.T) {
+	// macOS refuses a password shorter than 4 characters with
+	// eDSAuthPasswordQualityCheckFailed (measured on a macOS 26 guest), so a
+	// short account name cannot be its own password.
+	tests := map[string]string{
+		"vee":      "veevee",
+		"ab":       "abab",
+		"a":        "aaaa",
+		"admin":    "admin",
+		"operator": "operator",
+	}
+	for user, want := range tests {
+		got := defaultGuestPassword(user)
+		if got != want {
+			t.Errorf("defaultGuestPassword(%q) = %q, want %q", user, got, want)
+		}
+		if len(got) < minGuestPasswordLen {
+			t.Errorf("defaultGuestPassword(%q) = %q, shorter than the macOS minimum", user, got)
+		}
+	}
+	if defaultGuestPassword("") != "" {
+		t.Error("an empty user should not produce a password")
+	}
+}

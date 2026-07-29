@@ -146,6 +146,28 @@ func NewMacOSConfig(ctx context.Context, p provider.Provider, name string, opts 
 	return cfg, nil
 }
 
+// minGuestPasswordLen is macOS's minimum for a local account password.
+// Measured on a macOS 26 guest: a 3-character password is refused with
+// eDSAuthPasswordQualityCheckFailed, 4 is accepted.
+const minGuestPasswordLen = 4
+
+// defaultGuestPassword derives a memorable password from the account name.
+// The password is typed by hand at the guest's login window and at Screen
+// Sharing prompts, and these guests live on a host-only network, so the
+// account name itself is the friendliest default — but macOS rejects one
+// shorter than minGuestPasswordLen, so a short name is repeated ("vee"
+// becomes "veevee").
+func defaultGuestPassword(user string) string {
+	if user == "" {
+		return ""
+	}
+	password := user
+	for len(password) < minGuestPasswordLen {
+		password += user
+	}
+	return password
+}
+
 // firstBootOptions builds and validates the guest payload options. The
 // hostname defaults to the VM name, matching every other template.
 func firstBootOptions(name string, opts MacOSOptions) (vzfirstboot.Options, error) {
@@ -159,9 +181,7 @@ func firstBootOptions(name string, opts MacOSOptions) (vzfirstboot.Options, erro
 	}
 	password := opts.Password
 	if password == "" {
-		// Typed at the guest's login window and at Screen Sharing prompts;
-		// keep it memorable. Override with --password.
-		password = user
+		password = defaultGuestPassword(user)
 	}
 	fb := vzfirstboot.Options{
 		User:                user,

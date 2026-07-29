@@ -130,8 +130,64 @@ Examples:
 		// Hand off to ssh. On unix this replaces the current process (execve) so
 		// signals flow naturally; on Windows it spawns ssh as a child and waits.
 		// See ssh_exec_unix.go / ssh_exec_windows.go.
-		return execSSH(sshBin, sshArgs, os.Environ())
+		return execSSH(sshBin, sshArgs, sshEnv(os.Environ(), vzBackend))
 	},
+}
+
+// macOSTerminfoPrefixes are the terminal types a stock macOS install has
+// terminfo entries for. Anything else (xterm-ghostty, xterm-kitty, wezterm,
+// alacritty, …) is unknown to a macOS guest.
+var macOSTerminfoPrefixes = []string{"xterm", "screen", "tmux", "vt", "ansi", "dumb", "linux", "rxvt", "putty", "nsterm", "Apple"}
+
+// sshEnv adapts the environment ssh inherits. ssh sends its own TERM when it
+// requests a pty, and a macOS guest only has the terminfo database Apple
+// ships: connecting from a modern terminal (Ghostty sends TERM=xterm-ghostty)
+// leaves the guest without an entry, and zsh's line editor then garbles input.
+// Fall back to a type the guest is guaranteed to know.
+func sshEnv(env []string, vzGuest bool) []string {
+	if !vzGuest {
+		return env
+	}
+	term := ""
+	for _, kv := range env {
+		if v, ok := strings.CutPrefix(kv, "TERM="); ok {
+			term = v
+		}
+	}
+	if term == "" || knownToMacOSTerminfo(term) {
+		return env
+	}
+	fmt.Fprintf(os.Stderr, "note: the guest has no terminfo entry for TERM=%s; using xterm-256color for this session\n", term)
+	out := make([]string, 0, len(env)+1)
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "TERM=") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return append(out, "TERM=xterm-256color")
+}
+
+// knownToMacOSTerminfo reports whether a macOS guest is likely to have a
+// terminfo entry for term. Apple's database covers the classic families; the
+// terminal-specific entries shipped by newer emulators are not present.
+func knownToMacOSTerminfo(term string) bool {
+	for _, prefix := range macOSTerminfoPrefixes {
+		if strings.HasPrefix(term, prefix) {
+			// xterm-ghostty and xterm-kitty share the xterm prefix but are
+			// their own entries, which macOS does not ship.
+			if prefix == "xterm" && strings.Count(term, "-") > 0 {
+				switch term {
+				case "xterm", "xterm-color", "xterm-16color", "xterm-88color", "xterm-256color", "xterm-new", "xterm-direct":
+					return true
+				default:
+					return false
+				}
+			}
+			return true
+		}
+	}
+	return false
 }
 
 func buildSSHArgs(user, host string, port int, identity, knownHosts string, positional, extra []string) []string {
