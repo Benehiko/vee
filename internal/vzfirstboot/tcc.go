@@ -32,16 +32,22 @@ var screenSharingServices = []string{
 	"kTCCServiceAccessibility",
 }
 
-// errNoTCCDB reports that the guest has no usable privacy database, so the
-// grants were skipped. Callers treat this as a warning: everything else about
-// the guest still works, Screen Sharing just needs its manual toggle.
-var errNoTCCDB = errors.New("guest has no usable TCC database")
+// ErrNoTCCDB reports that the guest has no privacy database yet, so the grants
+// were skipped. macOS creates that database on the guest's first boot, so this
+// is the expected state for a guest that has never run — callers retry at the
+// next start rather than treating it as a failure.
+var ErrNoTCCDB = errors.New("guest has no TCC database yet")
+
+// ErrUnknownTCCSchema reports a privacy database vee does not recognize. Unlike
+// ErrNoTCCDB this never resolves by itself, so callers must stop retrying
+// rather than attach the guest disk at every start forever.
+var ErrUnknownTCCSchema = errors.New("guest TCC database has no access table")
 
 // applyPrivacyGrants authorizes the guest's screen-sharing agent when Screen
 // Sharing was requested, and is a no-op otherwise — a guest reached only over
 // SSH gets no privacy grants written at all.
 //
-// A missing or unrecognized privacy database is reported as errNoTCCDB so the
+// A missing or unrecognized privacy database is reported as ErrNoTCCDB so the
 // caller can warn and carry on: everything else about the guest still works,
 // and Screen Sharing falls back to needing its manual toggle.
 func applyPrivacyGrants(ctx context.Context, mnt string, opts Options) error {
@@ -110,7 +116,7 @@ func revokeScreenSharing(ctx context.Context, mnt string) error {
 func openTCC(ctx context.Context, mnt string) (*sql.DB, func(), error) {
 	path := filepath.Join(mnt, tccDBPath)
 	if _, err := os.Stat(path); err != nil {
-		return nil, nil, fmt.Errorf("%w: %v", errNoTCCDB, err)
+		return nil, nil, fmt.Errorf("%w: %v", ErrNoTCCDB, err)
 	}
 	// A rollback journal is deleted on commit; WAL files would survive and be
 	// owned by the wrong user.
@@ -128,7 +134,36 @@ func openTCC(ctx context.Context, mnt string) (*sql.DB, func(), error) {
 	// should be writing to.
 	if _, err := db.ExecContext(ctx, `SELECT 1 FROM access LIMIT 1`); err != nil {
 		closeDB()
-		return nil, nil, fmt.Errorf("%w: no access table: %v", errNoTCCDB, err)
+		return nil, nil, fmt.Errorf("%w: %v", ErrUnknownTCCSchema, err)
 	}
 	return db, closeDB, nil
+}
+
+// screenSharingGranted reports whether every permission the agent needs is
+// already authorized, so a start that has nothing to do stays silent.
+func screenSharingGranted(ctx context.Context, mnt string) (bool, error) {
+	db, closeDB, err := openTCC(ctx, mnt)
+	if err != nil {
+		return false, err
+	}
+	defer closeDB()
+
+	for _, service := range screenSharingServices {
+		// The access table's primary key is wider than (service, client), so a
+		// guest can hold several rows per service. Count only rows in the shape
+		// grantScreenSharing writes — a bundle-identifier client, allowed — so
+		// an unrelated row cannot report vee's own grant as done.
+		var allowed int
+		err := db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM access
+			 WHERE service = ? AND client = ? AND client_type = 0 AND auth_value = 2`,
+			service, screenSharingClient).Scan(&allowed)
+		if err != nil {
+			return false, fmt.Errorf("read %s grant: %w", service, err)
+		}
+		if allowed == 0 {
+			return false, nil
+		}
+	}
+	return true, nil
 }

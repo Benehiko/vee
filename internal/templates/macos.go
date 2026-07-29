@@ -199,6 +199,10 @@ func firstBootOptions(name string, opts MacOSOptions) (vzfirstboot.Options, erro
 	return fb, nil
 }
 
+// patchGuest is a seam so provisioning's effect on the config can be tested
+// without a guest disk to patch.
+var patchGuest = vzfirstboot.Patch
+
 // patchFirstBoot provisions the restored guest so it is reachable without a
 // GUI session. A fresh restore otherwise boots into Setup Assistant, where
 // nothing vee drives (SSH, IP resolution, health checks) is available.
@@ -212,7 +216,7 @@ func patchFirstBoot(ctx context.Context, cfg *vm.VMConfig, vmDir, diskPath strin
 		return nil
 	}
 	fmt.Println("Provisioning the guest for headless first boot (skips Setup Assistant, creates the admin account, enables Remote Login and Screen Sharing)...")
-	res, err := vzfirstboot.Patch(ctx, diskPath, fbOpts)
+	res, err := patchGuest(ctx, diskPath, fbOpts)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: first-boot provisioning failed: %v\n"+
 			"The VM is installed and startable, but it will boot into Setup Assistant — "+
@@ -221,6 +225,9 @@ func patchFirstBoot(ctx context.Context, cfg *vm.VMConfig, vmDir, diskPath strin
 	}
 
 	cfg.SSHUser = fbOpts.User
+	// The database the Screen Sharing grants live in does not exist until the
+	// guest has booted once, so the grant is owed rather than done.
+	cfg.MacOS.ScreenSharingGrantPending = fbOpts.EnableScreenSharing
 	// Print the password before persisting it: if the write fails, this is
 	// the only record of a credential that already exists in the guest.
 	fmt.Printf("Guest admin account %q created. GUI login password: %s\n", fbOpts.User, res.Password)

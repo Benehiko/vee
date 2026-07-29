@@ -1,10 +1,15 @@
 package templates
 
 import (
+	"context"
 	"encoding/base64"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/Benehiko/vee/internal/vm"
+	"github.com/Benehiko/vee/internal/vzfirstboot"
 )
 
 func TestImportMacosvmBundle(t *testing.T) {
@@ -106,5 +111,70 @@ func TestDefaultGuestPassword(t *testing.T) {
 	}
 	if defaultGuestPassword("") != "" {
 		t.Error("an empty user should not produce a password")
+	}
+}
+
+// stubPatch replaces the guest-disk patch for the duration of a test.
+func stubPatch(t *testing.T, res *vzfirstboot.Result, err error) *int {
+	t.Helper()
+	calls := 0
+	orig := patchGuest
+	patchGuest = func(context.Context, string, vzfirstboot.Options) (*vzfirstboot.Result, error) {
+		calls++
+		return res, err
+	}
+	t.Cleanup(func() { patchGuest = orig })
+	return &calls
+}
+
+func TestPatchFirstBootRecordsTheOwedScreenSharingGrant(t *testing.T) {
+	// Provisioning enables the guest's Screen Sharing service but cannot
+	// authorize it: macOS creates the privacy database those grants live in on
+	// the guest's first boot. Unless the config records that vee still owes the
+	// grant, no later start ever writes it — which is the bug this exists for.
+	stubPatch(t, &vzfirstboot.Result{Password: "veevee"}, nil)
+	cfg := &vm.VMConfig{Name: "mac", MacOS: &vm.MacOSConfig{}}
+	fbOpts := vzfirstboot.Options{User: "vee", EnableScreenSharing: true}
+
+	if err := patchFirstBoot(t.Context(), cfg, t.TempDir(), "/nonexistent/disk.img", MacOSOptions{}, fbOpts); err != nil {
+		t.Fatalf("patchFirstBoot: %v", err)
+	}
+	if !cfg.MacOS.ScreenSharingGrantPending {
+		t.Error("provisioning did not record the owed Screen Sharing grant")
+	}
+	if cfg.SSHUser != "vee" {
+		t.Errorf("ssh user = %q, want %q", cfg.SSHUser, "vee")
+	}
+}
+
+func TestPatchFirstBootLeavesUnprovisionedGuestsAlone(t *testing.T) {
+	// A guest vee did not provision has no Screen Sharing service enabled, so
+	// writing privacy grants into it would be an unasked-for change to someone
+	// else's installation.
+	for _, tc := range []struct {
+		name  string
+		opts  MacOSOptions
+		res   *vzfirstboot.Result
+		err   error
+		calls int
+	}{
+		{name: "provisioning skipped", opts: MacOSOptions{SkipFirstBoot: true}, calls: 0},
+		{name: "provisioning failed", err: errors.New("unexpected disk layout"), calls: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := stubPatch(t, tc.res, tc.err)
+			cfg := &vm.VMConfig{Name: "mac", MacOS: &vm.MacOSConfig{}}
+			fbOpts := vzfirstboot.Options{User: "vee", EnableScreenSharing: true}
+
+			if err := patchFirstBoot(t.Context(), cfg, t.TempDir(), "/nonexistent/disk.img", tc.opts, fbOpts); err != nil {
+				t.Fatalf("patchFirstBoot: %v", err)
+			}
+			if *calls != tc.calls {
+				t.Errorf("patch calls = %d, want %d", *calls, tc.calls)
+			}
+			if cfg.MacOS.ScreenSharingGrantPending {
+				t.Error("recorded an owed Screen Sharing grant for a guest vee never provisioned")
+			}
+		})
 	}
 }

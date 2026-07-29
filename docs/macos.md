@@ -337,18 +337,42 @@ key.
 
 ### Caveats
 
-- **Screen Sharing needs privacy grants, which vee writes offline.** Enabling
-  the service leaves the guest listening on 5900 but refusing every session:
-  since macOS 12.1 the agent also needs TCC permissions, and macOS only offers
-  those through System Settings or MDM — unreachable on a headless guest, as
-  ARD's `kickstart` itself reports ("must be enabled from System Settings or
-  via MDM"). While the guest disk is mounted, vee therefore authorizes
+- **Screen Sharing works from the second boot of a guest vee provisioned,**
+  because vee has to write its privacy grants offline and the database it
+  writes into does not exist any earlier. (An imported or `--skip-first-boot`
+  guest gets no grants at all — see below.) Enabling the service leaves the
+  guest listening on 5900
+  but refusing every session: since macOS 12.1 the agent also needs TCC
+  permissions, and macOS only offers those through System Settings or MDM —
+  unreachable on a headless guest, as ARD's `kickstart` itself reports ("must
+  be enabled from System Settings or via MDM"). So vee authorizes
   `com.apple.screensharing.agent` for `kTCCServiceScreenCapture`,
-  `kTCCServicePostEvent` and `kTCCServiceAccessibility` in the guest's
-  privacy database, which SIP protects at runtime but not offline. Scope is
-  deliberately narrow: three rows for one client, removed again on rollback,
-  and skipped entirely when Screen Sharing was not requested. `vee view` still
-  probes port 5900 and reports when nothing answers.
+  `kTCCServicePostEvent` and `kTCCServiceAccessibility` directly in
+  `Library/Application Support/com.apple.TCC/TCC.db`, which SIP protects while
+  the guest runs but not while its disk is idle on the host.
+
+  macOS creates that database on the guest's *first* boot, not during the
+  restore, and a restored guest has never booted — so provisioning never finds
+  it. It therefore always records `macos.screen_sharing_grant_pending` in the
+  VM config, and every `vee start` retries the grant before launching the
+  helper, while the guest disk is still free. The first attempt that finds the
+  database writes the grants and clears the flag, so a granted guest never
+  attaches its disk again; measured on a macOS 26 guest, that
+  attach-mount-write-detach cycle costs about 1.7 s of start time.
+
+  In practice the guest has to be stopped and started once: `vee create`
+  restores it and boots it, `vee ssh` works immediately, and the next
+  `vee start` after a `vee stop` writes the grants, so `vee view` works from
+  that boot onwards.
+
+  Scope is deliberately narrow: three rows for one client, removed again if
+  provisioning rolls back, and nothing written at all when Screen Sharing was
+  not requested. Two failures are not retried — a privacy database whose schema
+  vee does not recognize is reported once and given up on, since it will not
+  become recognizable, and a guest disk vee could not release again fails the
+  start outright rather than handing Virtualization.framework an image the host
+  still holds. `vee view` still probes port 5900 and reports when nothing
+  answers.
 - **Terminal type.** A guest has only Apple's terminfo database, so a modern
   emulator's TERM (Ghostty sends `xterm-ghostty`) has no entry and zsh's line
   editor garbles input. `vee ssh` substitutes `xterm-256color` for vz guests
