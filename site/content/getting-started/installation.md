@@ -46,9 +46,33 @@ curl -LO https://github.com/Benehiko/vee/releases/latest/download/vee-darwin-arm
 curl -LO https://github.com/Benehiko/vee/releases/latest/download/vee-darwin-arm64.tar.gz.sha256
 shasum -a 256 -c vee-darwin-arm64.tar.gz.sha256
 tar xzf vee-darwin-arm64.tar.gz
-install -Dm755 vee "$HOME/.vee/bin/vee"
+mkdir -p "$HOME/.vee/bin"   # stock BSD install(1) has no GNU -D
+install -m755 vee "$HOME/.vee/bin/vee"
 xattr -d com.apple.quarantine "$HOME/.vee/bin/vee" 2>/dev/null || true   # unsigned binary
+
+# Apple Silicon only: the same tarball carries the macOS-guest helper.
+if [ -f vee-vz-helper ]; then
+  install -m755 vee-vz-helper "$HOME/.vee/bin/vee-vz-helper"
+  xattr -d com.apple.quarantine "$HOME/.vee/bin/vee-vz-helper" 2>/dev/null || true
+fi
 ```
+
+#### macOS guests: `vee-vz-helper`
+
+The `darwin-arm64` tarball contains a second binary, **`vee-vz-helper`**, which
+hosts macOS guests on Apple's Virtualization.framework — one helper process per
+running guest, the way `qemu-system` backs a QEMU VM. You only need it for
+`vee create --template macos`; every other guest runs on QEMU and ignores it.
+
+Install it in the same directory as `vee`, as the snippet above does. vee looks
+for it under `$VEE_VZ_HELPER` first, then beside the running `vee` binary, then
+in `~/.vee/bin`, then on your `PATH`. It is ad-hoc codesigned with the
+`com.apple.security.virtualization` entitlement, which macOS honours without a
+paid Apple Developer account; a browser download arrives quarantined, and vee
+clears that flag itself whenever it resolves the helper. From a source checkout,
+`make vz-helper` builds, signs and installs it — plain `make install` does not.
+
+See [macOS guests](../macos-guests/) for what that backend supports.
 
 ### Windows (PowerShell)
 
