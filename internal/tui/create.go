@@ -13,6 +13,8 @@ import (
 	"github.com/Benehiko/vee/internal/vm"
 	"github.com/Benehiko/vee/internal/vm/build"
 	"github.com/Benehiko/vee/provider"
+
+	"github.com/Benehiko/vee/internal/platform"
 )
 
 var (
@@ -25,7 +27,9 @@ var (
 	styleSection    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("13")).Padding(0, 1)
 )
 
-var templateNames = []string{
+// allTemplateNames is every template vee knows about, in the order the wizard
+// presents them.
+var allTemplateNames = []string{
 	"ubuntu-server",
 	"devbox",
 	"server",
@@ -39,6 +43,34 @@ var templateNames = []string{
 	"truenas",
 	"windows",
 	"macos",
+}
+
+// templateNames are the templates this host can actually create. The wizard
+// exists so nobody has to know which constraints apply, so offering a choice
+// that cannot succeed defeats it — a user could answer every prompt and only
+// then be refused by the backend.
+var templateNames = templatesForHost(allTemplateNames, macOSGuestsSupported())
+
+// macOSGuestsSupported reports whether this host can run macOS guests. Apple
+// permits them only on Apple hardware, and Virtualization.framework only offers
+// the macOS-guest platform on Apple Silicon — the same condition buildVZMachine
+// enforces before starting one.
+func macOSGuestsSupported() bool {
+	return platform.IsMacOS() && platform.HostArch() == "arm64"
+}
+
+// templatesForHost drops templates the host cannot honour.
+func templatesForHost(names []string, macOSGuests bool) []string {
+	if macOSGuests {
+		return names
+	}
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		if n != "macos" {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 // distroAwareTemplates are templates that support --distro selection.

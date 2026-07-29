@@ -13,8 +13,30 @@
 // entitlement (ad-hoc is sufficient): `make vz-helper`.
 package main
 
-import "os"
+import (
+	"fmt"
+	"os"
+
+	"github.com/Benehiko/vee/internal/buildinfo"
+)
+
+// Build-time overrides, injected by `make vz-helper` and the release workflow
+// via -ldflags "-X main.version=...". The helper is installed separately from
+// vee and can drift from it, so it has to be able to identify itself.
+var (
+	version = ""
+	commit  = ""
+	date    = ""
+)
 
 func main() {
+	// Handled before run() so it works on every build, including the stub that
+	// refuses to host VMs on unsupported hosts — "which helper is this?" is
+	// exactly the question someone on the wrong host needs answered.
+	if len(os.Args) == 2 && (os.Args[1] == "--version" || os.Args[1] == "-version") {
+		v, c, d := buildinfo.Resolve(version, commit, date)
+		fmt.Printf("%s (commit %s, built %s)\n", v, c, d)
+		return
+	}
 	os.Exit(run())
 }

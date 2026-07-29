@@ -294,11 +294,26 @@ const HelperBinary = "vee-vz-helper"
 // the call sites means every path that runs the helper (start, IPSW
 // restore-URL query, restore) is covered.
 func ResolveHelper() (string, error) {
+	path, err := FindHelper()
+	if err != nil {
+		return "", err
+	}
+	return path, harden(path)
+}
+
+// FindHelper locates the helper binary without touching it: explicit override,
+// the directory of the running vee binary (release tarballs ship them side by
+// side), the vee-managed bin dir, then PATH.
+//
+// Callers that are about to *run* the helper want ResolveHelper, which also
+// heals it. This one exists for callers that only want to know which binary
+// would be used — reporting a version must not modify anything on disk.
+func FindHelper() (string, error) {
 	if p := os.Getenv("VEE_VZ_HELPER"); p != "" {
 		if _, err := os.Stat(p); err != nil { //nolint:gosec // deliberate operator-provided override
 			return "", fmt.Errorf("VEE_VZ_HELPER: %w", err)
 		}
-		return p, harden(p)
+		return p, nil
 	}
 	var candidates []string
 	if exe, err := os.Executable(); err == nil {
@@ -309,11 +324,11 @@ func ResolveHelper() (string, error) {
 	}
 	for _, c := range candidates {
 		if _, err := os.Stat(c); err == nil {
-			return c, harden(c)
+			return c, nil
 		}
 	}
 	if p, err := exec.LookPath(HelperBinary); err == nil {
-		return p, harden(p)
+		return p, nil
 	}
 	return "", fmt.Errorf("%s not found (looked in $VEE_VZ_HELPER, next to the vee binary, ~/.vee/bin, $PATH) — install it from the darwin-arm64 release tarball or build it with `make vz-helper`", HelperBinary)
 }
