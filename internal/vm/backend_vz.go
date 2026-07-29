@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -326,4 +327,70 @@ func (m *Manager) watchVZShutdown(ctx context.Context, name, sockPath string) {
 		return
 	}
 	m.recordGuestShutdown(name)
+}
+
+// vzShutdownTimeout bounds the ssh call that asks the guest to power off. It
+// is short because the caller has its own wait-then-kill budget, and because
+// a guest that cannot be reached will not answer at all.
+const vzShutdownTimeout = 10 * time.Second
+
+// vzShutdownOverSSH asks a macOS guest to power itself off. macOS ignores
+// VZVirtualMachine.requestStop — the ACPI-powerdown analog — so without this
+// every `vee stop` waits out its grace period and then SIGKILLs the VM, which
+// leaves the guest filesystem unclean. Provisioning installs a sudoers rule
+// granting exactly /sbin/shutdown, so no password is needed.
+func (m *Manager) vzShutdownOverSSH(ctx context.Context, name string) error {
+	cfg, err := m.loadConfig(name)
+	if err != nil {
+		return err
+	}
+	if cfg.SSHUser == "" {
+		return fmt.Errorf("no ssh user recorded for %q", name)
+	}
+	if cfg.NIC.MAC == "" {
+		return fmt.Errorf("no MAC recorded for %q", name)
+	}
+	ip, err := ResolveIPFromMAC(cfg.NIC.MAC)
+	if err != nil {
+		return fmt.Errorf("resolve guest IP: %w", err)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+
+	sshBin, err := exec.LookPath("ssh")
+	if err != nil {
+		return err
+	}
+	shutdownCtx, cancel := context.WithTimeout(ctx, vzShutdownTimeout)
+	defer cancel()
+	//nolint:gosec // ssh from LookPath; arguments are vee-derived
+	out, err := exec.CommandContext(shutdownCtx, sshBin, vzShutdownArgs(cfg.SSHUser, ip, home)...).CombinedOutput()
+	if err != nil {
+		// Losing the connection is the expected outcome of a successful
+		// shutdown, so only a refusal is worth reporting.
+		if strings.Contains(string(out), "closed by remote host") || strings.Contains(string(out), "Connection to") {
+			return nil
+		}
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// vzShutdownArgs builds the ssh invocation used to power a guest off. It never
+// prompts: BatchMode refuses password authentication, `sudo -n` refuses to ask
+// for a password, and host-key changes are accepted rather than blocking — vee
+// tracks guest identity itself, and a recreated guest legitimately has a new
+// key.
+func vzShutdownArgs(user, ip, home string) []string {
+	return []string{
+		"-i", filepath.Join(home, ".vee", "ssh", "id_ed25519"),
+		"-o", "BatchMode=yes",
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "UserKnownHostsFile=" + filepath.Join(home, ".vee", "ssh", "known_hosts"),
+		"-o", "ConnectTimeout=5",
+		user + "@" + ip,
+		"sudo -n /sbin/shutdown -h now",
+	}
 }

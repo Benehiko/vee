@@ -72,11 +72,18 @@ func assignControlSockets(state *VMState, cfg *VMConfig, result *backend.StartRe
 func (m *Manager) gracefulShutdown(ctx context.Context, name string, state *VMState) {
 	switch state.BackendName() {
 	case backend.VZ:
-		// Ask the helper to requestStop the guest (the ACPI-powerdown
-		// analog). Best-effort like the QMP path.
+		// A macOS guest ignores the framework's stop request, so asking the
+		// guest itself to power down is the only path that shuts it down
+		// cleanly; the request is still sent afterwards because it costs
+		// nothing and other guests may honour it. Both are best-effort: the
+		// caller waits, then kills.
+		if err := m.vzShutdownOverSSH(ctx, name); err != nil {
+			m.provider.Logger().Debug("vz guest shutdown over ssh failed",
+				zap.String("vm", name), zap.Error(err))
+		}
 		if state.ControlSocket != "" {
 			if _, err := vzControlRequest(ctx, state.ControlSocket, vzhelper.OpStop, 5*time.Second); err != nil {
-				m.provider.Logger().Debug("vz graceful stop failed",
+				m.provider.Logger().Debug("vz stop request failed",
 					zap.String("vm", name), zap.Error(err))
 			}
 		}

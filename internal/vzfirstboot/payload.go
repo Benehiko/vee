@@ -25,6 +25,12 @@ const (
 	scriptPath = "usr/local/sbin/vee-firstboot.sh"
 	// plistPath is the LaunchDaemon that runs the script.
 	plistPath = "Library/LaunchDaemons/" + LaunchDaemonLabel + ".plist"
+	// sudoersPath lets the guest account run shutdown without a password, so
+	// vee can ask the guest to power itself off. macOS ignores requestStop —
+	// the ACPI-powerdown analog — so without this every stop falls through to
+	// SIGKILL, which is an unclean shutdown of a real filesystem. /etc is a
+	// symlink to /private/etc, so the real location is under private/.
+	sudoersPath = "private/etc/sudoers.d/vee-shutdown"
 )
 
 // launchDaemonPlist runs the script at every boot until it succeeds; the
@@ -176,8 +182,8 @@ type payloadFile struct {
 }
 
 // payloadFiles lists what the patch installs, in creation order.
-func payloadFiles(script string) []payloadFile {
-	return []payloadFile{
+func payloadFiles(script, sudoers string) []payloadFile {
+	files := []payloadFile{
 		{Path: appleSetupDonePath, Mode: 0o400},
 		{Path: skipBuddyPath, Mode: 0o400},
 		// Pre-existing on any real install.
@@ -187,6 +193,24 @@ func payloadFiles(script string) []payloadFile {
 		{Path: scriptPath, Mode: 0o700, Data: []byte(script)},
 		{Path: plistPath, Mode: 0o644, Data: []byte(launchDaemonPlist)},
 	}
+	if sudoers != "" {
+		// sudo refuses a rule file that is group- or world-writable.
+		files = append(files, payloadFile{Path: sudoersPath, Mode: 0o440, Data: []byte(sudoers)})
+	}
+	return files
+}
+
+// renderSudoers grants the guest account exactly one privileged command:
+// powering the machine off. Nothing else in vee needs guest root, so nothing
+// else is granted.
+func renderSudoers(user string) string {
+	if user == "" {
+		return ""
+	}
+	return "# Written by vee so `vee stop` can ask the guest to power itself off.\n" +
+		"# macOS guests ignore the framework's stop request, and the alternative\n" +
+		"# is killing the VM, which is an unclean shutdown.\n" +
+		user + " ALL=(ALL) NOPASSWD: /sbin/shutdown\n"
 }
 
 // scriptData is the template payload for firstBootScript. The *Q fields are

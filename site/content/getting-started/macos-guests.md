@@ -48,6 +48,16 @@ vee copies the disk and auxiliary storage and reads the hardware-model and machi
 
 `--skip-first-boot` leaves the restored guest untouched. It will boot into Setup Assistant, which you must complete at its screen; `vee ssh` will not work until you enable Remote Login inside the guest.
 
+## Stopping a guest
+
+`vee stop` asks the guest to run `shutdown -h now` over SSH, then also sends the framework's stop request, and finally kills the VM if it has not exited. The SSH step exists because a macOS guest ignores `requestStop` — the ACPI-powerdown analog other guests honour — so without it every stop waited out its grace period and then killed the VM, which is an unclean shutdown of a live filesystem.
+
+Provisioning installs a `sudoers` rule granting the guest account exactly one privileged command, `/sbin/shutdown`, so no password is needed. A guest that was imported or created with `--skip-first-boot` has no such rule and still falls back to being killed after the grace period.
+
+## Terminal type
+
+A macOS guest has only the terminfo database Apple ships, which covers `xterm*`, `screen*`, `tmux*` and friends but not the entries modern emulators use — Ghostty sends `TERM=xterm-ghostty`, kitty `xterm-kitty`. Left alone the guest cannot resolve your terminal and zsh's line editor garbles input. `vee ssh` detects that and uses `xterm-256color` for the session, printing a one-line note. QEMU guests are untouched, since their distros ship a broader database.
+
 ## Networking
 
 Virtualization.framework NAT has no host port forwarding, so macOS guests get no `127.0.0.1` SSH port. vee resolves the guest's address by MAC from the host's DHCP lease database instead — `vee ssh`, `vee ip` and `vee view` all use it. The guest is reachable from the host, not from the wider LAN.
@@ -59,7 +69,7 @@ Virtualization.framework NAT has no host port forwarding, so macOS guests get no
 | create / start / stop / delete / list / status | Works |
 | `vee ssh`, `vee ip` | Works (IP resolved by MAC from host DHCP leases) |
 | `vee view` | Works via the guest's Screen Sharing service |
-| Graceful shutdown | Works (`requestStop`, the ACPI-powerdown analog) |
+| Graceful shutdown | Works — vee asks the guest to run `shutdown -h now` over SSH, because macOS ignores the framework's stop request |
 | Guest-shutdown detection, autostart | Works |
 | `vee logs` | Helper log (`vz-helper.log`) rather than a QEMU log |
 | SPICE, `vee monitor`, `vee qmp`, dashboard stats | Not applicable — no SPICE server and no QMP on this backend |
