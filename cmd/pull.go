@@ -114,8 +114,14 @@ func completePullArgs(_ *cobra.Command, args []string, toComplete string) ([]str
 		}
 		return out, cobra.ShellCompDirectiveNoFileComp
 	case 1:
-		versions := images.DistroVersions(args[0])
-		out := append([]string{"latest"}, versions...)
+		// Every distro accepts "latest", and some report it as their only
+		// version, so offer it once rather than twice.
+		out := []string{"latest"}
+		for _, v := range images.DistroVersions(args[0]) {
+			if v != "latest" {
+				out = append(out, v)
+			}
+		}
 		return out, cobra.ShellCompDirectiveNoFileComp
 	default:
 		return nil, cobra.ShellCompDirectiveNoFileComp
