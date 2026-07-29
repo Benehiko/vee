@@ -121,9 +121,12 @@ log "enabling Remote Login"
 #    connection may still be refused; the guest's own display remains the
 #    fallback.
 log "enabling Screen Sharing"
-# kickstart both activates and CONFIGURES Remote Management. Enabling the
-# service with launchctl alone leaves it unconfigured, and sessions are then
-# refused with "Screen Sharing is not permitted on <host>".
+# kickstart activates and configures Remote Management. On macOS 26 it can no
+# longer grant screen recording/control by itself — it says as much ("must be
+# enabled from System Settings or via MDM") — so a session may still be
+# refused with "Screen Sharing is not permitted on <host>", and the remedy is
+# to toggle Sharing inside the guest. It is still run because it configures
+# everything it can and helps on older guests; failures are non-fatal.
 ARD=/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart
 if [ -x "${ARD}" ]; then
 	"${ARD}" -activate -configure -access -on -restart -agent -privs -all -allowAccessFor -allUsers 2>/dev/null
