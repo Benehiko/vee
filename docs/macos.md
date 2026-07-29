@@ -337,14 +337,18 @@ key.
 
 ### Caveats
 
-- **Screen Sharing usually needs one manual step.** Provisioning enables the
-  service and runs ARD's `kickstart`, so the guest listens on 5900, but since
-  macOS 12.1 the agent needs TCC grants that only device management can create.
-  On macOS 26 kickstart reports this itself ("must be enabled from System
-  Settings or via MDM") and a session is refused with "Screen Sharing is not
-  permitted on <host>"; toggling Sharing inside the guest fixes it. `vee view`
-  probes port 5900 and reports separately when nothing answers at all. SSH
-  needs no manual step and is the reliable route.
+- **Screen Sharing needs privacy grants, which vee writes offline.** Enabling
+  the service leaves the guest listening on 5900 but refusing every session:
+  since macOS 12.1 the agent also needs TCC permissions, and macOS only offers
+  those through System Settings or MDM — unreachable on a headless guest, as
+  ARD's `kickstart` itself reports ("must be enabled from System Settings or
+  via MDM"). While the guest disk is mounted, vee therefore authorizes
+  `com.apple.screensharing.agent` for `kTCCServiceScreenCapture`,
+  `kTCCServicePostEvent` and `kTCCServiceAccessibility` in the guest's
+  privacy database, which SIP protects at runtime but not offline. Scope is
+  deliberately narrow: three rows for one client, removed again on rollback,
+  and skipped entirely when Screen Sharing was not requested. `vee view` still
+  probes port 5900 and reports when nothing answers.
 - **Terminal type.** A guest has only Apple's terminfo database, so a modern
   emulator's TERM (Ghostty sends `xterm-ghostty`) has no entry and zsh's line
   editor garbles input. `vee ssh` substitutes `xterm-256color` for vz guests
