@@ -23,9 +23,10 @@ vee create winvm --template windows --distro-version win11
 > **Status:** both `win10` (22H2) and `win11` (24H2) install end-to-end on
 > x86_64. 24H2 needed several workarounds — see
 > [the 24H2 section](#windows-11-24h2-installing-from-a-writable-scratch-disk)
-> below and [docs/windows-24h2-install.md](windows-24h2-install.md). arm64
-> media builds and boots the same unattended flow; a full install run is still
-> being validated.
+> below and [docs/windows-24h2-install.md](windows-24h2-install.md). On arm64
+> (Apple Silicon), `win11` (24H2, build 26100) installs end-to-end unattended:
+> boots to the desktop auto-logged-in, networking up via the injected NetKVM
+> ARM64 driver, SSH reachable (`vee`/`vee`).
 
 ## How the ISO is assembled
 
