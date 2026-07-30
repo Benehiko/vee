@@ -16,6 +16,7 @@ import (
 	"github.com/Benehiko/vee/internal/blockdev"
 	"github.com/Benehiko/vee/internal/gpu"
 	"github.com/Benehiko/vee/internal/images"
+	"github.com/Benehiko/vee/internal/platform"
 	"github.com/Benehiko/vee/internal/runnercreds"
 	"github.com/Benehiko/vee/internal/runnerssh"
 	"github.com/Benehiko/vee/internal/templates"
@@ -64,6 +65,7 @@ var (
 	createPassword      string
 	createBootDisk      string
 	createBootDiskPath  string
+	createNested        bool
 )
 
 var createCmd = &cobra.Command{
@@ -116,6 +118,15 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
     --data-disk /dev/disk/by-id/ata-ST22000NM000C_ZXA0WD9J:EXOS22TB-B`,
 	Args: cobra.RangeArgs(0, 1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// --nested only means anything for arm64 (aarch64) QEMU guests. Refuse
+		// before any TUI opens: the create form hides the toggle on hosts that
+		// cannot honour it, so a prefilled value would be invisible there —
+		// and silently dropping an explicit flag is worse.
+		if createNested && platform.DefaultGuestArch() != "aarch64" {
+			return fmt.Errorf("--nested is only supported for arm64 (aarch64) guests; this host's guests are %s",
+				platform.DefaultGuestArch())
+		}
+
 		// No name + no --template: empty TUI.
 		if len(args) == 0 && !cmd.Flags().Changed("template") {
 			return tui.Run(cmd.Context(), prov)
@@ -558,6 +569,9 @@ func optsFromFlags(cmd *cobra.Command, name string) build.Opts {
 	if cmd.Flags().Changed("no-auto-install") {
 		opts.NoAutoInstall = createNoAutoInstall
 	}
+	if cmd.Flags().Changed("nested") {
+		opts.Nested = createNested
+	}
 	return opts
 }
 
@@ -573,6 +587,7 @@ func init() {
 	createCmd.Flags().StringVar(&createNicBridge, "nic-bridge", "br0", "Bridge interface (when nic-mode=bridge)")
 	createCmd.Flags().IntVar(&createSpicePort, "spice-port", 0, "SPICE port (0 = use template default)")
 	createCmd.Flags().BoolVar(&createUEFI, "uefi", false, "Enable UEFI boot (OVMF)")
+	createCmd.Flags().BoolVar(&createNested, "nested", false, "Expose nested virtualization (EL2) to the guest so it can run KVM — Docker Desktop, KubeVirt, etc. (arm64 QEMU guests; under HVF needs QEMU >= 11.1 and an M3+ Mac on macOS 15+)")
 	createCmd.Flags().StringVar(&createGPUMode, "gpu-mode", "none", "GPU mode: none, virtio, passthrough")
 	createCmd.Flags().StringVar(&createGPUPCI, "gpu-pci", "", "PCI address for GPU passthrough (e.g. 08:00.0)")
 	createCmd.Flags().BoolVar(&createAntiDetect, "anti-detect", false, "Apply anti-hypervisor-detection CPU flags (gaming passthrough)")

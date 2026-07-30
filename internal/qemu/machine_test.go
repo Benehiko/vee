@@ -82,6 +82,75 @@ func TestMachineAArch64VirtGIC(t *testing.T) {
 	}
 }
 
+func TestMachineAArch64VirtNested(t *testing.T) {
+	p := newTestProvider(t)
+	m, err := qemu.NewEmptyMachine(p)
+	if err != nil {
+		t.Fatalf("NewEmptyMachine: %v", err)
+	}
+	disk := qemu.NewDisk(p, m, qemu.WithCustomPath("/data/disk.qcow2"))
+	built, err := m.BuildMachine(
+		qemu.AddDisk(disk),
+		qemu.WithArchitecture("aarch64"),
+		qemu.WithMachineType("virt"),
+		qemu.WithNested(true),
+	)
+	if err != nil {
+		t.Fatalf("BuildMachine: %v", err)
+	}
+	got := argValue(built.Args(), "-machine")
+	if got != "virt,gic-version=max,virtualization=on" {
+		t.Errorf("nested aarch64 virt machine: got %q, want virt,gic-version=max,virtualization=on", got)
+	}
+}
+
+func TestMachineNestedRespectsExplicitVirtualization(t *testing.T) {
+	// An explicit virtualization= value in the machine type wins over the
+	// nested option, mirroring how gic-version is handled.
+	p := newTestProvider(t)
+	m, err := qemu.NewEmptyMachine(p)
+	if err != nil {
+		t.Fatalf("NewEmptyMachine: %v", err)
+	}
+	disk := qemu.NewDisk(p, m, qemu.WithCustomPath("/data/disk.qcow2"))
+	built, err := m.BuildMachine(
+		qemu.AddDisk(disk),
+		qemu.WithArchitecture("aarch64"),
+		qemu.WithMachineType("virt,virtualization=off"),
+		qemu.WithNested(true),
+	)
+	if err != nil {
+		t.Fatalf("BuildMachine: %v", err)
+	}
+	got := argValue(built.Args(), "-machine")
+	if strings.Contains(got, "virtualization=on") {
+		t.Errorf("explicit virtualization=off was overridden: got %q", got)
+	}
+}
+
+func TestMachineNestedIgnoredOffAArch64(t *testing.T) {
+	// virtualization= is a property of the aarch64 virt board only; a hand-
+	// edited config carrying nested on an x86_64 guest must not produce it.
+	p := newTestProvider(t)
+	m, err := qemu.NewEmptyMachine(p)
+	if err != nil {
+		t.Fatalf("NewEmptyMachine: %v", err)
+	}
+	disk := qemu.NewDisk(p, m, qemu.WithCustomPath("/data/disk.qcow2"))
+	built, err := m.BuildMachine(
+		qemu.AddDisk(disk),
+		qemu.WithArchitecture("x86_64"),
+		qemu.WithMachineType("q35"),
+		qemu.WithNested(true),
+	)
+	if err != nil {
+		t.Fatalf("BuildMachine: %v", err)
+	}
+	if got := argValue(built.Args(), "-machine"); got != "q35" {
+		t.Errorf("x86_64 machine should ignore nested: got %q", got)
+	}
+}
+
 func TestMachineX86NoGIC(t *testing.T) {
 	p := newTestProvider(t)
 	m, err := qemu.NewEmptyMachine(p)
