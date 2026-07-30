@@ -46,7 +46,7 @@ Templates apply sane defaults (memory, CPUs, disks, networking, cloud-init) auto
 | `truenas` | TrueNAS SCALE · 6G / 2 CPUs · AHCI OS disk · per-drive iothreads · bridge NIC · SPICE |
 | `torrent` | Lightweight 2G / 1 CPU · qbittorrent-nox via cloud-init · optional VPN kill-switch |
 | `jellyfin` | Jellyfin · NFS/SMB/host-dir/block/USB media · mDNS |
-| `windows` | Windows · UEFI secure boot · TPM 2.0 |
+| `windows` | Windows · UEFI secure boot · TPM 2.0 · x86_64 hosts only |
 | `docker` | Alpine Linux · Docker daemon on `tcp://localhost:2375` |
 | `github-runner` | Self-hosted Actions runner · outbound HTTPS long-polling |
 | `macos` | macOS guest on Apple's Virtualization.framework · 8G / 4 CPUs · Apple Silicon hosts only · restores from an IPSW or imports a [macosvm](https://github.com/s-u/macosvm) bundle |
@@ -91,7 +91,7 @@ Both the distro and `distro-version` forms shell-complete from the built-in list
 | `alpine` | Cloud image |
 | `bazzite` | Fedora Atomic gaming ISO |
 | `truenas` | TrueNAS SCALE installer ISO |
-| `windows` | Built on demand — `win11`, `win10`, `server2025`, `server2022` |
+| `windows` | Built on demand — `win11`, `win10`, `server2025`, `server2022` · x86_64 hosts only |
 | `macos` | Restore image (IPSW, 15-20 GB) — `latest` asks the host which image it can install; an `https://…ipsw` URL from [ipsw.me](https://ipsw.me/product/Mac/) pins an older one · Apple Silicon macOS hosts only |
 
 ### Windows ISOs
@@ -115,6 +115,9 @@ vee create winvm --template windows   # pulls automatically if not cached
 > See [docs/windows-guests.md](docs/windows-guests.md) for the ISO pipeline and
 > [docs/windows-24h2-install.md](docs/windows-24h2-install.md) for the full 24H2
 > debugging writeup.
+>
+> Windows guests are **x86_64 hosts only**: there is no Windows-on-ARM pipeline
+> yet, so Apple Silicon Macs (and other arm64 hosts) cannot create Windows VMs.
 
 **Requirements:** `nerdctl` or `docker` on `PATH` (the ISO is assembled in a
 container; no host tooling is installed) and ~15 GB of free scratch space, which

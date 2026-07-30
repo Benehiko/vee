@@ -19,6 +19,12 @@ vee create winvm --template windows --distro-version win11
 > into Windows Setup and partitions the disk, but the unattended install does not
 > yet complete on 24H2 — see [the 24H2 note](#windows-11-24h2-limitation) below.
 
+> **x86_64 hosts only:** there is no Windows-on-ARM pipeline yet. The UUP dump
+> build selects amd64 media and the Secure Boot OVMF firmware is x86-only, so
+> arm64 hosts — Apple Silicon Macs included — cannot create Windows guests.
+> `vee create` refuses the template on those hosts (and the TUI wizard does not
+> offer it) rather than assembling an ISO the machine cannot boot.
+
 ## How the ISO is assembled
 
 A UUP set is not a ready-to-burn ISO. vee's container build (`internal/images/windows.go`):

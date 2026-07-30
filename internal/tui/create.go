@@ -49,7 +49,7 @@ var allTemplateNames = []string{
 // exists so nobody has to know which constraints apply, so offering a choice
 // that cannot succeed defeats it — a user could answer every prompt and only
 // then be refused by the backend.
-var templateNames = templatesForHost(allTemplateNames, macOSGuestsSupported())
+var templateNames = templatesForHost(allTemplateNames, macOSGuestsSupported(), windowsGuestsSupported())
 
 // macOSGuestsSupported reports whether this host can run macOS guests. Apple
 // permits them only on Apple hardware, and Virtualization.framework only offers
@@ -59,14 +59,24 @@ func macOSGuestsSupported() bool {
 	return platform.IsMacOS() && platform.HostArch() == "arm64"
 }
 
+// windowsGuestsSupported reports whether this host can create Windows guests.
+// vee has no Windows-on-ARM pipeline — the UUP dump build selects amd64 media
+// and the Secure Boot OVMF is x86-only — so arm64 hosts (Apple Silicon among
+// them) cannot run the guest this template installs. Same condition
+// NewWindowsConfig enforces before building one.
+func windowsGuestsSupported() bool {
+	return platform.HostArch() != "arm64"
+}
+
 // templatesForHost drops templates the host cannot honour.
-func templatesForHost(names []string, macOSGuests bool) []string {
-	if macOSGuests {
-		return names
+func templatesForHost(names []string, macOSGuests, windowsGuests bool) []string {
+	drop := map[string]bool{
+		"macos":   !macOSGuests,
+		"windows": !windowsGuests,
 	}
 	out := make([]string, 0, len(names))
 	for _, n := range names {
-		if n != "macos" {
+		if !drop[n] {
 			out = append(out, n)
 		}
 	}

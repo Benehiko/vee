@@ -86,7 +86,8 @@ Templates apply sane defaults automatically:
                   (virgl). Graphical window with GDM autologin (supports --distro:
                   fedora default, ubuntu). Works on Apple Silicon (aarch64).
   docker          2G / 2 CPUs, Alpine Linux, Docker daemon on tcp://localhost:2375
-  windows         8G / 4 CPUs, UEFI secboot, TPM 2.0
+  windows         8G / 4 CPUs, UEFI secboot, TPM 2.0 (x86_64 hosts only —
+                  no Windows-on-ARM support yet)
   truenas         6G / 2 CPUs, UEFI, AHCI OS disk, bridge NIC, SPICE display.
                   Passthrough data drives each get a dedicated iothread.
   jellyfin        4G / 2 CPUs, Ubuntu cloud image, Jellyfin via official APT repo,
@@ -612,7 +613,7 @@ func init() {
 			"torrent\tqBittorrent VM with optional VPN",
 			"devbox\tDev environment with Docker + zsh",
 			"server\tMinimal server with openssh + ufw + fail2ban",
-			"windows\tWindows VM with UEFI + TPM",
+			"windows\tWindows VM with UEFI + TPM (x86_64 hosts only)",
 			"truenas\tTrueNAS SCALE VM",
 			"docker\tAlpine Linux VM with Docker daemon on tcp://localhost:2375",
 			"jellyfin\tJellyfin media server with NFS/SMB/USB/host-dir libraries + mDNS",

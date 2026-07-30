@@ -11,6 +11,8 @@ the ISO is assembled.
 
 ## Prerequisites
 
+- An x86_64 host — there is no Windows-on-ARM support yet, so Apple Silicon
+  Macs (and other arm64 hosts) cannot create Windows VMs
 - `swtpm` installed on the host
 - `nerdctl` or `docker` on `PATH` (used to build the Windows ISO in a container)
 
