@@ -46,7 +46,7 @@ Templates apply sane defaults (memory, CPUs, disks, networking, cloud-init) auto
 | `truenas` | TrueNAS SCALE · 6G / 2 CPUs · AHCI OS disk · per-drive iothreads · bridge NIC · SPICE |
 | `torrent` | Lightweight 2G / 1 CPU · qbittorrent-nox via cloud-init · optional VPN kill-switch |
 | `jellyfin` | Jellyfin · NFS/SMB/host-dir/block/USB media · mDNS |
-| `windows` | Windows · UEFI secure boot · TPM 2.0 |
+| `windows` | Windows · UEFI · secure boot + TPM 2.0 on x86_64 · arm64 (Apple Silicon) boots NVMe + ramfb with the hardware checks bypassed |
 | `docker` | Alpine Linux · Docker daemon on `tcp://localhost:2375` |
 | `github-runner` | Self-hosted Actions runner · outbound HTTPS long-polling |
 | `macos` | macOS guest on Apple's Virtualization.framework · 8G / 4 CPUs · Apple Silicon hosts only · restores from an IPSW or imports a [macosvm](https://github.com/s-u/macosvm) bundle |
@@ -91,7 +91,7 @@ Both the distro and `distro-version` forms shell-complete from the built-in list
 | `alpine` | Cloud image |
 | `bazzite` | Fedora Atomic gaming ISO |
 | `truenas` | TrueNAS SCALE installer ISO |
-| `windows` | Built on demand — `win11`, `win10`, `server2025`, `server2022` |
+| `windows` | Built on demand, matching the host arch — `win11`, `win10`, `server2025`, `server2022` on x86_64; `win11`, `win10` on arm64 (UUP dump publishes no arm64 Server feature builds) |
 | `macos` | Restore image (IPSW, 15-20 GB) — `latest` asks the host which image it can install; an `https://…ipsw` URL from [ipsw.me](https://ipsw.me/product/Mac/) pins an older one · Apple Silicon macOS hosts only |
 
 ### Windows ISOs
@@ -99,7 +99,9 @@ Both the distro and `distro-version` forms shell-complete from the built-in list
 vee builds Windows install ISOs on demand — no manual ISO download required. It
 resolves the latest build via the [UUP dump](https://uupdump.net/) API, downloads
 the ESD packages directly from Microsoft's servers, and assembles a bootable UEFI
-ISO inside a throwaway container (`wimlib` + `xorriso`).
+ISO inside a throwaway container (`wimlib` + `xorriso`). The media matches the
+host: amd64 on x86_64 hosts, arm64 on Apple Silicon and other arm64 hosts
+(mastered UEFI-only — ARM has no BIOS boot path).
 
 ```sh
 vee pull windows win11             # Windows 11 24H2
@@ -120,8 +122,11 @@ vee create winvm --template windows   # pulls automatically if not cached
 container; no host tooling is installed) and ~15 GB of free scratch space, which
 vee allocates next to the ISO cache (under `~/.vee/iso/`) so the build works even
 when `/tmp` is a small RAM-backed `tmpfs`. The `windows` template additionally
-pulls the VirtIO driver ISO and WinFSP so the guest gets paravirtualized disk,
-network, and virtiofs support out of the box.
+pulls the VirtIO driver ISO — on x86_64 also WinFSP — so the guest gets
+paravirtualized disk and network out of the box (plus virtiofs on x86_64;
+arm64 guests use an NVMe system disk and skip virtiofs until upstream ships a
+signed ARM64 `viofs` — see
+[docs/windows-guests.md → ARM64 guests](docs/windows-guests.md#arm64-guests)).
 
 > **Licensing:** vee downloads Windows bits from Microsoft's own servers and
 > assembles the ISO locally — it never redistributes Windows. You still need a

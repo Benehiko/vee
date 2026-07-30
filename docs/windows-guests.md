@@ -7,6 +7,11 @@ UEFI ISO inside a throwaway container (`wimlib` + `xorriso`). `vee create
 <name> --template windows` then boots that media and drives an unattended
 install (`Autounattend.xml`, virtio driver injection, TPM/Secure Boot bypass).
 
+The media matches the host architecture: amd64 on x86_64 hosts; arm64 on Apple
+Silicon and other arm64 hosts (`win11` and `win10` only — UUP dump publishes no
+arm64 Windows Server feature builds). See [ARM64 guests](#arm64-guests) for how
+the arm64 VM shape differs.
+
 ```sh
 vee pull windows win11             # Windows 11 24H2 (see 24H2 note below)
 vee pull windows win10             # Windows 10 22H2
@@ -15,9 +20,12 @@ vee pull windows server2022        # Windows Server 2022
 vee create winvm --template windows --distro-version win11
 ```
 
-> **Status:** `win10` (22H2) installs end-to-end today. `win11` (24H2) media boots
-> into Windows Setup and partitions the disk, but the unattended install does not
-> yet complete on 24H2 — see [the 24H2 note](#windows-11-24h2-limitation) below.
+> **Status:** both `win10` (22H2) and `win11` (24H2) install end-to-end on
+> x86_64. 24H2 needed several workarounds — see
+> [the 24H2 section](#windows-11-24h2-installing-from-a-writable-scratch-disk)
+> below and [docs/windows-24h2-install.md](windows-24h2-install.md). arm64
+> media builds and boots the same unattended flow; a full install run is still
+> being validated.
 
 ## How the ISO is assembled
 
@@ -123,6 +131,40 @@ The `windows` template runs a fully unattended install:
   enrolled Secure Boot keys.
 - First-logon runs `setup-guest.ps1` (WinFsp + virtio guest tools) and enables
   the OpenSSH server for headless access.
+
+## ARM64 guests
+
+On arm64 hosts (Apple Silicon under HVF, arm64 Linux under KVM) the pipeline
+builds arm64 media — `win11` (default) and `win10`; UUP dump publishes no arm64
+Windows Server feature builds — and the VM takes a different shape where the
+platform forces it:
+
+- **UEFI-only media.** ARM has no BIOS boot path: the ISO is mastered with a
+  single EFI El Torito entry (`efisys_noprompt.bin`), no `etfsboot.com`, the
+  same way UUP dump's own converter does it. The media is prompt-free by
+  construction, so the amd64 oscdimg rebuild step is skipped.
+- **NVMe system + scratch disks.** Windows ARM64 ships an inbox `stornvme`
+  driver, so Setup sees the disks with no driver loading at all. The install
+  and extras ISOs attach as **USB mass storage** (the `virt` board has no IDE).
+- **Display is ramfb** — the one device Windows ARM64 drives out of the box
+  (EDK2 GOP + Basic Display). The install renders in the host QEMU window; use
+  RDP after first boot for a resizable desktop. There is no virtio-gpu 3D
+  driver for Windows on any arch.
+- **No TPM device.** Windows ARM64 cannot initialize QEMU's sysbus
+  `tpm-tis-device` ([QEMU #830](https://gitlab.com/qemu-project/qemu/-/issues/830));
+  the working CRB-sysbus device exists only in UTM's fork. The answer file's
+  `LabConfig` bypass keys cover the Windows 11 TPM/Secure Boot requirement —
+  the same keys the amd64 flow already sets.
+- **Networking** is virtio-net with NetKVM's ARM64 build injected during
+  `offlineServicing`. virtio-win's ARM64 drivers (viostor, NetKVM, and friends)
+  are Microsoft **attestation-signed** since 0.1.285, so they load under the
+  normal kernel code-integrity policy — no testsigning.
+- **No virtiofs yet.** virtio-win ships no ARM64 guest-tools installer (the
+  WiX3 installer cannot target ARM64), and the ARM64 `viofs` driver is
+  test-signed only, so it will not load cleanly — both tracked in
+  [virtio-win#1337](https://github.com/virtio-win/kvm-guest-drivers-windows/issues/1337).
+  The first-logon script installs OpenSSH and skips the WinFsp/guest-tools
+  steps until upstream ships signed bits.
 
 ## Requirements
 

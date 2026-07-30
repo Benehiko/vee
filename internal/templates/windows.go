@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/Benehiko/vee/internal/images"
-	"github.com/Benehiko/vee/internal/platform"
 	"github.com/Benehiko/vee/internal/vm"
 	"github.com/Benehiko/vee/provider"
 )
@@ -32,13 +32,12 @@ import (
 func NewWindowsConfig(ctx context.Context, p provider.Provider, version images.WindowsVersion, name, virtiofsTag string, spicePort int) (*vm.VMConfig, error) {
 	conf := p.Config()
 
-	// The Windows image pipeline (UUP dump) and x86 Secure Boot OVMF are
-	// x86_64-only. Windows-on-ARM has no vee image pipeline, and even when run,
-	// Windows guests get no virtio-gpu 3D acceleration (no guest driver) and
-	// VFIO passthrough is unavailable on macOS. Refuse clearly on aarch64.
-	if platform.HostArch() == "arm64" {
-		return nil, fmt.Errorf("the windows template is x86_64-only; Windows-on-ARM has no vee image pipeline, " +
-			"and Windows guests get no GPU 3D acceleration on a macOS host (no virtio-gpu driver, no VFIO)")
+	// The media arch follows the host: UUP dump publishes amd64 and arm64
+	// client builds, and vee assembles whichever the host can accelerate.
+	arch := images.WindowsHostArch()
+	if arch == "arm64" && !slices.Contains(images.KnownWindowsVersionsForArch(arch), version) {
+		return nil, fmt.Errorf("windows %s has no arm64 build (UUP dump publishes no arm64 Windows Server media); "+
+			"available on arm64: win11, win10", version)
 	}
 
 	// Anchor created disks under the VM's storage dir (like the other templates).
@@ -60,27 +59,43 @@ func NewWindowsConfig(ctx context.Context, p provider.Provider, version images.W
 
 	// WinFsp MSI — the virtiofs client is a WinFsp filesystem, so WinFsp must be
 	// installed before the VirtioFS service can start. Baked into the unattend
-	// ISO and installed by the guest setup script.
-	winfspPath, err := ensureCachedDownload(ctx, p, winfspURL, winfspMSI)
-	if err != nil {
-		return nil, fmt.Errorf("WinFsp MSI: %w", err)
+	// ISO and installed by the guest setup script. amd64 only: arm64 guests
+	// skip the virtiofs chain entirely (no ARM64 guest-tools installer, and
+	// the ARM64 viofs driver is test-signed — see guestSetupARM64PS1), so the
+	// MSI would be dead weight on the extras ISO.
+	winfspPath := ""
+	if arch != "arm64" {
+		var err error
+		winfspPath, err = ensureCachedDownload(ctx, p, winfspURL, winfspMSI)
+		if err != nil {
+			return nil, fmt.Errorf("WinFsp MSI: %w", err)
+		}
 	}
 
 	driverDir, ok := virtioWinDriverDir[version]
 	if !ok {
 		driverDir = "w11"
 	}
-	autounattend := autounattendXML(version, driverDir, virtiofsTag)
+	autounattend := autounattendXML(version, arch, driverDir, virtiofsTag)
 	setupScript := guestSetupPS1(virtiofsTag)
+	if arch == "arm64" {
+		setupScript = guestSetupARM64PS1()
+	}
 
 	// The install media must not show "Press any key to boot from CD" — that
 	// prompt times out on an unattended boot and the firmware falls through to a
-	// PXE loop, and QMP key injection does not reach it. Rebuild the media with
-	// the prompt-free EFI boot image. Falls back to the original ISO if the tool
-	// (oscdimg) is unavailable.
-	installISOPath, err := ensureNoPromptISO(ctx, p, img.AbsolutePath())
-	if err != nil {
-		return nil, fmt.Errorf("prepare no-prompt install media: %w", err)
+	// PXE loop, and QMP key injection does not reach it. On amd64 the media is
+	// rebuilt with oscdimg and the prompt-free EFI boot image where the
+	// toolchain (wine + udisksctl, Linux-only) exists, falling back to the
+	// original ISO otherwise. arm64 media is already mastered UEFI-only around
+	// efisys_noprompt.bin by the image build, so the rebuild is skipped.
+	installISOPath := img.AbsolutePath()
+	if arch != "arm64" {
+		var err error
+		installISOPath, err = ensureNoPromptISO(ctx, p, img.AbsolutePath())
+		if err != nil {
+			return nil, fmt.Errorf("prepare no-prompt install media: %w", err)
+		}
 	}
 
 	// One "extras" ISO: virtio-win drivers + Autounattend.xml + WinFsp + the
@@ -90,6 +105,10 @@ func NewWindowsConfig(ctx context.Context, p provider.Provider, version images.W
 	extrasISO := filepath.Join(conf.ISOCachePath, "win-extras-"+name+".iso")
 	if err := buildExtrasISO(ctx, p, extrasISO, virtioISO, autounattend, setupScript, winfspPath); err != nil {
 		return nil, fmt.Errorf("build extras ISO: %w", err)
+	}
+
+	if arch == "arm64" {
+		return windowsARM64Config(conf, name, vmDir, installISOPath, extrasISO), nil
 	}
 
 	// Secboot OVMF for Windows 11 Secure Boot requirement.
@@ -207,4 +226,106 @@ func NewWindowsConfig(ctx context.Context, p provider.Provider, version images.W
 		RTC:       "base=localtime,clock=host",
 		CreatedAt: time.Now(),
 	}, nil
+}
+
+// windowsARM64Config assembles the aarch64 virt-board variant of the Windows
+// VM. It matches the x86 shape except where the platform forces a different
+// choice:
+//
+//   - Machine: the default aarch64 "virt" board (the machine layer adds
+//     gic-version). No SMM and no Secure Boot pflash — vee's aarch64 edk2 has
+//     no Secure Boot variant, and the answer file's LabConfig keys bypass the
+//     Windows 11 check.
+//   - Storage: NVMe. Windows ARM64 ships an inbox stornvme driver, so Setup
+//     sees the system disk with no driver injection at all — the virtio path
+//     would need viostor drvloaded before any disk is visible. The scratch
+//     disk rides NVMe too and must stay LAST so startnet.cmd's "highest disk
+//     index" selection (interface-agnostic) still picks it.
+//   - Install media: USB mass storage on the xhci controller. The virt board
+//     has no IDE bus; every Windows has an inbox USB storage driver. The two-
+//     optical-drive q35 limit does not apply here.
+//   - Display: ramfb — the one display Windows ARM64 drives out of the box
+//     (edk2 GOP + Basic Display; no virtio-gpu guest driver exists). No SPICE:
+//     the install renders in the host QEMU window (cocoa/gtk); use RDP after
+//     first boot for a real desktop.
+//   - Network: virtio-net-pci, with NetKVM's ARM64 build injected into the
+//     applied image by the answer file's offlineServicing pass.
+//   - No TPM: Windows ARM64 cannot initialize QEMU's sysbus tpm-tis-device
+//     (upstream QEMU issue #830), and the CRB-sysbus device that does work
+//     exists only in UTM's QEMU fork. LabConfig BypassTPMCheck covers the
+//     Windows 11 requirement.
+//   - No Hyper-V enlightenment CPU flags — they are x86-only; the manager
+//     forces -cpu host on aarch64 and would drop them with a warning.
+func windowsARM64Config(conf *provider.Config, name, vmDir, installISOPath, extrasISO string) *vm.VMConfig {
+	return &vm.VMConfig{
+		Name:     name,
+		Template: "windows",
+		Memory:   "8G",
+		CPUs:     4,
+		Sockets:  1,
+		Cores:    4,
+		Threads:  1,
+		CPUModel: "host",
+		NIC: vm.NICConfig{
+			Mode:  "user",
+			Model: "virtio-net-pci",
+		},
+		GPU: vm.GPUConfig{Mode: vm.GPUNone},
+		UEFI: vm.UEFIConfig{
+			Enabled: true,
+		},
+		ExtraDevices: []string{
+			"ramfb",
+			"qemu-xhci,id=xhci",
+			"usb-kbd,bus=xhci.0",
+			"usb-tablet,bus=xhci.0",
+		},
+		Disks: []vm.DiskConfig{
+			// Windows install media over USB (no IDE on virt). Deliberately no
+			// bootindex: fresh edk2 vars fall through the empty NVMe disk to
+			// the media, and once Setup writes the Windows Boot Manager entry
+			// the disk must win every later boot.
+			{
+				Path:       installISOPath,
+				Interface:  "usb",
+				Media:      "cdrom",
+				Cache:      "none",
+				Readonly:   true,
+				InstallISO: true,
+			},
+			// Extras ISO: virtio-win drivers + Autounattend.xml + WinFsp +
+			// setup script.
+			{
+				Path:       extrasISO,
+				Interface:  "usb",
+				Media:      "cdrom",
+				Cache:      "none",
+				Readonly:   true,
+				InstallISO: true,
+			},
+			// System disk (NVMe; inbox stornvme driver).
+			{
+				Path:      filepath.Join(vmDir, "storage", "disk-os.qcow2"),
+				Size:      conf.DefaultDiskSize,
+				Format:    "qcow2",
+				Interface: "nvme",
+				Media:     "disk",
+				Cache:     "writeback",
+			},
+			// Scratch disk for 24H2 ConX Setup's writable working tree (see
+			// the x86 config above). Must stay LAST — startnet.cmd selects the
+			// highest disk index as the scratch and never touches the OS disk.
+			{
+				Path:      filepath.Join(vmDir, "storage", "disk-scratch.qcow2"),
+				Size:      "8G",
+				Format:    "qcow2",
+				Interface: "nvme",
+				Media:     "disk",
+				Cache:     "writeback",
+				Scratch:   true,
+			},
+		},
+		RTC:       "base=localtime,clock=host",
+		CreatedAt: time.Now(),
+	}
 }

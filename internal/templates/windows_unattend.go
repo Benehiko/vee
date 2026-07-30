@@ -36,11 +36,16 @@ import (
 // needed.
 
 const (
-	// virtioWinURL is the Fedora-hosted stable virtio-win driver ISO. It ships
-	// signed drivers for every supported Windows version plus the guest-tools
-	// installer (which includes viofs, the virtiofs client).
-	virtioWinURL = "https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso"
-	virtioWinISO = "virtio-win.iso"
+	// virtioWinURL is the Fedora-hosted virtio-win driver ISO. It ships signed
+	// drivers for every supported Windows version plus the guest-tools
+	// installer (which includes viofs, the virtiofs client). Pinned rather
+	// than the "stable-virtio" alias for two reasons: reproducibility (like
+	// WinFsp below), and because 0.1.285 is the first release whose ARM64
+	// viostor/NetKVM are Microsoft attestation-signed — an older cached
+	// "virtio-win.iso" would silently leave an arm64 guest without drivers.
+	// The versioned cache filename forces a re-download across the pin bump.
+	virtioWinURL = "https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.285-1/virtio-win-0.1.285.iso"
+	virtioWinISO = "virtio-win-0.1.285.iso"
 
 	// winfspURL is a pinned WinFsp release MSI. WinFsp is the user-mode
 	// filesystem framework virtiofs builds on; it is not part of virtio-win and
@@ -63,12 +68,24 @@ const (
 
 // virtioWinDriverDir maps a WindowsVersion to the per-OS subdirectory used
 // inside the virtio-win ISO (e.g. "w11", "w10", "2k22", "2k25"). Setup loads
-// the storage driver from <drive>\viostor\<dir>\amd64.
+// the storage driver from <drive>\viostor\<dir>\<arch>, where <arch> is the
+// ISO's per-arch leaf: "amd64" or "ARM64" (virtio-win ships arm64 driver
+// builds under an uppercase ARM64 directory).
 var virtioWinDriverDir = map[images.WindowsVersion]string{
 	images.Windows11:         "w11",
 	images.Windows10:         "w10",
 	images.WindowsServer2025: "2k25",
 	images.WindowsServer2022: "2k22",
+}
+
+// windowsUnattendArch maps the UUP media arch onto the two per-arch spellings
+// the answer file needs: the component processorArchitecture attribute
+// (lowercase) and the virtio-win ISO's per-arch driver directory leaf.
+func windowsUnattendArch(arch string) (procArch, driverLeaf string) {
+	if arch == "arm64" {
+		return "arm64", "ARM64"
+	}
+	return "amd64", "amd64"
 }
 
 // ensureCachedDownload fetches url into <isoCache>/<name> if not already
@@ -92,15 +109,19 @@ func ensureCachedDownload(ctx context.Context, p provider.Provider, url, name st
 	return dst, nil
 }
 
-// autounattendXML renders the Windows answer file for the given version and
-// virtiofs tag. driverDir is the virtio-win per-OS folder (e.g. "w11").
+// autounattendXML renders the Windows answer file for the given version,
+// media architecture ("amd64" or "arm64") and virtiofs tag. driverDir is the
+// virtio-win per-OS folder (e.g. "w11").
 //
 // The WinPE pass points DriverPaths at the whole virtio-win CD (E: at WinPE
 // time) so every signed .inf is available; Windows picks the matching viostor
 // automatically. The disk is fully wiped and repartitioned (EFI + MSR +
 // Windows) so the install is deterministic. FirstLogonCommands hand off to the
 // setup script on the unattend CD.
-func autounattendXML(version images.WindowsVersion, driverDir, tag string) string {
+//
+// Setup only honours components whose processorArchitecture matches the
+// running media, so the arch is stamped on every component.
+func autounattendXML(version images.WindowsVersion, arch, driverDir, tag string) string {
 	_ = version
 	// runSetup invokes the guest setup script from whichever drive the
 	// unattend ISO mounted as. cmd searches drives at first logon.
@@ -108,7 +129,7 @@ func autounattendXML(version images.WindowsVersion, driverDir, tag string) strin
 <unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
   <settings pass="windowsPE">
     <!-- Locale for WinPE so Setup does not stop on the language/keyboard page. -->
-    <component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="amd64"
+    <component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="{{ARCH}}"
                publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <SetupUILanguage>
         <UILanguage>en-US</UILanguage>
@@ -131,7 +152,7 @@ func autounattendXML(version images.WindowsVersion, driverDir, tag string) strin
       viostor + NetKVM into the applied OS image so the installed OS boots from
       the virtio disk.
     -->
-    <component name="Microsoft-Windows-Setup" processorArchitecture="amd64"
+    <component name="Microsoft-Windows-Setup" processorArchitecture="{{ARCH}}"
                publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <RunSynchronous>
         <!-- Bypass Windows 11 hardware checks (Secure Boot keys are not
@@ -226,27 +247,27 @@ func autounattendXML(version images.WindowsVersion, driverDir, tag string) strin
       the failing down-level unattend driver step. Paths scan both driver-CD
       letters (D:/E:) since the assignment is not fixed.
     -->
-    <component name="Microsoft-Windows-PnpCustomizationsNonWinPE" processorArchitecture="amd64"
+    <component name="Microsoft-Windows-PnpCustomizationsNonWinPE" processorArchitecture="{{ARCH}}"
                publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <DriverPaths>
         <PathAndCredentials wcm:action="add" wcm:keyValue="1">
-          <Path>D:\viostor\{{DRIVERDIR}}\amd64</Path>
+          <Path>D:\viostor\{{DRIVERDIR}}\{{DRIVERARCH}}</Path>
         </PathAndCredentials>
         <PathAndCredentials wcm:action="add" wcm:keyValue="2">
-          <Path>E:\viostor\{{DRIVERDIR}}\amd64</Path>
+          <Path>E:\viostor\{{DRIVERDIR}}\{{DRIVERARCH}}</Path>
         </PathAndCredentials>
         <PathAndCredentials wcm:action="add" wcm:keyValue="3">
-          <Path>D:\NetKVM\{{DRIVERDIR}}\amd64</Path>
+          <Path>D:\NetKVM\{{DRIVERDIR}}\{{DRIVERARCH}}</Path>
         </PathAndCredentials>
         <PathAndCredentials wcm:action="add" wcm:keyValue="4">
-          <Path>E:\NetKVM\{{DRIVERDIR}}\amd64</Path>
+          <Path>E:\NetKVM\{{DRIVERDIR}}\{{DRIVERARCH}}</Path>
         </PathAndCredentials>
       </DriverPaths>
     </component>
   </settings>
 
   <settings pass="specialize">
-    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64"
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="{{ARCH}}"
                publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <ComputerName>VEE-WIN</ComputerName>
     </component>
@@ -254,14 +275,14 @@ func autounattendXML(version images.WindowsVersion, driverDir, tag string) strin
 
   <settings pass="oobeSystem">
     <!-- Locale for OOBE so the region/keyboard pages auto-skip. -->
-    <component name="Microsoft-Windows-International-Core" processorArchitecture="amd64"
+    <component name="Microsoft-Windows-International-Core" processorArchitecture="{{ARCH}}"
                publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <InputLocale>0409:00000409</InputLocale>
       <SystemLocale>en-US</SystemLocale>
       <UILanguage>en-US</UILanguage>
       <UserLocale>en-US</UserLocale>
     </component>
-    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64"
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="{{ARCH}}"
                publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <OOBE>
         <HideEULAPage>true</HideEULAPage>
@@ -297,7 +318,7 @@ func autounattendXML(version images.WindowsVersion, driverDir, tag string) strin
         <SynchronousCommand wcm:action="add">
           <Order>1</Order>
           <CommandLine>powershell -NoProfile -ExecutionPolicy Bypass -Command "$d=(Get-Volume -FileSystemLabel '{{VOLID}}').DriveLetter; Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',(\"$($d):\setup-guest.ps1\") -Wait"</CommandLine>
-          <Description>Install WinFsp + virtio-win guest tools (virtiofs)</Description>
+          <Description>Run the vee guest setup script</Description>
         </SynchronousCommand>
       </FirstLogonCommands>
     </component>
@@ -312,7 +333,10 @@ func autounattendXML(version images.WindowsVersion, driverDir, tag string) strin
 	if productKey == "" {
 		productKey = winProductKey[images.Windows10]
 	}
+	procArch, driverLeaf := windowsUnattendArch(arch)
 	r := strings.NewReplacer(
+		"{{ARCH}}", procArch,
+		"{{DRIVERARCH}}", driverLeaf,
 		"{{DRIVERDIR}}", driverDir,
 		"{{USER}}", winAdminUser,
 		"{{PASS}}", winAdminPass,
@@ -335,12 +359,15 @@ var winProductKey = map[images.WindowsVersion]string{
 	images.WindowsServer2022: "VDYBN-27WPP-V4HQT-9VMD4-VMK7H",
 }
 
-// guestSetupPS1 renders the first-logon PowerShell script. It installs WinFsp
-// silently, then runs the virtio-win guest-tools installer (which installs the
-// viofs driver and starts the VirtioFS service). tag is the virtiofs mount tag
-// the share was created with; the script logs it for the operator (virtiofs on
-// Windows exposes the share as a drive letter once the service starts, not by
-// tag, so tag is informational here).
+// guestSetupPS1 renders the first-logon PowerShell script for amd64 guests.
+// It installs WinFsp silently, then runs the virtio-win guest-tools installer
+// (which installs the viofs driver and starts the VirtioFS service). tag is
+// the virtiofs mount tag the share was created with; the script logs it for
+// the operator (virtiofs on Windows exposes the share as a drive letter once
+// the service starts, not by tag, so tag is informational here).
+//
+// arm64 guests get guestSetupARM64PS1 instead — the virtiofs chain is not
+// installable there yet.
 func guestSetupPS1(tag string) string {
 	const tmpl = `$ErrorActionPreference = 'Continue'
 $log = "$env:SystemDrive\vee-guest-setup.log"
@@ -404,6 +431,35 @@ Restart-Computer -Force
 		"{{WINFSP}}", winfspMSI,
 	)
 	return r.Replace(tmpl)
+}
+
+// guestSetupARM64PS1 renders the first-logon script for arm64 guests. The
+// virtiofs chain is deliberately absent: virtio-win ships no ARM64 guest-tools
+// installer (the WiX3 installer cannot target ARM64 — virtio-win issue #1337),
+// and the ARM64 viofs driver is test-signed only, so it will not load without
+// testsigning + the Red Hat CA. The storage (viostor) and network (NetKVM)
+// drivers need nothing here — the answer file's offlineServicing pass injects
+// their attestation-signed ARM64 builds into the applied image. That leaves
+// OpenSSH as the one first-logon job.
+func guestSetupARM64PS1() string {
+	return `$ErrorActionPreference = 'Continue'
+$log = "$env:SystemDrive\vee-guest-setup.log"
+function Log($m) { "$([DateTime]::Now.ToString('s')) $m" | Tee-Object -FilePath $log -Append }
+
+Log "vee guest setup starting (arm64)"
+Log "virtiofs skipped: no ARM64 virtio-win guest-tools installer, and the ARM64 viofs driver is test-signed (virtio-win issue #1337)"
+
+# Enable OpenSSH server for headless access (best-effort).
+try {
+  Add-WindowsCapability -Online -Name 'OpenSSH.Server~~~~0.0.1.0' -ErrorAction Stop | Out-Null
+  Set-Service -Name sshd -StartupType Automatic
+  Start-Service sshd
+  New-NetFirewallRule -Name sshd -DisplayName 'OpenSSH Server' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 -ErrorAction SilentlyContinue | Out-Null
+  Log "OpenSSH server enabled"
+} catch { Log "OpenSSH enable skipped: $_" }
+
+Log "vee guest setup complete"
+`
 }
 
 // buildExtrasISO builds the single "extras" ISO that carries everything Setup

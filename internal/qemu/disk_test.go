@@ -317,6 +317,102 @@ func TestDiskAHCIArgs(t *testing.T) {
 	}
 }
 
+func TestDiskNVMeArgs(t *testing.T) {
+	p := newTestProvider(t)
+	m := newTestMachine(t)
+	disk := qemu.NewDisk(p, m,
+		qemu.WithCustomPath("/data/os.qcow2"),
+		qemu.WithInterface(qemu.InterfaceNVMe),
+		qemu.WithFormat(qemu.QCOW2),
+		qemu.WithCache(qemu.CacheWriteback),
+		qemu.WithBootIndex(0),
+	)
+	args := disk.Args()
+	joined := strings.Join(args, " ")
+
+	if !strings.Contains(joined, "if=none") {
+		t.Errorf("NVMe drive should have if=none: %s", joined)
+	}
+	if !strings.Contains(joined, "-device nvme,drive=") {
+		t.Errorf("missing nvme device: %s", joined)
+	}
+	// QEMU refuses an nvme device without a serial.
+	if !strings.Contains(joined, "serial=") {
+		t.Errorf("nvme device needs a serial: %s", joined)
+	}
+	if !strings.Contains(joined, "cache=writeback") {
+		t.Errorf("missing cache mode: %s", joined)
+	}
+	if strings.Contains(joined, "bootindex") {
+		t.Errorf("bootindex 0 must not be emitted: %s", joined)
+	}
+}
+
+func TestDiskUSBCdromArgs(t *testing.T) {
+	p := newTestProvider(t)
+	m := newTestMachine(t)
+	disk := qemu.NewDisk(p, m,
+		qemu.WithCustomPath("/data/install.iso"),
+		qemu.WithInterface(qemu.InterfaceUSB),
+		qemu.WithMedia(qemu.DiskMediaCdrom),
+		qemu.WithReadonly(true),
+	)
+	args := disk.Args()
+	joined := strings.Join(args, " ")
+
+	if !strings.Contains(joined, "if=none") {
+		t.Errorf("USB drive should have if=none: %s", joined)
+	}
+	if !strings.Contains(joined, "-device usb-storage,drive=") {
+		t.Errorf("missing usb-storage device: %s", joined)
+	}
+	if !strings.Contains(joined, "media=cdrom") {
+		t.Errorf("missing cdrom media: %s", joined)
+	}
+	if !strings.Contains(joined, "readonly=true") {
+		t.Errorf("cdrom should be readonly: %s", joined)
+	}
+	// FixOptions strips the format for cdroms; the drive must not carry one.
+	if strings.Contains(joined, "format=") {
+		t.Errorf("cdrom drive must not pin a format: %s", joined)
+	}
+}
+
+func TestDiskUSBControllerPrecedesDisks(t *testing.T) {
+	// QEMU resolves a device's bus at creation time in command-line order, so
+	// the xhci controller the usb-storage devices attach to must be emitted
+	// before them — an extraDevices controller comes after the disks and
+	// fails startup with "No usb-bus bus found for device usb-storage".
+	p := newTestProvider(t)
+	base, err := qemu.NewEmptyMachine(p)
+	if err != nil {
+		t.Fatalf("NewEmptyMachine: %v", err)
+	}
+	machine, err := base.BuildMachine(
+		qemu.AddDisk(qemu.NewDisk(p, base,
+			qemu.WithCustomPath("/data/install.iso"),
+			qemu.WithInterface(qemu.InterfaceUSB),
+			qemu.WithMedia(qemu.DiskMediaCdrom),
+			qemu.WithReadonly(true),
+		)),
+	)
+	if err != nil {
+		t.Fatalf("BuildMachine: %v", err)
+	}
+	joined := strings.Join(machine.Args(), " ")
+	ctrl := strings.Index(joined, "qemu-xhci,id=usbdisk0")
+	stor := strings.Index(joined, "usb-storage,drive=")
+	if ctrl == -1 || stor == -1 {
+		t.Fatalf("missing controller or usb-storage in args: %s", joined)
+	}
+	if ctrl > stor {
+		t.Errorf("xhci controller emitted after usb-storage (bus would not resolve): %s", joined)
+	}
+	if !strings.Contains(joined, "bus=usbdisk0.0") {
+		t.Errorf("usb-storage should pin bus=usbdisk0.0: %s", joined)
+	}
+}
+
 func TestDiskName(t *testing.T) {
 	p := newTestProvider(t)
 	m := newTestMachine(t)
