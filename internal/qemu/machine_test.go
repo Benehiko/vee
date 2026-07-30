@@ -89,10 +89,14 @@ func TestMachineAArch64VirtNested(t *testing.T) {
 		t.Fatalf("NewEmptyMachine: %v", err)
 	}
 	disk := qemu.NewDisk(p, m, qemu.WithCustomPath("/data/disk.qcow2"))
+	// Pin a non-HVF accelerator: the host-derived default would be hvf on a
+	// macOS runner, where nested additionally appends kernel-irqchip=on
+	// (covered by TestMachineNestedHVFKernelIrqchip).
 	built, err := m.BuildMachine(
 		qemu.AddDisk(disk),
 		qemu.WithArchitecture("aarch64"),
 		qemu.WithMachineType("virt"),
+		qemu.WithAccelerator(qemu.AccelTCG),
 		qemu.WithNested(true),
 	)
 	if err != nil {
@@ -101,6 +105,141 @@ func TestMachineAArch64VirtNested(t *testing.T) {
 	got := argValue(built.Args(), "-machine")
 	if got != "virt,gic-version=max,virtualization=on" {
 		t.Errorf("nested aarch64 virt machine: got %q, want virt,gic-version=max,virtualization=on", got)
+	}
+}
+
+func TestMachineNestedHVFKernelIrqchip(t *testing.T) {
+	// The HVF nested path (QEMU 11.1+) requires Apple's in-kernel vGIC — EL2
+	// with the userspace-GIC fallback is refused at start — so nested under
+	// HVF must carry kernel-irqchip=on.
+	p := newTestProvider(t)
+	m, err := qemu.NewEmptyMachine(p)
+	if err != nil {
+		t.Fatalf("NewEmptyMachine: %v", err)
+	}
+	disk := qemu.NewDisk(p, m, qemu.WithCustomPath("/data/disk.qcow2"))
+	built, err := m.BuildMachine(
+		qemu.AddDisk(disk),
+		qemu.WithArchitecture("aarch64"),
+		qemu.WithMachineType("virt"),
+		qemu.WithAccelerator(qemu.AccelHVF),
+		qemu.WithNested(true),
+	)
+	if err != nil {
+		t.Fatalf("BuildMachine: %v", err)
+	}
+	got := argValue(built.Args(), "-machine")
+	if got != "virt,gic-version=max,virtualization=on,kernel-irqchip=on" {
+		t.Errorf("nested HVF machine: got %q, want virt,gic-version=max,virtualization=on,kernel-irqchip=on", got)
+	}
+}
+
+func TestMachineNestedHVFBootMenuWorkaround(t *testing.T) {
+	// edk2 hangs forever at EL2 under HVF waiting on a virtual-timer interrupt
+	// Hypervisor.framework never delivers (Apple FB21649319); the upstream
+	// series' documented workaround is -boot menu=on,splash-time=0.
+	p := newTestProvider(t)
+	m, err := qemu.NewEmptyMachine(p)
+	if err != nil {
+		t.Fatalf("NewEmptyMachine: %v", err)
+	}
+	disk := qemu.NewDisk(p, m, qemu.WithCustomPath("/data/disk.qcow2"))
+	built, err := m.BuildMachine(
+		qemu.AddDisk(disk),
+		qemu.WithArchitecture("aarch64"),
+		qemu.WithMachineType("virt"),
+		qemu.WithAccelerator(qemu.AccelHVF),
+		qemu.WithNested(true),
+	)
+	if err != nil {
+		t.Fatalf("BuildMachine: %v", err)
+	}
+	if got := argValue(built.Args(), "-boot"); got != "menu=on,splash-time=0" {
+		t.Errorf("nested HVF boot workaround missing: got %q", got)
+	}
+
+	// With an explicit boot order the workaround merges rather than replaces.
+	m2, _ := qemu.NewEmptyMachine(p)
+	disk2 := qemu.NewDisk(p, m2, qemu.WithCustomPath("/data/disk.qcow2"))
+	built2, err := m2.BuildMachine(
+		qemu.AddDisk(disk2),
+		qemu.WithArchitecture("aarch64"),
+		qemu.WithMachineType("virt"),
+		qemu.WithAccelerator(qemu.AccelHVF),
+		qemu.WithNested(true),
+		qemu.WithBootOrder("c"),
+	)
+	if err != nil {
+		t.Fatalf("BuildMachine: %v", err)
+	}
+	if got := argValue(built2.Args(), "-boot"); got != "order=c,menu=on,splash-time=0" {
+		t.Errorf("nested HVF boot order merge: got %q", got)
+	}
+
+	// Non-nested machines keep the quiet menu=off behaviour.
+	m3, _ := qemu.NewEmptyMachine(p)
+	disk3 := qemu.NewDisk(p, m3, qemu.WithCustomPath("/data/disk.qcow2"))
+	built3, err := m3.BuildMachine(
+		qemu.AddDisk(disk3),
+		qemu.WithArchitecture("aarch64"),
+		qemu.WithMachineType("virt"),
+		qemu.WithAccelerator(qemu.AccelHVF),
+		qemu.WithBootOrder("c"),
+	)
+	if err != nil {
+		t.Fatalf("BuildMachine: %v", err)
+	}
+	if got := argValue(built3.Args(), "-boot"); got != "order=c,menu=off" {
+		t.Errorf("non-nested boot order changed: got %q", got)
+	}
+}
+
+func TestMachineNestedKVMNoKernelIrqchip(t *testing.T) {
+	// KVM's in-kernel GIC is the default there; the explicit pairing is an
+	// HVF-only need and must not leak onto other accelerators.
+	p := newTestProvider(t)
+	m, err := qemu.NewEmptyMachine(p)
+	if err != nil {
+		t.Fatalf("NewEmptyMachine: %v", err)
+	}
+	disk := qemu.NewDisk(p, m, qemu.WithCustomPath("/data/disk.qcow2"))
+	built, err := m.BuildMachine(
+		qemu.AddDisk(disk),
+		qemu.WithArchitecture("aarch64"),
+		qemu.WithMachineType("virt"),
+		qemu.WithAccelerator(qemu.AccelKVM),
+		qemu.WithNested(true),
+	)
+	if err != nil {
+		t.Fatalf("BuildMachine: %v", err)
+	}
+	if got := argValue(built.Args(), "-machine"); strings.Contains(got, "kernel-irqchip") {
+		t.Errorf("kernel-irqchip must not be added under KVM: got %q", got)
+	}
+}
+
+func TestMachineNestedHVFRespectsExplicitIrqchip(t *testing.T) {
+	// An explicit kernel-irqchip value in machine_type wins, mirroring how
+	// gic-version and virtualization are handled.
+	p := newTestProvider(t)
+	m, err := qemu.NewEmptyMachine(p)
+	if err != nil {
+		t.Fatalf("NewEmptyMachine: %v", err)
+	}
+	disk := qemu.NewDisk(p, m, qemu.WithCustomPath("/data/disk.qcow2"))
+	built, err := m.BuildMachine(
+		qemu.AddDisk(disk),
+		qemu.WithArchitecture("aarch64"),
+		qemu.WithMachineType("virt,kernel-irqchip=off"),
+		qemu.WithAccelerator(qemu.AccelHVF),
+		qemu.WithNested(true),
+	)
+	if err != nil {
+		t.Fatalf("BuildMachine: %v", err)
+	}
+	got := argValue(built.Args(), "-machine")
+	if strings.Contains(got, "kernel-irqchip=on") {
+		t.Errorf("explicit kernel-irqchip=off was overridden: got %q", got)
 	}
 }
 

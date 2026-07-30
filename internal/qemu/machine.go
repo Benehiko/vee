@@ -317,6 +317,15 @@ func (q *BaseMachine) effectiveMachineType() string {
 		strings.HasPrefix(mt, "virt") && !strings.Contains(mt, "virtualization=") {
 		mt += ",virtualization=on"
 	}
+	// QEMU's HVF nested-virt path (11.1+) only works with Apple's in-kernel
+	// vGIC: the merged series ships no EL2 timer emulation for the
+	// userspace-GIC fallback, so EL2 with the default userspace GIC is refused
+	// at start. Pair the nested request with kernel-irqchip=on under HVF,
+	// unless the user pinned their own kernel-irqchip value.
+	if q.nested && q.accelerator == AccelHVF &&
+		strings.HasPrefix(mt, "virt") && !strings.Contains(mt, "kernel-irqchip") {
+		mt += ",kernel-irqchip=on"
+	}
 	// WHPX's in-hypervisor APIC emulation is buggy in current QEMU/WHPX builds:
 	// setting the virtual interrupt-controller state can fail with c0350005
 	// (WHvSetVirtualProcessorInterruptControllerState … failed), killing the VM
@@ -417,8 +426,20 @@ func (q *BaseMachine) Args() []string {
 		args = append(args, "-rtc", q.rtc)
 	}
 
-	if q.bootOrder != "" {
+	// Nested under HVF needs the boot-menu workaround from the upstream HVF
+	// nested series: edk2 waits on the EL2 virtual timer, whose interrupt
+	// Hypervisor.framework never delivers when the VM runs at EL2 (Apple
+	// FB21649319), so the firmware hangs forever before the bootloader.
+	// menu=on,splash-time=0 skips that wait; Linux itself is unaffected once
+	// booted. Verified against the qemu-11.1.0-rc2 bundle on an M4 Max.
+	nestedHVFBoot := q.nested && q.accelerator == AccelHVF
+	switch {
+	case q.bootOrder != "" && nestedHVFBoot:
+		args = append(args, "-boot", fmt.Sprintf("order=%s,menu=on,splash-time=0", q.bootOrder))
+	case q.bootOrder != "":
 		args = append(args, "-boot", fmt.Sprintf("order=%s,menu=off", q.bootOrder))
+	case nestedHVFBoot:
+		args = append(args, "-boot", "menu=on,splash-time=0")
 	}
 
 	if q.qmpSocket != "" {
