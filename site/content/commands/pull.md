@@ -55,7 +55,7 @@ vee pull macos https://updates.cdn-apple.com/…/UniversalMac_15.5_24F74_Restore
 | `alpine` | Cloud image |
 | `bazzite` | Fedora Atomic gaming ISO |
 | `truenas` | TrueNAS SCALE installer ISO |
-| `windows` | Built on demand — `win11`, `win10`, `server2025`, `server2022` |
+| `windows` | Built on demand — `win11`, `win10`, `server2025`, `server2022` · x86_64 hosts only |
 
 Run `vee pull --list` to see the exact version strings supported by your build.
 
@@ -72,6 +72,9 @@ Building a Windows ISO requires `nerdctl` or `docker` on `PATH`; no ISO-assembly
 tooling is installed on the host. The build needs roughly 15 GB of free scratch
 space, which vee allocates next to the ISO cache (under `~/.vee/iso/`) so it works
 even when `/tmp` is a small RAM-backed `tmpfs`.
+
+Windows guests are **x86_64 hosts only**: there is no Windows-on-ARM pipeline
+yet, so Apple Silicon Macs (and other arm64 hosts) cannot create Windows VMs.
 
 {{< hint type=note >}}
 vee downloads Windows bits from Microsoft's own servers and assembles the ISO
