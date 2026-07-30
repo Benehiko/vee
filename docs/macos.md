@@ -265,11 +265,13 @@ vee create dd --template devbox --nested
 ```
 
 or as `nested: true` in the VM's `vm.yaml`. vee appends `virtualization=on` to
-the aarch64 `virt` machine; whether the host can honour it is the accelerator's
-call at start, and QEMU's error reaches the user verbatim. The knob is wired
-for arm64 (aarch64) QEMU guests only; `vee create` refuses it elsewhere. macOS
-guests can never nest — Apple's frameworks do not work inside a VM (see the
-macOS-guest caveats below).
+the aarch64 `virt` machine — under HVF paired with `kernel-irqchip=on`, because
+QEMU's HVF nested path only works with Apple's in-kernel vGIC (the userspace-GIC
+fallback has no EL2 timer emulation and is refused at start). Whether the host
+can honour it is the accelerator's call at start, and QEMU's error reaches the
+user verbatim. The knob is wired for arm64 (aarch64) QEMU guests only;
+`vee create` refuses it elsewhere. macOS guests can never nest — Apple's
+frameworks do not work inside a VM (see the macOS-guest caveats below).
 
 **Current HVF status:** QEMU gained HVF EL2 support in **11.1**; vee's pinned
 bundle is **10.0.2**, which refuses to start with

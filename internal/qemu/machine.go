@@ -317,6 +317,15 @@ func (q *BaseMachine) effectiveMachineType() string {
 		strings.HasPrefix(mt, "virt") && !strings.Contains(mt, "virtualization=") {
 		mt += ",virtualization=on"
 	}
+	// QEMU's HVF nested-virt path (11.1+) only works with Apple's in-kernel
+	// vGIC: the merged series ships no EL2 timer emulation for the
+	// userspace-GIC fallback, so EL2 with the default userspace GIC is refused
+	// at start. Pair the nested request with kernel-irqchip=on under HVF,
+	// unless the user pinned their own kernel-irqchip value.
+	if q.nested && q.accelerator == AccelHVF &&
+		strings.HasPrefix(mt, "virt") && !strings.Contains(mt, "kernel-irqchip") {
+		mt += ",kernel-irqchip=on"
+	}
 	// WHPX's in-hypervisor APIC emulation is buggy in current QEMU/WHPX builds:
 	// setting the virtual interrupt-controller state can fail with c0350005
 	// (WHvSetVirtualProcessorInterruptControllerState … failed), killing the VM
