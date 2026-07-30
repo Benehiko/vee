@@ -261,6 +261,13 @@ func extractBundle(tarGzPath, destRoot string) error {
 			if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
 				return err
 			}
+			// Remove any previous bundle's file first, like the symlink case
+			// below. Bundles ship some files read-only (the 10.0.2 bundle's
+			// libMoltenVK.dylib is 0444), and opening an existing read-only
+			// file with O_TRUNC fails EACCES — which used to abort the first
+			// in-place bundle upgrade halfway, leaving a new binary on old
+			// dylibs.
+			_ = os.Remove(target)
 			//nolint:gosec // preserve archive file modes: the QEMU binary and its .dylibs need the exec bit; the bundle is checksum-verified before extraction
 			out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(hdr.Mode)&0o777)
 			if err != nil {
