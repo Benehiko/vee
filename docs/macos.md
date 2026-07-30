@@ -248,6 +248,50 @@ vee create box --template desktop --distro ubuntu # Ubuntu arm64
 Acceleration requires a virgl-capable QEMU (see "The vee-qemu bundle" below);
 with stock/Homebrew QEMU the desktop still renders, but in software (llvmpipe).
 
+## Nested virtualization (KVM inside a guest)
+
+Linux guests can run their own VMs — Docker Desktop for Linux, KubeVirt,
+Firecracker, plain `qemu -accel kvm` — when the guest CPU exposes EL2. This is
+opt-in per VM:
+
+```sh
+vee create dd --template devbox --nested
+```
+
+or as `nested: true` in the VM's `vm.yaml`. vee appends `virtualization=on` to
+the aarch64 `virt` machine; whether the host can honour it is the accelerator's
+call at start, and QEMU's error reaches the user verbatim. The knob is wired
+for arm64 (aarch64) QEMU guests only; `vee create` refuses it elsewhere. macOS
+guests can never nest — Apple's frameworks do not work inside a VM (see the
+macOS-guest caveats below).
+
+**Current HVF status:** QEMU gained HVF EL2 support in **11.1**; vee's pinned
+bundle is **10.0.2**, which refuses to start with
+
+```
+qemu-system-aarch64: mach-virt: HVF does not support providing Virtualization extensions to the guest CPU
+```
+
+on every Mac, M3/macOS 15 included (verified against the shipped bundle). So on
+macOS hosts, `--nested` becomes useful once the pinned QEMU moves to ≥ 11.1 —
+the bundle-bump route tracked in
+[#64](https://github.com/Benehiko/vee/issues/64). Once QEMU is new enough, the
+hardware floor is an M3-or-later Mac on macOS 15+. On arm64 Linux hosts, KVM
+needs a kernel with ARM nested-virt support.
+
+Verify inside the guest:
+
+```sh
+sudo dmesg | grep -i 'started at EL2'   # CPUs entered at EL2 → KVM available
+ls /dev/kvm                             # present once the kernel has ARM NV
+```
+
+Guest kernels need recent ARM nested-virt support — Fedora 41+ works where
+Fedora 40 did not. Second-level nesting (a VM inside the nested VM) is reported
+flaky; treat one level as the supported depth. Tracked in
+[#64](https://github.com/Benehiko/vee/issues/64) and
+[#85](https://github.com/Benehiko/vee/issues/85).
+
 ## macOS guests (Virtualization.framework)
 
 vee runs macOS guests through Apple's Virtualization.framework — the `vz`
@@ -428,6 +472,9 @@ later a matter of implementing one interface.
 - No VFIO GPU passthrough (Linux-host kernel feature).
 - No virtiofs shares, vhost-vsock SSH-share, swtpm TPM, or bridge networking.
 - x86 guests run under slow TCG emulation; use aarch64 guests.
+- Nested virtualization (`--nested` / `nested: true`) needs QEMU ≥ 11.1 for HVF
+  EL2 — the pinned 10.0.2 bundle refuses it — plus an M3-or-later Mac on
+  macOS 15+ and a guest kernel with ARM nested-virt support (Fedora 41+).
 - Accelerated `gpu.mode: virtio` needs a virgl-capable QEMU; stock QEMU = software GL.
 - The **virgl-accelerated** vee-qemu bundle is still not buildable (QEMU 10.x vs
   the 2021-era macOS virglrenderer); see "Known limitations of the virgl bundle".

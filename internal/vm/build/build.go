@@ -101,6 +101,11 @@ type Opts struct {
 	NVMeDev  string
 	OVMFVars string
 
+	// Nested exposes hardware virtualization (EL2) to the guest so it can run
+	// its own hypervisor. arm64 (aarch64) QEMU guests only; see
+	// vm.VMConfig.Nested.
+	Nested bool
+
 	// NoAutoInstall skips the auto-install pass. The VM boots directly from
 	// its primary disk, treating it as already installed. Use when attaching
 	// a disk that already has an OS on it.
@@ -431,6 +436,9 @@ func applyOverrides(cfg *vm.VMConfig, opts Opts, prov provider.Provider) {
 	}
 	if opts.AntiDetect != nil {
 		cfg.GPU.AntiDetect = *opts.AntiDetect
+	}
+	if opts.Nested {
+		cfg.Nested = true
 	}
 	if opts.SPICEPort != nil && *opts.SPICEPort > 0 {
 		if cfg.SPICE == nil {

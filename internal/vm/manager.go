@@ -143,6 +143,25 @@ func (m *Manager) Create(ctx context.Context, cfg *VMConfig) error {
 		return fmt.Errorf("unknown backend %q (valid: %q, %q)", cfg.Backend, backend.QEMU, backend.VZ)
 	}
 
+	// Nested virtualization is wired only for arm64 QEMU guests (the aarch64
+	// "virt" board's virtualization=on property). Refuse everything else here —
+	// before the VM directory or any prompt, like the backend check above —
+	// rather than at first start. macOS guests can never nest: neither
+	// Virtualization.framework nor Hypervisor.framework works inside a VM.
+	// x86_64 KVM guests need no machine property — they inherit the host's
+	// nested setting (the kvm_intel/kvm_amd "nested" module parameter) through
+	// the host CPU model.
+	if cfg.Nested {
+		if cfg.BackendName() != backend.QEMU {
+			return fmt.Errorf("nested virtualization is not available for macOS guests: Apple's virtualization frameworks do not work inside a VM")
+		}
+		if platform.DefaultGuestArch() != "aarch64" {
+			return fmt.Errorf("nested virtualization control is wired only for arm64 (aarch64) guests; "+
+				"x86_64 KVM guests inherit the host's nested setting (kvm_intel/kvm_amd nested=1) without it — this host's guests are %s",
+				platform.DefaultGuestArch())
+		}
+	}
+
 	dir := m.vmDir(cfg.Name)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return err
@@ -1434,6 +1453,11 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 	// Machine type override (e.g. "q35,smm=on" for Windows Secure Boot) and any
 	// extra -global args (e.g. the secure-pflash global).
 	opts = append(opts, qemu.WithMachineType(cfg.MachineType))
+	if cfg.Nested {
+		// Create() refused non-aarch64 configs, but a hand-edited vm.yaml can
+		// still carry the field anywhere; WithNested is a no-op off aarch64.
+		opts = append(opts, qemu.WithNested(true))
+	}
 	for _, g := range cfg.Globals {
 		opts = append(opts, qemu.WithGlobal(g))
 	}

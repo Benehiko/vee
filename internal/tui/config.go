@@ -35,6 +35,7 @@ const (
 	efVGA
 	efHeadless
 	efUEFI
+	efNested
 	efSPICEPort
 	efSSHPort
 	efSSHUser
@@ -60,6 +61,7 @@ var editFieldLabels = [efCount]string{
 	efVGA:           "VGA",
 	efHeadless:      "Headless",
 	efUEFI:          "UEFI",
+	efNested:        "Nested virt",
 	efSPICEPort:     "SPICE port",
 	efSSHPort:       "SSH port",
 	efSSHUser:       "SSH user",
@@ -74,6 +76,7 @@ var cycleOptions = map[editField][]string{
 	efGPUAntiDetect: {"false", "true"},
 	efHeadless:      {"false", "true"},
 	efUEFI:          {"false", "true"},
+	efNested:        {"false", "true"},
 }
 
 // diskFocus tracks which part of the disk section is focused.
@@ -145,6 +148,7 @@ func cfgToInputValues(cfg *vm.VMConfig) [efCount]string {
 		efVGA:           cfg.VGA,
 		efHeadless:      boolStr(cfg.Headless),
 		efUEFI:          boolStr(cfg.UEFI.Enabled),
+		efNested:        boolStr(cfg.Nested),
 		efSPICEPort:     spicePort,
 		efSSHPort:       strconv.Itoa(cfg.SSHPort),
 		efSSHUser:       cfg.SSHUser,
@@ -601,6 +605,7 @@ func (m editModel) doSave() tea.Cmd {
 		cfg.VGA = strings.TrimSpace(inputs[efVGA].Value())
 		cfg.Headless = parseBool(inputs[efHeadless].Value())
 		cfg.UEFI.Enabled = parseBool(inputs[efUEFI].Value())
+		cfg.Nested = parseBool(inputs[efNested].Value())
 		cfg.SSHUser = strings.TrimSpace(inputs[efSSHUser].Value())
 		cfg.SSHHost = strings.TrimSpace(inputs[efSSHHost].Value())
 		cfg.Hostname = strings.TrimSpace(inputs[efHostname].Value())

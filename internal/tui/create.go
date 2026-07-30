@@ -104,6 +104,7 @@ const (
 	fieldHostname
 	fieldHeadless
 	fieldUEFI
+	fieldNested // visible only on arm64 hosts (aarch64 guests)
 	fieldGPUMode
 	fieldGPUPCI     // visible only when passthrough
 	fieldGPUVendor  // hidden when none or passthrough
@@ -166,6 +167,7 @@ type createModel struct {
 	hostname      string
 	headless      bool
 	uefi          bool
+	nested        bool
 	gpuModeIdx    int
 	gpuPCI        string
 	gpuVendorIdx  int
@@ -270,6 +272,10 @@ func (m *createModel) applyPrefill(o build.Opts) {
 	}
 	if o.UEFI != nil {
 		m.uefi = *o.UEFI
+		m.advancedOpen = true
+	}
+	if o.Nested {
+		m.nested = true
 		m.advancedOpen = true
 	}
 	if o.GPUMode != "" {
@@ -378,6 +384,10 @@ func (m createModel) fieldVisible(f createField) bool {
 		return true
 	case fieldNICBridge:
 		return m.advancedOpen && nicModeNames[m.nicModeIdx] == "bridge"
+	case fieldNested:
+		// Only arm64 hosts run the aarch64 guests the nested knob is wired
+		// for; elsewhere the toggle could only produce a create-time refusal.
+		return m.advancedOpen && platform.HostArch() == "arm64"
 	case fieldGPUPCI:
 		return m.advancedOpen && gpuModeNames[m.gpuModeIdx] == "passthrough"
 	case fieldGPUVendor:
@@ -491,6 +501,8 @@ func (m createModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.headless = !m.headless
 			case fieldUEFI:
 				m.uefi = !m.uefi
+			case fieldNested:
+				m.nested = !m.nested
 			case fieldAntiDetect:
 				m.antiDetect = !m.antiDetect
 			case fieldDataDiskBoot:
@@ -691,6 +703,7 @@ func (m createModel) View() string {
 			{"Hostname", m.hostname + cursor(m.field == fieldHostname), fieldHostname, false},
 			{"Headless", boolValue(m.headless, m.field == fieldHeadless), fieldHeadless, false},
 			{"UEFI", boolValue(m.uefi, m.field == fieldUEFI), fieldUEFI, false},
+			{"Nested Virt", boolValue(m.nested, m.field == fieldNested), fieldNested, platform.HostArch() != "arm64"},
 			{"GPU Mode", selectorNamed(gpuModeNames, m.gpuModeIdx, m.field == fieldGPUMode), fieldGPUMode, false},
 			{"GPU PCI", m.gpuPCI + cursor(m.field == fieldGPUPCI), fieldGPUPCI, gpuModeNames[m.gpuModeIdx] != "passthrough"},
 			{"GPU Vendor", selectorNamed(gpuVendorNames, m.gpuVendorIdx, m.field == fieldGPUVendor), fieldGPUVendor, gpuModeNames[m.gpuModeIdx] != "virtio"},
@@ -988,6 +1001,9 @@ func (m createModel) toBuildOpts() build.Opts {
 		if m.uefi {
 			v := true
 			opts.UEFI = &v
+		}
+		if m.nested {
+			opts.Nested = true
 		}
 		if mode := gpuModeNames[m.gpuModeIdx]; mode != "" && mode != "none" {
 			opts.GPUMode = mode

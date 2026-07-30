@@ -58,6 +58,22 @@ func TestApplyOverridesBootDiskPathLeavesOtherDisksAlone(t *testing.T) {
 	}
 }
 
+// Nested plumbs through to the config, and its absence leaves the template
+// value untouched (so a template could one day default it on).
+func TestApplyOverridesNested(t *testing.T) {
+	cfg := &vm.VMConfig{Name: "t4", Disks: []vm.DiskConfig{osDisk("/home/user/.vee/vms/t4")}}
+	applyOverrides(cfg, Opts{Name: "t4", Nested: true}, nil)
+	if !cfg.Nested {
+		t.Error("Opts.Nested=true did not set cfg.Nested")
+	}
+
+	cfg = &vm.VMConfig{Name: "t5", Disks: []vm.DiskConfig{osDisk("/home/user/.vee/vms/t5")}}
+	applyOverrides(cfg, Opts{Name: "t5"}, nil)
+	if cfg.Nested {
+		t.Error("cfg.Nested set without Opts.Nested")
+	}
+}
+
 // Without the flag the template's default location is preserved.
 func TestApplyOverridesNoBootDiskPathKeepsDefault(t *testing.T) {
 	vmDir := filepath.Join("/home/user/.vee/vms", "t3")

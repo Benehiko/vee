@@ -73,6 +73,7 @@ type BaseMachine struct {
 	rtc          string   // e.g. "base=localtime,clock=host"
 	bootOrder    string   // e.g. "c" for disk-first; empty = firmware default
 	globals      []string // extra -global args, e.g. "driver=cfi.pflash01,property=secure,value=on"
+	nested       bool     // expose EL2 to aarch64 guests (-machine virt,virtualization=on)
 }
 
 var (
@@ -154,6 +155,16 @@ func WithAccelerator(accel Accelerator) QemuOptions {
 func WithArchitecture(arch string) QemuOptions {
 	return func(q *BaseMachine) {
 		q.architecture = arch
+	}
+}
+
+// WithNested exposes hardware virtualization (EL2) to the guest so it can run
+// its own hypervisor — KVM, and with it Docker Desktop for Linux, KubeVirt,
+// Firecracker. Only the aarch64 "virt" board takes the resulting
+// virtualization=on machine property; other architectures ignore this option.
+func WithNested(nested bool) QemuOptions {
+	return func(q *BaseMachine) {
+		q.nested = nested
 	}
 }
 
@@ -295,6 +306,16 @@ func (q *BaseMachine) effectiveMachineType() string {
 	if (q.architecture == "aarch64" || q.architecture == "arm64") &&
 		strings.HasPrefix(mt, "virt") && !strings.Contains(mt, "gic-version") {
 		mt += ",gic-version=max"
+	}
+	// Nested virtualization: virtualization=on makes the virt board expose EL2
+	// so the guest can host its own VMs. Whether the host can honour it is the
+	// accelerator's call at startup (HVF needs an M3-or-later Mac on macOS 15+;
+	// KVM needs an ARM nested-virt kernel), so QEMU stays the authority and its
+	// error reaches the user verbatim. Skipped when the machine type already
+	// pins a virtualization= value, so explicit configuration wins.
+	if q.nested && (q.architecture == "aarch64" || q.architecture == "arm64") &&
+		strings.HasPrefix(mt, "virt") && !strings.Contains(mt, "virtualization=") {
+		mt += ",virtualization=on"
 	}
 	// WHPX's in-hypervisor APIC emulation is buggy in current QEMU/WHPX builds:
 	// setting the virtual interrupt-controller state can fail with c0350005

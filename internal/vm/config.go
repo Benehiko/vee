@@ -229,6 +229,14 @@ type VMConfig struct {
 	// MachineType overrides the -machine type (e.g. "q35,smm=on"). Empty uses
 	// the provider default.
 	MachineType string `yaml:"machine_type,omitempty" json:"machine_type,omitempty"`
+	// Nested exposes hardware virtualization (EL2) to the guest so it can run
+	// its own hypervisor — KVM, and with it Docker Desktop for Linux, KubeVirt,
+	// Firecracker (issue #85). Wired only for arm64 (aarch64) QEMU guests,
+	// where it becomes -machine virt,virtualization=on; the accelerator decides
+	// at start whether the host can honour it (HVF: M3 or later on macOS 15+;
+	// KVM: an ARM nested-virt kernel). macOS guests can never nest — Apple's
+	// frameworks do not work inside a VM.
+	Nested bool `yaml:"nested,omitempty" json:"nested,omitempty"`
 	// Globals are extra -global args (e.g. the secure-pflash global that arms
 	// SMM-based Secure Boot).
 	Globals []string     `yaml:"globals,omitempty" json:"globals,omitempty"`

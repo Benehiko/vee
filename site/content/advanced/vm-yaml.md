@@ -75,6 +75,7 @@ created_at: 2026-01-01T00:00:00Z
 | `cores` | int | Cores per socket |
 | `threads` | int | Threads per core (SMT) |
 | `cpu_model` | string | QEMU CPU model, e.g. `host` |
+| `nested` | bool | Expose nested virtualization (EL2) to the guest so it can run KVM. arm64 (aarch64) QEMU guests only; under HVF needs QEMU ≥ 11.1 and an M3+ Mac on macOS 15+ |
 | `ssh_user` | string | Default SSH user for `vee ssh` |
 | `guest_agent` | bool | Enable QGA virtio-serial socket |
 | `vga` | string | VGA device type; set to `none` for passthrough |

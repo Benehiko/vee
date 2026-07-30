@@ -37,6 +37,10 @@ vee warns and falls back rather than emitting broken QEMU arguments.
 
 Ubuntu and Fedora cloud images ship arm64 builds and work out of the box. The `ubuntu-server` live ISO, Arch/`gaming-arch`, Bazzite, Alpine/`docker`, TrueNAS, and Windows templates are x86-only and not wired for arm64.
 
+## Nested virtualization
+
+Linux guests can run their own VMs (Docker Desktop for Linux, KubeVirt, `qemu -accel kvm`) with `vee create <name> --nested`, or `nested: true` in the VM's `vm.yaml`. Under HVF this needs QEMU ≥ 11.1 (the currently pinned 10.0.2 bundle refuses it) plus an M3-or-later Mac on macOS 15+, and the guest kernel needs ARM nested-virt support (Fedora 41+). macOS guests can never nest — Apple's frameworks do not work inside a VM.
+
 ## Accelerated graphics — current limitation
 
 The virgl-accelerated `vee-qemu` bundle for macOS is **not currently buildable**: QEMU 10.0.2 and the only macOS-patched virglrenderer (a 2021-era fork around QEMU 6.2) do not compile together. Venus/Vulkan is experimental. QEMU's own macOS-guest path (`apple-gfx` + `vmapple`) is unusable upstream — macOS guests run on the [`vz` backend](../macos-guests/) instead.

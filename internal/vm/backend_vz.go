@@ -45,6 +45,12 @@ func (m *Manager) buildVZMachine(_ context.Context, cfg *VMConfig) (backend.Mach
 	if cfg.SSHPort > 0 {
 		return nil, fmt.Errorf("the vz backend does not support ssh_port: NAT has no host port-forwarding — remove ssh_port and use `vee ssh` (resolves the guest IP by MAC)")
 	}
+	// Create() refuses this pairing, but a hand-edited vm.yaml reaches here
+	// directly (vee start, daemon autostart) — refuse like ssh_port above
+	// rather than silently starting a guest that can never nest.
+	if cfg.Nested {
+		return nil, fmt.Errorf("the vz backend does not support nested virtualization: macOS guests cannot host VMs (Apple's frameworks do not work inside a VM) — remove nested from vm.yaml")
+	}
 
 	// The NAT guest's IP is discovered by MAC, so the MAC must be stable.
 	if cfg.NIC.MAC == "" {
