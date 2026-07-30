@@ -5,10 +5,12 @@ import "github.com/Benehiko/vee/internal/platform"
 // PinnedVersion is the vee-qemu release tag to download.
 // Update this (and Checksums) when a new QEMU build is published.
 //
-// Pinned to a QEMU 10.x base: apple-gfx (ParavirtualizedGraphics.framework for
-// macOS guests) landed in QEMU 10.0, and the macOS build carries the
-// virglrenderer/ANGLE patch stack for accelerated virtio-gpu.
-const PinnedVersion = "qemu-10.0.2-vee1"
+// Pinned to QEMU 11.1.0-rc2: 11.1 brings HVF EL2 (nested virtualization —
+// vee's --nested) and Apple's in-kernel vGIC on Apple Silicon hosts, and the
+// macOS bundle now compiles against the startergo virglrenderer 1.x stack.
+// The rc is deliberate (validated end-to-end on Apple Silicon; upstream final
+// is expected ~Aug 2026) — bump to the 11.1.0 final when it ships.
+const PinnedVersion = "qemu-11.1.0-rc2-vee1"
 
 // releaseBaseURL is the GitHub Releases download base for vee-qemu assets.
 const releaseBaseURL = "https://github.com/Benehiko/vee/releases/download"
@@ -17,14 +19,14 @@ const releaseBaseURL = "https://github.com/Benehiko/vee/releases/download"
 // Populated when a release is built. An empty string means no asset is
 // published for that platform yet, so Ensure falls back to a system QEMU.
 //
-// These are the SHA-256 sums of the qemu-10.0.2-vee1 release assets. Each bundle
-// ships the QEMU binary plus the edk2/OVMF firmware under share/qemu, so with a
-// managed bundle vee needs neither a system QEMU nor an OVMF package.
+// These are the SHA-256 sums of the qemu-11.1.0-rc2-vee1 release assets. Each
+// bundle ships the QEMU binary plus the edk2/OVMF firmware under share/qemu, so
+// with a managed bundle vee needs neither a system QEMU nor an OVMF package.
 var Checksums = map[string]string{
-	"linux-amd64":   "6230cead3993626fde6ebf94570fecc532e30c6b7f316810fc339ea1e8ee9b26",
-	"linux-arm64":   "fc685badfb0a5983abe2c34dc3eafe6c574dde74ff2f2f61ae22c8df342f25f5",
-	"darwin-arm64":  "f651b58be4d9ba2fb351639d45b4fb8a9af493869ebbefa584722cf70bba0690",
-	"windows-amd64": "8dbf64c69fd4147ad074faa3f43f8991870fa38db244e747655e38dc492f7779",
+	"linux-amd64":   "9845ee72c1f75008e7f163c0bfc3f422a58fceb2091119d2ed7c2466fca5633f",
+	"linux-arm64":   "585c52d7c29d3e7e55918569845b99c049dffa91749b58339447d08de139eb21",
+	"darwin-arm64":  "f5ebe7b7cd3dab04c590d9dfa5a53067406f0da89060938afc431a4b51a151fc",
+	"windows-amd64": "55b5350fcb0db10f55bb4931d52739d02701947b159ed1d4121bd87019e036ee",
 }
 
 // AssetName returns the release asset filename for the given os/arch pair. The

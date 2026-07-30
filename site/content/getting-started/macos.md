@@ -39,7 +39,7 @@ Ubuntu and Fedora cloud images ship arm64 builds and work out of the box, and th
 
 ## Nested virtualization
 
-Linux guests can run their own VMs (Docker Desktop for Linux, KubeVirt, `qemu -accel kvm`) with `vee create <name> --nested`, or `nested: true` in the VM's `vm.yaml`. Under HVF this needs QEMU ≥ 11.1 (the currently pinned 10.0.2 bundle refuses it) plus an M3-or-later Mac on macOS 15+, and the guest kernel needs ARM nested-virt support (Fedora 41+). macOS guests can never nest — Apple's frameworks do not work inside a VM.
+Linux guests can run their own VMs (Docker Desktop for Linux, KubeVirt, `qemu -accel kvm`) with `vee create <name> --nested`, or `nested: true` in the VM's `vm.yaml`. Under HVF this needs an M3-or-later Mac on macOS 15+, and the guest kernel needs ARM nested-virt support (Fedora 41+); vee's pinned QEMU bundle (11.1.0-rc2) carries the required HVF EL2 support. macOS guests can never nest — Apple's frameworks do not work inside a VM.
 
 ## Accelerated graphics — current limitation
 

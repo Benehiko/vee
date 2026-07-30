@@ -133,11 +133,16 @@ check the build log for that warning if the guest reports an `llvmpipe` renderer
 
 #### Known limitations of the virgl bundle
 
-The **virgl-accelerated** variant of the bundle is not buildable from a stock
-toolchain as of this writing — the pinned QEMU and the only macOS-patched
-virglrenderer are from different eras and do not compile together. The published
-bundle is therefore the plain-HVF build. Restoring GL acceleration is the biggest
-open item in the macOS port; the notes below are for whoever picks it up.
+**Update (qemu-11.1.0-rc2-vee1):** the GL build compiles again. The build script
+moved to the maintained **startergo** tap family (virglrenderer 1.x + ANGLE +
+patched libepoxy, carrying Akihiko Odaki's macOS patches) and gained a one-line
+EGL cast for ANGLE's int-typed native display (#93), and the published bundle
+now ships `libvirglrenderer` and exposes `virtio-gpu-gl-pci`. **Whether the
+rendering is actually Metal-accelerated at runtime (vs. falling back to
+software) has not been verified yet** — check `glxinfo -B` in a guest for a
+`virgl` vs `llvmpipe` renderer before trusting it. The notes below describe the
+earlier knazarov-era blocker and are kept for history; the toolchain fix-up
+notes still apply.
 
 - **QEMU ↔ virglrenderer version mismatch (the blocker).** The build pins
   **QEMU 10.0.2**, but the
@@ -276,22 +281,15 @@ the user verbatim. The knob is wired for arm64 (aarch64) QEMU guests only;
 `vee create` refuses it elsewhere. macOS guests can never nest — Apple's
 frameworks do not work inside a VM (see the macOS-guest caveats below).
 
-**Current HVF status:** QEMU gained HVF EL2 support in **11.1**; vee's pinned
-bundle is **10.0.2**, which refuses to start with
-
-```
-qemu-system-aarch64: mach-virt: HVF does not support providing Virtualization extensions to the guest CPU
-```
-
-on every Mac, M3/macOS 15 included (verified against the shipped bundle). So on
-macOS hosts, `--nested` becomes useful once the pinned QEMU moves to ≥ 11.1 —
-the bundle-bump route tracked in
-[#64](https://github.com/Benehiko/vee/issues/64). The full chain is verified
-against the pre-release `qemu-11.1.0-rc2-vee1` bundle on an M4 Max: an Ubuntu
-24.04 arm64 guest boots with `CPU: All CPU(s) started at EL2` and KVM
-initialized in-guest, using exactly the arguments vee generates. Once QEMU is
-new enough, the hardware floor is an M3-or-later Mac on macOS 15+. On arm64
-Linux hosts, KVM
+**Current HVF status:** QEMU gained HVF EL2 support in **11.1**, and vee's
+pinned bundle is **11.1.0-rc2** (`qemu-11.1.0-rc2-vee1`; the rc is deliberate —
+upstream's 11.1.0 final is expected ~Aug 2026 and the pin moves to it when it
+ships). The full chain is verified on an M4 Max: an Ubuntu 24.04 arm64 guest
+boots with `CPU: All CPU(s) started at EL2` and KVM initialized in-guest, using
+exactly the arguments vee generates. The hardware floor is an M3-or-later Mac
+on macOS 15+ (older bundles — 10.0.2 and earlier — refuse EL2 outright on every
+Mac; the bundle history is tracked in
+[#64](https://github.com/Benehiko/vee/issues/64)). On arm64 Linux hosts, KVM
 needs a kernel with ARM nested-virt support.
 
 Verify inside the guest:
@@ -487,9 +485,9 @@ later a matter of implementing one interface.
 - No VFIO GPU passthrough (Linux-host kernel feature).
 - No virtiofs shares, vhost-vsock SSH-share, swtpm TPM, or bridge networking.
 - x86 guests run under slow TCG emulation; use aarch64 guests.
-- Nested virtualization (`--nested` / `nested: true`) needs QEMU ≥ 11.1 for HVF
-  EL2 — the pinned 10.0.2 bundle refuses it — plus an M3-or-later Mac on
-  macOS 15+ and a guest kernel with ARM nested-virt support (Fedora 41+).
+- Nested virtualization (`--nested` / `nested: true`) needs an M3-or-later Mac
+  on macOS 15+ and a guest kernel with ARM nested-virt support (Fedora 41+).
+  The pinned bundle (11.1.0-rc2) supports it; pre-11.1 QEMU refuses EL2.
 - Accelerated `gpu.mode: virtio` needs a virgl-capable QEMU; stock QEMU = software GL.
 - The **virgl-accelerated** vee-qemu bundle is still not buildable (QEMU 10.x vs
   the 2021-era macOS virglrenderer); see "Known limitations of the virgl bundle".
