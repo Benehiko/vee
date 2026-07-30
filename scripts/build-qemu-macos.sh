@@ -115,6 +115,20 @@ rm -rf "qemu-${QEMU_VERSION}"
 tar xf qemu.tar.xz
 cd "qemu-${QEMU_VERSION}"
 
+# ui/egl-helpers.c passes an EGLNativeDisplayType straight to
+# eglGetPlatformDisplayEXT, whose prototype takes void*. Mesa's eglplatform.h
+# defines the native type as a pointer, so upstream never notices; ANGLE's
+# defines it as int on macOS, which Xcode 15+ clang rejects outright
+# (-Wint-conversion is an error). Cast through uintptr_t — valid for both
+# header families, a no-op wherever upstream compiles today.
+perl -pi -e \
+  's/eglGetPlatformDisplayEXT\(platform, native, NULL\)/eglGetPlatformDisplayEXT(platform, (void *)(uintptr_t)native, NULL)/' \
+  ui/egl-helpers.c
+if ! grep -q '(void \*)(uintptr_t)native' ui/egl-helpers.c; then
+  echo "error: egl-helpers.c ANGLE cast patch did not apply — upstream changed the call site; update the perl expression" >&2
+  exit 1
+fi
+
 echo "==> Configuring QEMU (cocoa + opengl + virglrenderer + hvf, aarch64-softmmu)"
 # ANGLE ships no pkg-config file, and the patched libepoxy's headers #include
 # <EGL/...> from ANGLE, so PKG_CONFIG_PATH alone leaves QEMU unable to find
@@ -205,9 +219,10 @@ codesign --verify --verbose "$BUNDLE/bin/qemu-system-aarch64"
 echo "==> Writing GPLv2 compliance files (COPYING + SOURCE.txt)"
 # QEMU is GPLv2-only; publishing this bundle distributes QEMU binaries, so ship
 # the license text and a corresponding-source pointer. This build links QEMU's
-# GL stack against the startergo tap's virglrenderer 1.x + ANGLE (Metal); QEMU
-# itself is unmodified upstream, but note the GL dependency provenance.
-QEMU_PATCHES="links against virglrenderer 1.x + ANGLE (GLES->Metal) from the startergo Homebrew taps for accelerated virtio-gpu on macOS" \
+# GL stack against the startergo tap's virglrenderer 1.x + ANGLE (Metal), and
+# carries exactly one source modification (the egl-helpers.c cast above) —
+# recorded in QEMU_PATCHES so SOURCE.txt discloses it.
+QEMU_PATCHES="one-line cast in ui/egl-helpers.c (EGLNativeDisplayType -> void* through uintptr_t, for ANGLE's int-typed native display on macOS); links against virglrenderer 1.x + ANGLE (GLES->Metal) from the startergo Homebrew taps for accelerated virtio-gpu on macOS" \
   bash "$SCRIPT_DIR/qemu-bundle-license.sh" "$BUNDLE" "$WORK/qemu-${QEMU_VERSION}" "$QEMU_VERSION" \
     --target-list=aarch64-softmmu --enable-cocoa --enable-opengl --enable-virglrenderer \
     --enable-hvf --enable-slirp --enable-curl --disable-docs --disable-debug-info
