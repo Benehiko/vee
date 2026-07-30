@@ -131,7 +131,7 @@ sudo dnf install qemu-kvm edk2-ovmf openssh-clients virtiofsd swtpm
 | `ovmf` | UEFI firmware |
 | `openssh` | `vee ssh` and `vee tunnel` |
 | `virtiofsd` | Host directory sharing into VMs — optional, see below |
-| `swtpm` | TPM 2.0 emulation (Windows template) |
+| `swtpm` | TPM 2.0 emulation (Windows template, x86_64 hosts — arm64 Windows guests attach no TPM) |
 
 {{< hint info >}}
 **OVMF firmware location.** Distros ship OVMF under different names and

@@ -102,7 +102,7 @@ Only for `backend: vz` guests (see [macOS guests](../../getting-started/macos-gu
 | `path` | Device path or image file path |
 | `size` | Image size (empty for raw block passthrough) |
 | `format` | `qcow2` or `raw` |
-| `interface` | `virtio`, `sata`, `nvme` |
+| `interface` | `virtio`, `ide`, `ahci`, `nvme` (inbox driver on Windows ARM64), `usb` (mass storage on the VM's USB controller) |
 | `media` | `disk` or `cdrom` |
 | `cache` | QEMU cache mode (`none`, `writeback`, etc.) |
 | `readonly` | Mount read-only |

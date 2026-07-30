@@ -55,7 +55,7 @@ vee pull macos https://updates.cdn-apple.com/…/UniversalMac_15.5_24F74_Restore
 | `alpine` | Cloud image |
 | `bazzite` | Fedora Atomic gaming ISO |
 | `truenas` | TrueNAS SCALE installer ISO |
-| `windows` | Built on demand — `win11`, `win10`, `server2025`, `server2022` |
+| `windows` | Built on demand, matching the host arch — `win11`, `win10`, `server2025`, `server2022` on x86_64; `win11`, `win10` on arm64 |
 
 Run `vee pull --list` to see the exact version strings supported by your build.
 
@@ -65,8 +65,9 @@ vee builds Windows install ISOs on demand — there is no manual ISO download st
 It resolves the newest full ("feature update") build through the
 [UUP dump](https://uupdump.net/) API, downloads the ESD and CAB component
 packages directly from Microsoft's servers, integrates them into a single
-`install.wim` (via `cabextract` + `wimlib`), and assembles a bootable BIOS+UEFI
-ISO inside a throwaway container using `xorriso`.
+`install.wim` (via `cabextract` + `wimlib`), and assembles a bootable ISO inside
+a throwaway container using `xorriso` — hybrid BIOS+UEFI on x86_64, UEFI-only on
+arm64 (ARM has no BIOS boot path).
 
 Building a Windows ISO requires `nerdctl` or `docker` on `PATH`; no ISO-assembly
 tooling is installed on the host. The build needs roughly 15 GB of free scratch

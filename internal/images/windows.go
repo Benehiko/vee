@@ -14,6 +14,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/Benehiko/vee/internal/platform"
 	"github.com/Benehiko/vee/internal/utils"
 	"github.com/Benehiko/vee/provider"
 )
@@ -38,6 +39,29 @@ var KnownWindowsVersions = []WindowsVersion{
 	Windows10,
 	WindowsServer2025,
 	WindowsServer2022,
+}
+
+// WindowsHostArch maps the host architecture onto UUP dump's arch slug for
+// the guest media to build. Go's GOARCH and UUP dump agree on the two names
+// vee supports ("amd64", "arm64"); anything else falls back to amd64, matching
+// DefaultGuestArch's fallback.
+func WindowsHostArch() string {
+	if platform.HostArch() == "arm64" {
+		return "arm64"
+	}
+	return "amd64"
+}
+
+// KnownWindowsVersionsForArch lists the versions UUP dump can actually build
+// for a guest architecture, newest first. Windows Server has no public arm64
+// feature builds (only amd64 — arm64 appears solely as differential cumulative
+// updates, which cannot produce install media), so arm64 offers the client
+// editions only.
+func KnownWindowsVersionsForArch(arch string) []WindowsVersion {
+	if arch == "arm64" {
+		return []WindowsVersion{Windows11, Windows10}
+	}
+	return KnownWindowsVersions
 }
 
 type windowsParams struct {
@@ -88,14 +112,17 @@ type uupdumpGetResponse struct {
 type WindowsImage struct {
 	*BaseImage
 	version WindowsVersion
+	arch    string // UUP dump arch slug: "amd64" or "arm64"
 	params  windowsParams
 }
 
-// NewWindowsImage constructs a WindowsImage for the given version.
+// NewWindowsImage constructs a WindowsImage for the given version, targeting
+// the host's native guest architecture.
 func NewWindowsImage(p provider.Provider, version WindowsVersion) *WindowsImage {
 	return &WindowsImage{
 		BaseImage: NewBaseImage(p),
 		version:   version,
+		arch:      WindowsHostArch(),
 		params:    windowsVersionParams[version],
 	}
 }
@@ -103,6 +130,11 @@ func NewWindowsImage(p provider.Provider, version WindowsVersion) *WindowsImage 
 func (w *WindowsImage) Distro() string  { return DistroWindows }
 func (w *WindowsImage) Version() string { return string(w.version) }
 func (w *WindowsImage) Name() string {
+	// amd64 keeps the historical un-suffixed name so existing ISO caches stay
+	// valid; arm64 carries its arch so the two never collide.
+	if w.arch == "arm64" {
+		return fmt.Sprintf("windows-%s-arm64.iso", w.version)
+	}
 	return fmt.Sprintf("windows-%s.iso", w.version)
 }
 
@@ -208,20 +240,22 @@ func (w *WindowsImage) fetchBuildUUID(ctx context.Context) (string, error) {
 			found = true
 		}
 	}
-	// First pass: full feature-update builds only.
+	// First pass: full feature-update builds only, for this image's arch (the
+	// API mixes amd64, arm64 and x86 builds in one list).
 	for _, b := range result.Response.Builds {
-		if b.Arch != "" && b.Arch != "amd64" {
+		if b.Arch != "" && b.Arch != w.arch {
 			continue
 		}
 		if isFeatureUpdate(b.Title) {
 			consider(b)
 		}
 	}
-	// Fallback: any non-cumulative amd64 build (covers Server ISOs, whose titles
-	// don't say "Feature update"). Cumulative-only differentials stay excluded.
+	// Fallback: any non-cumulative build of the right arch (covers Server
+	// ISOs, whose titles don't say "Feature update"). Cumulative-only
+	// differentials stay excluded.
 	if !found {
 		for _, b := range result.Response.Builds {
-			if b.Arch != "" && b.Arch != "amd64" {
+			if b.Arch != "" && b.Arch != w.arch {
 				continue
 			}
 			if !isCumulative(b.Title) {
@@ -230,7 +264,7 @@ func (w *WindowsImage) fetchBuildUUID(ctx context.Context) (string, error) {
 		}
 	}
 	if !found {
-		return "", fmt.Errorf("no full (non-cumulative) amd64 build found for %q / %s", w.params.search, w.params.edition)
+		return "", fmt.Errorf("no full (non-cumulative) %s build found for %q / %s", w.arch, w.params.search, w.params.edition)
 	}
 
 	w.provider.Logger().Info("found UUP dump build", zap.String("title", best.Title), zap.String("uuid", best.UUID))
@@ -312,6 +346,29 @@ func (w *WindowsImage) buildISOInContainer(ctx context.Context, esdURLs map[stri
 	// old "largest ESD" heuristic picked a component package instead, which
 	// failed with "blob not found" (wimlib error 55).
 	metaESD := fmt.Sprintf("%s_%s.esd", strings.ToLower(w.params.edition), uupdumpLang)
+
+	// Boot files and El Torito entries differ per architecture. amd64 media
+	// boots hybrid BIOS+UEFI: etfsboot.com is the BIOS boot image and
+	// efisys_noprompt.bin the UEFI one (no "press any key" prompt). arm64 has
+	// no BIOS at all — the media is UEFI-only, there is no etfsboot.com, and
+	// UUP dump's own converter masters arm64 ISOs with a single EFI entry.
+	bootCheck := `if [ ! -f /work/iso/boot/etfsboot.com ] || [ ! -f /work/iso/efi/microsoft/boot/efisys_noprompt.bin ]; then
+    echo "ERROR: boot files missing after applying setup media" >&2
+    exit 1
+fi`
+	xorrisoBootArgs := `-b boot/etfsboot.com \
+    -no-emul-boot -boot-load-size 8 -boot-info-table \
+    -eltorito-alt-boot \
+    -e efi/microsoft/boot/efisys_noprompt.bin \
+    -no-emul-boot`
+	if w.arch == "arm64" {
+		bootCheck = `if [ ! -f /work/iso/efi/microsoft/boot/efisys_noprompt.bin ]; then
+    echo "ERROR: EFI boot file missing after applying setup media" >&2
+    exit 1
+fi`
+		xorrisoBootArgs = `-e efi/microsoft/boot/efisys_noprompt.bin \
+    -no-emul-boot`
+	}
 
 	buildScript := `set -e
 apk add --no-cache wimlib xorriso cabextract wget ca-certificates >/dev/null 2>&1
@@ -588,26 +645,19 @@ else
     echo "WARNING: no Recovery Environment image in ESD; install.wim will lack winre.wim (24H2 Setup may fail 0x80070003)" >&2
 fi
 
-if [ ! -f /work/iso/boot/etfsboot.com ] || [ ! -f /work/iso/efi/microsoft/boot/efisys_noprompt.bin ]; then
-    echo "ERROR: boot files missing after applying setup media" >&2
-    exit 1
-fi
+` + bootCheck + `
 if [ ! -f /work/iso/sources/boot.wim ]; then
     echo "ERROR: sources/boot.wim was not produced — media would be unbootable" >&2
     exit 1
 fi
 
-# Assemble a hybrid BIOS + UEFI bootable ISO. etfsboot.com is the BIOS El Torito
-# boot image; efisys_noprompt.bin is the UEFI one (no "press any key" prompt).
+# Assemble the bootable ISO: hybrid BIOS+UEFI on amd64, UEFI-only on arm64
+# (the boot args are arch-selected above).
 xorriso -as mkisofs \
     -iso-level 3 \
     -full-iso9660-filenames \
     -volid "WIN_INSTALL" \
-    -b boot/etfsboot.com \
-    -no-emul-boot -boot-load-size 8 -boot-info-table \
-    -eltorito-alt-boot \
-    -e efi/microsoft/boot/efisys_noprompt.bin \
-    -no-emul-boot \
+    ` + xorrisoBootArgs + ` \
     -o /out/` + w.Name() + ` \
     /work/iso
 `

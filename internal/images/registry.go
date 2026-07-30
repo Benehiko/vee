@@ -2,10 +2,21 @@ package images
 
 import (
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/Benehiko/vee/internal/platform"
 	"github.com/Benehiko/vee/provider"
 )
+
+// joinWindowsVersions renders a version list for error messages.
+func joinWindowsVersions(versions []WindowsVersion) string {
+	out := make([]string, len(versions))
+	for i, v := range versions {
+		out[i] = string(v)
+	}
+	return strings.Join(out, ", ")
+}
 
 const (
 	DistroUbuntu  = "ubuntu"
@@ -59,8 +70,9 @@ func DistroVersions(distro string) []string {
 		}
 		return out
 	case DistroWindows:
-		out := make([]string, len(KnownWindowsVersions))
-		for i, v := range KnownWindowsVersions {
+		versions := KnownWindowsVersionsForArch(WindowsHostArch())
+		out := make([]string, len(versions))
+		for i, v := range versions {
 			out[i] = string(v)
 		}
 		return out
@@ -125,13 +137,14 @@ func NewImage(p provider.Provider, distro, version string) (Image, error) {
 
 	// On aarch64 hosts (Apple Silicon), only some distros have a wired-up arm64
 	// image. Ubuntu (cloud image) and Fedora (Cloud Base qcow2) publish aarch64
-	// builds vee can boot under HVF. The rest (Arch/Bazzite/TrueNAS official
-	// media, the Alpine x86 URL) are x86_64-only and would not boot, so refuse
-	// clearly rather than fetch an unbootable image.
-	if hostArch == "arm64" && distro != DistroUbuntu && distro != DistroFedora {
+	// builds vee can boot under HVF, and Windows client media is assembled
+	// per-arch from UUP dump's arm64 builds. The rest (Arch/Bazzite/TrueNAS
+	// official media, the Alpine x86 URL) are x86_64-only and would not boot,
+	// so refuse clearly rather than fetch an unbootable image.
+	if hostArch == "arm64" && distro != DistroUbuntu && distro != DistroFedora && distro != DistroWindows {
 		return nil, fmt.Errorf("distro %q is not yet available for arm64 (aarch64) guests; "+
-			"Ubuntu and Fedora are the supported arm64 guests on Apple Silicon — "+
-			"use --distro ubuntu or --distro fedora", distro)
+			"Ubuntu, Fedora and Windows are the supported arm64 guests on Apple Silicon — "+
+			"use --distro ubuntu or --distro fedora, or the windows template", distro)
 	}
 
 	switch distro {
@@ -146,6 +159,17 @@ func NewImage(p provider.Provider, distro, version string) (Image, error) {
 	case DistroTrueNAS:
 		return NewTrueNASImage(p, TrueNASVersion(version)), nil
 	case DistroWindows:
+		// Server editions have no public arm64 feature builds on UUP dump, so
+		// an arm64 host can only build the client media. Refuse up front with
+		// the available set rather than failing deep in the UUP API calls.
+		// (This also catches unknown version strings on arm64; amd64 keeps
+		// its historical fail-at-the-API behaviour for those.)
+		if arch := WindowsHostArch(); arch == "arm64" {
+			if !slices.Contains(KnownWindowsVersionsForArch(arch), WindowsVersion(version)) {
+				return nil, fmt.Errorf("windows %q is not available for arm64 hosts (UUP dump publishes no arm64 Windows Server feature builds); available on arm64: %s",
+					version, joinWindowsVersions(KnownWindowsVersionsForArch(arch)))
+			}
+		}
 		return NewWindowsImage(p, WindowsVersion(version)), nil
 	case DistroAlpine:
 		return NewAlpineImage(p, AlpineVersion(version)), nil

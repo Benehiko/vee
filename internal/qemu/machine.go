@@ -356,6 +356,18 @@ func (q *BaseMachine) Args() []string {
 			break
 		}
 	}
+	// Emit a dedicated xhci controller once if any disk rides USB. QEMU
+	// resolves a device's bus at creation time in command-line order, and
+	// disks are emitted before extraDevices — an extraDevices controller
+	// (e.g. the Windows template's input xhci) comes too late, failing with
+	// "No usb-bus bus found for device usb-storage". The usb-storage devices
+	// pin bus= to this controller so they never race another one.
+	for _, disk := range q.disks {
+		if disk.Interface == InterfaceUSB {
+			args = append(args, "-device", "qemu-xhci,id="+usbDiskControllerID)
+			break
+		}
+	}
 	for i, disk := range q.disks {
 		disk.diskIndex = i
 		args = append(args, disk.Args()...)

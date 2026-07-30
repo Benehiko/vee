@@ -177,7 +177,7 @@ open item in the macOS port; the notes below are for whoever picks it up.
 |-------|------|--------|
 | **Linux (arm64)** | `gpu.mode: virtio` → `virtio-gpu-gl-pci` + `-display cocoa,gl=es` | ✅ OpenGL (virgl) stable; Vulkan (Venus) experimental |
 | **macOS** | `vz` backend (Virtualization.framework) — see below | ✅ Metal-accelerated by the framework; QEMU's `apple-gfx`/`vmapple` path is unusable ([#50](https://github.com/Benehiko/vee/issues/50)) |
-| **Windows (arm64)** | 2D only (`virtio-gpu-pci`) + RDP | ❌ No virtio-gpu 3D driver exists for Windows; VFIO unavailable on macOS |
+| **Windows (arm64)** | 2D only (`ramfb`) + RDP | ❌ No virtio-gpu 3D driver exists for Windows; VFIO unavailable on macOS |
 
 ### Linux guest (the main use case)
 
@@ -212,9 +212,15 @@ apple-gfx` therefore still errors out, pointing at the vz backend. Tracked in
 
 ### Windows guest
 
+`vee create win --template windows` builds Windows 11 arm64 install media on
+demand and runs a fully unattended install — see
+[docs/windows-guests.md → ARM64 guests](windows-guests.md#arm64-guests) for the
+VM shape (NVMe disks, USB install media, ramfb, no TPM device).
+
 There is no production virtio-gpu 3D driver for Windows, and VFIO passthrough (the
 only real route to Windows GPU acceleration) is a Linux-host feature. On macOS,
-Windows-on-ARM guests get unaccelerated 2D graphics; use RDP for a usable desktop.
+Windows-on-ARM guests get unaccelerated 2D graphics (ramfb); use RDP for a usable
+desktop.
 
 ## Guest images on Apple Silicon
 
@@ -231,7 +237,7 @@ clearly otherwise:
 | Bazzite / `gaming-bazzite` | ❌ x86-only |
 | Alpine / `docker` | ❌ not yet wired for arm64 (planned) |
 | TrueNAS | ❌ x86-only |
-| Windows | ❌ no ARM image pipeline; no GPU 3D on macOS regardless |
+| Windows | ✅ `win11` / `win10` arm64 media built on demand — 2D display (ramfb), RDP for a desktop; no arm64 Server media exists |
 
 ### GPU-accelerated desktop (the `desktop` template)
 

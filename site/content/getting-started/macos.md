@@ -35,7 +35,7 @@ vee warns and falls back rather than emitting broken QEMU arguments.
 
 ## Guest images
 
-Ubuntu and Fedora cloud images ship arm64 builds and work out of the box. The `ubuntu-server` live ISO, Arch/`gaming-arch`, Bazzite, Alpine/`docker`, TrueNAS, and Windows templates are x86-only and not wired for arm64.
+Ubuntu and Fedora cloud images ship arm64 builds and work out of the box, and the `windows` template builds Windows 11 / Windows 10 arm64 install media on demand (2D ramfb display — use RDP for a desktop). The `ubuntu-server` live ISO, Arch/`gaming-arch`, Bazzite, Alpine/`docker`, and TrueNAS templates are x86-only and not wired for arm64.
 
 ## Nested virtualization
 

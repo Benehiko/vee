@@ -335,11 +335,16 @@ func configFromTemplate(ctx context.Context, prov provider.Provider, opts Opts, 
 		}
 		return templates.NewMacOSConfig(ctx, prov, opts.Name, mopts)
 	case "windows":
-		// Default to Windows 10: its classic Setup honours the generated
-		// Autounattend.xml and installs fully unattended. Windows 11's 24H2
-		// Setup reboot-loops on the same answer file, so it is opt-in via
-		// --distro-version win11.
+		// Default to Windows 10 on x86_64: the battle-tested default from
+		// when 24H2's ConX Setup broke unattended installs. 24H2 installs
+		// end-to-end now (see docs/windows-24h2-install.md), but win11 stays
+		// opt-in there via --distro-version win11. On arm64 the default flips
+		// to Windows 11 — Windows-on-ARM matured with 11, and virtio-win's
+		// ARM64 drivers target w11.
 		winVersion := images.Windows10
+		if images.WindowsHostArch() == "arm64" {
+			winVersion = images.Windows11
+		}
 		if opts.DistroVersion != "" && opts.DistroVersion != "latest" {
 			winVersion = images.WindowsVersion(opts.DistroVersion)
 		}

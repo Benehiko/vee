@@ -62,7 +62,21 @@ const (
 	// InterfaceAHCI emits an ahci controller + ide-hd device, matching the
 	// SATA bus arrangement that TrueNAS (ZFS) expects for its boot pool.
 	InterfaceAHCI DiskInterface = "ahci"
+	// InterfaceNVMe emits -drive if=none + -device nvme. Windows ARM64 ships
+	// an inbox stornvme driver, so NVMe is the driver-injection-free system
+	// disk on the aarch64 virt board (which has no IDE/AHCI).
+	InterfaceNVMe DiskInterface = "nvme"
+	// InterfaceUSB emits -drive if=none + -device usb-storage on a dedicated
+	// xhci controller the machine emits ahead of the disks. The aarch64 virt
+	// board has no IDE bus, so install-media cdroms ride USB there — every
+	// Windows has an inbox USB mass-storage driver.
+	InterfaceUSB DiskInterface = "usb"
 )
+
+// usbDiskControllerID names the xhci controller BaseMachine.Args emits when
+// any disk uses InterfaceUSB; the usb-storage devices attach to it by bus= so
+// they never depend on command-line ordering against other USB controllers.
+const usbDiskControllerID = "usbdisk0"
 
 type Disk struct {
 	provider provider.Provider
@@ -366,6 +380,60 @@ func (q *Disk) Args() []string {
 			"ide-hd",
 			"drive=" + id,
 			fmt.Sprintf("bus=ahci0.%d", q.diskIndex),
+		}
+		if q.BootIndex > 0 {
+			deviceArgs = append(deviceArgs, fmt.Sprintf("bootindex=%d", q.BootIndex))
+		}
+		return []string{
+			"-drive", strings.Join(driveArgs, ","),
+			"-device", strings.Join(deviceArgs, ","),
+		}
+	}
+
+	// NVMe disks: -drive if=none + -device nvme. The serial property is
+	// mandatory (QEMU refuses an nvme device without one); the drive id is a
+	// stable, unique choice.
+	if q.Interface == InterfaceNVMe {
+		driveArgs := []string{
+			"file=" + q.AbsolutePath(),
+			"if=none",
+			"id=" + id,
+			"format=" + string(q.Format),
+		}
+		if q.Cache != "" {
+			driveArgs = append(driveArgs, "cache="+string(q.Cache))
+		}
+		deviceArgs := []string{
+			"nvme",
+			"drive=" + id,
+			"serial=" + id,
+		}
+		if q.BootIndex > 0 {
+			deviceArgs = append(deviceArgs, fmt.Sprintf("bootindex=%d", q.BootIndex))
+		}
+		return []string{
+			"-drive", strings.Join(driveArgs, ","),
+			"-device", strings.Join(deviceArgs, ","),
+		}
+	}
+
+	// USB mass storage (cdroms and disks alike): -drive if=none + -device
+	// usb-storage, attaching to whichever USB controller the machine carries.
+	if q.Interface == InterfaceUSB {
+		driveArgs := []string{
+			"file=" + q.AbsolutePath(),
+			"if=none",
+			"id=" + id,
+			"media=" + string(q.Media),
+			"readonly=" + fmt.Sprintf("%t", q.Readonly),
+		}
+		if q.Media == DiskMediaDisk && q.Format != "" {
+			driveArgs = append(driveArgs, "format="+string(q.Format))
+		}
+		deviceArgs := []string{
+			"usb-storage",
+			"drive=" + id,
+			"bus=" + usbDiskControllerID + ".0",
 		}
 		if q.BootIndex > 0 {
 			deviceArgs = append(deviceArgs, fmt.Sprintf("bootindex=%d", q.BootIndex))
