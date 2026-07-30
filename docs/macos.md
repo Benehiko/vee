@@ -267,9 +267,12 @@ vee create dd --template devbox --nested
 or as `nested: true` in the VM's `vm.yaml`. vee appends `virtualization=on` to
 the aarch64 `virt` machine — under HVF paired with `kernel-irqchip=on`, because
 QEMU's HVF nested path only works with Apple's in-kernel vGIC (the userspace-GIC
-fallback has no EL2 timer emulation and is refused at start). Whether the host
-can honour it is the accelerator's call at start, and QEMU's error reaches the
-user verbatim. The knob is wired for arm64 (aarch64) QEMU guests only;
+fallback has no EL2 timer emulation), plus `-boot menu=on,splash-time=0`,
+without which edk2 hangs forever at EL2 waiting on a virtual-timer interrupt
+Hypervisor.framework never delivers (Apple FB21649319 — the upstream series'
+documented workaround; Linux guests are unaffected once booted). Whether the
+host can honour it is the accelerator's call at start, and QEMU's error reaches
+the user verbatim. The knob is wired for arm64 (aarch64) QEMU guests only;
 `vee create` refuses it elsewhere. macOS guests can never nest — Apple's
 frameworks do not work inside a VM (see the macOS-guest caveats below).
 
@@ -283,8 +286,12 @@ qemu-system-aarch64: mach-virt: HVF does not support providing Virtualization ex
 on every Mac, M3/macOS 15 included (verified against the shipped bundle). So on
 macOS hosts, `--nested` becomes useful once the pinned QEMU moves to ≥ 11.1 —
 the bundle-bump route tracked in
-[#64](https://github.com/Benehiko/vee/issues/64). Once QEMU is new enough, the
-hardware floor is an M3-or-later Mac on macOS 15+. On arm64 Linux hosts, KVM
+[#64](https://github.com/Benehiko/vee/issues/64). The full chain is verified
+against the pre-release `qemu-11.1.0-rc2-vee1` bundle on an M4 Max: an Ubuntu
+24.04 arm64 guest boots with `CPU: All CPU(s) started at EL2` and KVM
+initialized in-guest, using exactly the arguments vee generates. Once QEMU is
+new enough, the hardware floor is an M3-or-later Mac on macOS 15+. On arm64
+Linux hosts, KVM
 needs a kernel with ARM nested-virt support.
 
 Verify inside the guest:

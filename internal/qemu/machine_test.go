@@ -134,6 +134,66 @@ func TestMachineNestedHVFKernelIrqchip(t *testing.T) {
 	}
 }
 
+func TestMachineNestedHVFBootMenuWorkaround(t *testing.T) {
+	// edk2 hangs forever at EL2 under HVF waiting on a virtual-timer interrupt
+	// Hypervisor.framework never delivers (Apple FB21649319); the upstream
+	// series' documented workaround is -boot menu=on,splash-time=0.
+	p := newTestProvider(t)
+	m, err := qemu.NewEmptyMachine(p)
+	if err != nil {
+		t.Fatalf("NewEmptyMachine: %v", err)
+	}
+	disk := qemu.NewDisk(p, m, qemu.WithCustomPath("/data/disk.qcow2"))
+	built, err := m.BuildMachine(
+		qemu.AddDisk(disk),
+		qemu.WithArchitecture("aarch64"),
+		qemu.WithMachineType("virt"),
+		qemu.WithAccelerator(qemu.AccelHVF),
+		qemu.WithNested(true),
+	)
+	if err != nil {
+		t.Fatalf("BuildMachine: %v", err)
+	}
+	if got := argValue(built.Args(), "-boot"); got != "menu=on,splash-time=0" {
+		t.Errorf("nested HVF boot workaround missing: got %q", got)
+	}
+
+	// With an explicit boot order the workaround merges rather than replaces.
+	m2, _ := qemu.NewEmptyMachine(p)
+	disk2 := qemu.NewDisk(p, m2, qemu.WithCustomPath("/data/disk.qcow2"))
+	built2, err := m2.BuildMachine(
+		qemu.AddDisk(disk2),
+		qemu.WithArchitecture("aarch64"),
+		qemu.WithMachineType("virt"),
+		qemu.WithAccelerator(qemu.AccelHVF),
+		qemu.WithNested(true),
+		qemu.WithBootOrder("c"),
+	)
+	if err != nil {
+		t.Fatalf("BuildMachine: %v", err)
+	}
+	if got := argValue(built2.Args(), "-boot"); got != "order=c,menu=on,splash-time=0" {
+		t.Errorf("nested HVF boot order merge: got %q", got)
+	}
+
+	// Non-nested machines keep the quiet menu=off behaviour.
+	m3, _ := qemu.NewEmptyMachine(p)
+	disk3 := qemu.NewDisk(p, m3, qemu.WithCustomPath("/data/disk.qcow2"))
+	built3, err := m3.BuildMachine(
+		qemu.AddDisk(disk3),
+		qemu.WithArchitecture("aarch64"),
+		qemu.WithMachineType("virt"),
+		qemu.WithAccelerator(qemu.AccelHVF),
+		qemu.WithBootOrder("c"),
+	)
+	if err != nil {
+		t.Fatalf("BuildMachine: %v", err)
+	}
+	if got := argValue(built3.Args(), "-boot"); got != "order=c,menu=off" {
+		t.Errorf("non-nested boot order changed: got %q", got)
+	}
+}
+
 func TestMachineNestedKVMNoKernelIrqchip(t *testing.T) {
 	// KVM's in-kernel GIC is the default there; the explicit pairing is an
 	// HVF-only need and must not leak onto other accelerators.
