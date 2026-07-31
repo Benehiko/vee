@@ -75,7 +75,9 @@ func (m *MacOSImage) resolve(ctx context.Context) error {
 	ipswURL, err := vzhelper.LatestRestoreImageURL(ctx, helperPath)
 	if err != nil {
 		if cached := m.newestCached(); cached != "" {
-			fmt.Printf("Could not query the latest restore image (%v); using cached %s\n", err, cached)
+			// Stderr, not stdout: `vee mcp` owns stdout for the MCP
+			// protocol stream, and this is a warning anyway.
+			fmt.Fprintf(os.Stderr, "Could not query the latest restore image (%v); using cached %s\n", err, cached)
 			return m.setURL("https://cached.invalid/" + cached)
 		}
 		return err

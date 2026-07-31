@@ -256,6 +256,29 @@ func loadSSHKeys(path string) ([]string, error) {
 	return keys, nil
 }
 
+// KnownTemplates is the canonical list of template names — exactly the case
+// labels of configFromTemplate's switch. Surfaces that enumerate templates
+// (CLI help, the MCP server's template_list) key off this list;
+// TestKnownTemplatesMatchDispatch fails the build package's tests if the two
+// drift apart, so add new templates in both places.
+var KnownTemplates = []string{
+	"ubuntu-server",
+	"devbox",
+	"server",
+	"desktop",
+	"docker",
+	"gaming-arch",
+	"gaming-bazzite",
+	"gaming",
+	"passthrough",
+	"torrent",
+	"jellyfin",
+	"github-runner",
+	"windows",
+	"truenas",
+	"macos",
+}
+
 func configFromTemplate(ctx context.Context, prov provider.Provider, opts Opts, sshKeys []string) (*vm.VMConfig, error) {
 	gamingOpts := func() templates.GamingOptions {
 		headless := opts.Headless != nil && *opts.Headless

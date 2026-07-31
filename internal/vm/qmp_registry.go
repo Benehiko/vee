@@ -71,6 +71,36 @@ var errQMPNotOwned = fmt.Errorf("QMP connection not owned by this process")
 // owned here (caller should dial directly instead).
 func IsErrQMPNotOwned(err error) bool { return err == errQMPNotOwned }
 
+// QMPExecute runs one QMP command against a running VM, picking the first
+// transport that can reach the socket — the same order powerdown uses: the
+// in-process owner connection, the daemon's control socket, then a direct
+// dial of the QMP socket. Shared by `vee qmp`-style callers that run outside
+// the daemon (the MCP server's vm_qmp).
+func (m *Manager) QMPExecute(ctx context.Context, name, execute string, args map[string]any, timeout time.Duration) (json.RawMessage, error) {
+	raw, err := m.ExecuteQMP(name, execute, args)
+	if err == nil || !IsErrQMPNotOwned(err) {
+		return raw, err
+	}
+
+	if raw, reachable, daemonErr := m.QMPViaDaemon(ctx, name, execute, args); reachable {
+		return raw, daemonErr
+	}
+
+	state, err := m.loadState(name)
+	if err != nil {
+		return nil, err
+	}
+	if !state.Running || state.QMPSocket == "" {
+		return nil, fmt.Errorf("VM %q has no reachable QMP socket (is it running on the QEMU backend?)", name)
+	}
+	client, err := qemu.NewQMPClient(ctx, state.QMPSocket, timeout)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = client.Close() }()
+	return client.Execute(execute, args)
+}
+
 // powerdown issues system_powerdown to a VM, preferring the owned connection
 // (which the daemon holds for the VM's lifetime) and falling back to a direct
 // dial when this process owns no connection for the VM — e.g. a standalone
