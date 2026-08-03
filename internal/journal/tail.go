@@ -3,6 +3,7 @@ package journal
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,6 +22,12 @@ type TailOptions struct {
 // Tail streams journal entries from the files in dir to stdout using journalctl.
 // Returns an error if no journal files exist or journalctl is unavailable.
 func Tail(ctx context.Context, dir string, opts TailOptions) error {
+	return TailTo(ctx, os.Stdout, dir, opts)
+}
+
+// TailTo is Tail writing to w instead of stdout — for callers that must keep
+// stdout clean (the MCP server) or capture the output.
+func TailTo(ctx context.Context, w io.Writer, dir string, opts TailOptions) error {
 	files, err := journalFiles(dir)
 	if err != nil {
 		return fmt.Errorf("read journal dir: %w", err)
@@ -50,7 +57,7 @@ func Tail(ctx context.Context, dir string, opts TailOptions) error {
 
 	//nolint:gosec // bin is resolved via exec.LookPath and args are fixed flags plus validated file paths from the journal dir; no shell involvement.
 	cmd := exec.CommandContext(ctx, bin, args...)
-	cmd.Stdout = os.Stdout
+	cmd.Stdout = w
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }

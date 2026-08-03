@@ -237,6 +237,7 @@ See [docs/gpu-passthrough-gaming.md](docs/gpu-passthrough-gaming.md) for Sunshin
 | `vee delete <name>` | Wipe VM and all its disks |
 | `vee daemon` | Run the vee daemon (starts and watches autostart VMs) |
 | `vee dashboard` | Start a web dashboard for all VMs |
+| `vee mcp` | Run an MCP server over stdio so coding agents can drive vee |
 | `vee gpu list` | List PCI GPUs and IOMMU groups |
 | `vee gpu bind <pci>` | Bind device to vfio-pci (requires root) |
 | `vee gpu unbind <pci>` | Release device back to host driver (requires root) |
@@ -254,6 +255,25 @@ guest has no equivalent of: `vee monitor`, `vee qmp` and the dashboard's live
 stats need QMP, and `vee check` and `vee ports` need the QEMU guest agent. See
 [macOS guests](https://vee.benehiko.com/getting-started/macos-guests/) for the
 full matrix of what that backend supports.
+
+## MCP server (coding agents)
+
+`vee mcp` speaks the [Model Context Protocol](https://modelcontextprotocol.io)
+over stdio, exposing vee as typed tools so coding agents can manage VMs
+without parsing CLI output:
+
+```sh
+claude mcp add vee -- vee mcp    # Claude Code; other MCP clients work the same way
+```
+
+The MCP surface has **feature parity with the CLI**: every command either
+maps to tools (lifecycle, guest exec, ports, services, logs, QMP, stats,
+backups, images, GPU inspection, runner credentials, pacman mirror) or
+carries an explicit CLI-only exemption (interactive TUIs, root-mutating host
+operations). A test walks the command tree and fails the build when the two
+drift. A typical agent flow: `vm_create {template: "devbox", start: true}` →
+`vm_exec {command: "docker run --rm alpine echo ok"}` → `vm_delete`. See
+[docs/mcp.md](docs/mcp.md) for the full tool reference.
 
 ## Shell completion
 
@@ -348,6 +368,7 @@ docs also live in this repo:
 - [docs/windows-guests.md](docs/windows-guests.md) — the on-demand Windows guest ISO build pipeline
 - [docs/windows-24h2-install.md](docs/windows-24h2-install.md) — full writeup of the Windows 11 24H2 install debugging
 - [docs/qmp.md](docs/qmp.md) — `vee qmp` and the daemon-routed QMP transport
+- [docs/mcp.md](docs/mcp.md) — the MCP server: tool reference and agent registration
 - [docs/gpu-passthrough-gaming.md](docs/gpu-passthrough-gaming.md) — Sunshine + Moonlight streaming over GPU passthrough
 - [docs/media-sources.md](docs/media-sources.md) — attaching NFS/SMB/host-dir/block/USB media to VMs
 - [docs/pacman-mirror.md](docs/pacman-mirror.md) — host-side pacman caching proxy for Arch VMs

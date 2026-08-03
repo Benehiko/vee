@@ -72,27 +72,12 @@ For user-mode VMs, opens an SSH -L tunnel.`,
 	},
 }
 
-// resolvedService is a ServiceEntry with its connection port resolved for the
-// current VM state (SPICE port comes from state, others from config).
-type resolvedService struct {
-	vm.ServiceEntry
-}
+// resolvedService aliases the shared resolution type in internal/vm, which
+// the MCP server's vm_services uses too — one resolution path, no drift.
+type resolvedService = vm.ResolvedService
 
 func resolvedServices(cfg *vm.VMConfig, state *vm.VMState) []resolvedService {
-	var out []resolvedService
-	for _, s := range cfg.Services {
-		rs := resolvedService{s}
-		// SPICE port lives in state after first start.
-		if s.Protocol == vm.ServiceSPICE {
-			if state.SPICEPort > 0 {
-				rs.Port = state.SPICEPort
-			} else if cfg.SPICE != nil {
-				rs.Port = cfg.SPICE.Port
-			}
-		}
-		out = append(out, rs)
-	}
-	return out
+	return vm.ResolvedServices(cfg, state)
 }
 
 func printServiceMenu(cfg *vm.VMConfig, services []resolvedService) error {
@@ -165,32 +150,7 @@ func (s *ansiStripper) Write(p []byte) (int, error) {
 }
 
 func serviceURL(cfg *vm.VMConfig, s resolvedService) string {
-	// SPICE is always bound on the host by QEMU — show direct URL.
-	if s.Protocol == vm.ServiceSPICE {
-		return fmt.Sprintf("spice://localhost:%d", s.Port)
-	}
-	// user-mode with hostfwd — port is already on the host.
-	if cfg.NIC.Mode == "user" {
-		if hostPort := findHostFwd(cfg.NIC.HostFwds, s.Port); hostPort > 0 {
-			switch s.Protocol {
-			case vm.ServiceHTTP:
-				return fmt.Sprintf("http://localhost:%d", hostPort)
-			case vm.ServiceHTTPS:
-				return fmt.Sprintf("https://localhost:%d", hostPort)
-			default:
-				return fmt.Sprintf("localhost:%d", hostPort)
-			}
-		}
-	}
-	// Bridge / no hostfwd — a proxy will be opened on a random local port.
-	switch s.Protocol {
-	case vm.ServiceHTTP:
-		return fmt.Sprintf("http://localhost:<proxy> → guest:%d", s.Port)
-	case vm.ServiceHTTPS:
-		return fmt.Sprintf("https://localhost:<proxy> → guest:%d", s.Port)
-	default:
-		return fmt.Sprintf("localhost:<proxy> → guest:%d", s.Port)
-	}
+	return vm.ServiceURL(cfg, s)
 }
 
 func connectService(cmd *cobra.Command, cfg *vm.VMConfig, state *vm.VMState, s resolvedService) error {
@@ -248,25 +208,8 @@ func connectService(cmd *cobra.Command, cfg *vm.VMConfig, state *vm.VMState, s r
 	}
 }
 
-// findHostFwd returns the host port for a forwarded guest port, or 0 if none.
-// HostFwds format: "tcp:127.0.0.1:<hostPort>-:<guestPort>".
 func findHostFwd(fwds []string, guestPort int) int {
-	guestStr := strconv.Itoa(guestPort)
-	for _, fwd := range fwds {
-		// format: proto:hostAddr:hostPort-:guestPort
-		parts := strings.SplitN(fwd, "-:", 2)
-		if len(parts) != 2 || parts[1] != guestStr {
-			continue
-		}
-		// hostPart = "tcp:127.0.0.1:hostPort"
-		hostPart := strings.SplitN(parts[0], ":", 3)
-		if len(hostPart) == 3 {
-			if p, err := strconv.Atoi(hostPart[2]); err == nil {
-				return p
-			}
-		}
-	}
-	return 0
+	return vm.FindHostFwd(fwds, guestPort)
 }
 
 func localServiceURL(s resolvedService, localPort int) string {

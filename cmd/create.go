@@ -16,10 +16,10 @@ import (
 	"github.com/Benehiko/vee/internal/blockdev"
 	"github.com/Benehiko/vee/internal/gpu"
 	"github.com/Benehiko/vee/internal/images"
+	"github.com/Benehiko/vee/internal/media"
 	"github.com/Benehiko/vee/internal/platform"
 	"github.com/Benehiko/vee/internal/runnercreds"
-	"github.com/Benehiko/vee/internal/runnerssh"
-	"github.com/Benehiko/vee/internal/templates"
+	"github.com/Benehiko/vee/internal/runnersetup"
 	"github.com/Benehiko/vee/internal/tui"
 	"github.com/Benehiko/vee/internal/vm"
 	"github.com/Benehiko/vee/internal/vm/build"
@@ -175,7 +175,7 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
 			}
 		}
 		if opts.Template == "jellyfin" {
-			libs, parseErr := parseMediaSpecs(createMedia)
+			libs, parseErr := media.ParseSpecs(createMedia)
 			if parseErr != nil {
 				return parseErr
 			}
@@ -194,87 +194,40 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
 			if createRunnerURL == "" {
 				return fmt.Errorf("--runner-url is required for the github-runner template")
 			}
-			labels := createRunnerLabels
-			if len(labels) == 0 {
-				labels = []string{"self-hosted", "linux", "kvm"}
-			}
-
-			// If a host has an encrypted credential snapshot for this name,
-			// restore it instead of fetching a fresh registration token. This
-			// lets `vee create --reinstall <name>` rejoin GitHub as the same
-			// runner with no token prompt and no duplicate runner entry.
-			var restored []templates.RunnerCredFile
-			if runnercreds.Has(name) {
-				id, idErr := runnercreds.LoadOrCreateIdentity()
-				if idErr != nil {
-					return fmt.Errorf("load age identity: %w", idErr)
-				}
-				files, rErr := runnercreds.Restore(id, name)
-				if rErr != nil {
-					return fmt.Errorf("restore runner creds for %q: %w", name, rErr)
-				}
-				for _, f := range files {
-					restored = append(restored, templates.RunnerCredFile{
-						RelPath: f.RelPath, Content: f.Content, Mode: f.Mode,
-					})
-				}
-				fmt.Fprintf(os.Stderr, "Restoring %d persisted runner credential file(s) for %q — skipping token registration.\n", len(restored), name)
-			}
-
-			var token string
-			if len(restored) == 0 {
+			// Prompt for a registration token only when no credential snapshot
+			// exists; runnersetup restores snapshots so `vee create --reinstall`
+			// rejoins GitHub as the same runner with no token and no duplicate
+			// runner entry.
+			promptToken := func() (string, error) {
 				fmt.Fprint(os.Stderr, "GitHub runner registration token: ")
 				tokenBytes, readErr := term.ReadPassword(int(os.Stdin.Fd()))
 				fmt.Fprintln(os.Stderr)
 				if readErr != nil {
-					return fmt.Errorf("read runner token: %w", readErr)
+					return "", fmt.Errorf("read runner token: %w", readErr)
 				}
-				token = strings.TrimSpace(string(tokenBytes))
+				return strings.TrimSpace(string(tokenBytes)), nil
 			}
-
-			opts.RunnerExtras = &build.RunnerExtras{
-				URL:           createRunnerURL,
-				Token:         token,
-				Labels:        labels,
-				RestoredCreds: restored,
+			prepared, prepErr := runnersetup.Prepare(name, createRunnerURL, createRunnerLabels, createRunnerSSHKey, promptToken)
+			if prepErr != nil {
+				return prepErr
 			}
-
-			// SSH key for GitHub access. By default every runner gets the shared
-			// global key; --runner-ssh-key gives this runner its own per-instance
-			// key instead (scope it to one repo via a read-only deploy key). The
-			// key is generated on the host if absent and injected via cloud-init;
-			// the public key is surfaced for adding to GitHub.
-			keyName := "" // global
-			if createRunnerSSHKey {
-				keyName = name
+			opts.RunnerExtras = prepared.Extras
+			if prepared.RestoredFiles > 0 {
+				fmt.Fprintf(os.Stderr, "Restoring %d persisted runner credential file(s) for %q — skipping token registration.\n", prepared.RestoredFiles, name)
 			}
-			id, idErr := runnercreds.LoadOrCreateIdentity()
-			if idErr != nil {
-				return fmt.Errorf("load age identity: %w", idErr)
-			}
-			pub, createdKey, keyErr := runnerssh.EnsureKey(id, keyName)
-			if keyErr != nil {
-				return fmt.Errorf("ensure runner ssh key: %w", keyErr)
-			}
-			priv, privErr := runnerssh.LoadPrivateKey(id, keyName)
-			if privErr != nil {
-				return fmt.Errorf("load runner ssh key: %w", privErr)
-			}
-			opts.RunnerExtras.SSHPrivKey = priv
-
 			// Show the public key + GitHub instructions when the key was newly
 			// generated (per-instance keys are always new here). Re-fetch anytime
 			// with `vee runner key`.
-			if createdKey {
+			if prepared.KeyCreated {
 				label := "global runner SSH key"
 				fetch := "vee runner key"
-				if keyName != "" {
+				if createRunnerSSHKey {
 					label = fmt.Sprintf("per-instance SSH key for %q", name)
 					fetch = "vee runner key " + name
 				}
 				fmt.Fprintf(os.Stderr,
 					"Generated %s. Add this public key to GitHub (account SSH key, or a per-repo read-only Deploy key):\n  %s\nRe-print anytime with: %s\n",
-					label, pub, fetch)
+					label, prepared.PubKey, fetch)
 			}
 		}
 
