@@ -57,7 +57,7 @@ func Execute() {
 
 func init() {
 	rootCmd.PersistentFlags().StringVar(&configPath, "config", "", "config file (default ~/.vee/config.yaml)")
-	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Stream logs to stderr (default: file only at ~/.vee/logs/vee.log)")
+	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Log at debug level and stream to stderr (default: info, file only at ~/.vee/logs/vee.log)")
 	rootCmd.PersistentFlags().StringVar(&mirrorFlag, "mirror", "auto", "Pacman mirror cache: auto|on|off")
 	rootCmd.AddCommand(createCmd)
 	rootCmd.AddCommand(pullCmd)

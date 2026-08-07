@@ -21,7 +21,8 @@ Register it with an MCP-capable agent, e.g. Claude Code:
   claude mcp add vee -- vee mcp
 
 Stdout carries the MCP protocol stream. Logs go to ~/.vee/logs/vee.log as
-usual; --verbose additionally streams them to stderr, which is protocol-safe.`,
+usual; --verbose raises them to debug level and additionally streams them to
+stderr, which is protocol-safe.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		v, _, _ := resolveVersion()
