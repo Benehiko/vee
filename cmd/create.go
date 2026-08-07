@@ -537,7 +537,7 @@ func init() {
 	createCmd.Flags().StringVar(&createTemplate, "template", "ubuntu-server", "VM template: ubuntu-server, gaming, torrent, devbox, server, windows")
 	createCmd.Flags().StringVar(&createMemory, "memory", "2G", "Memory size (overrides template default)")
 	createCmd.Flags().IntVar(&createCPUs, "cpus", 2, "Number of vCPUs (overrides template default)")
-	createCmd.Flags().StringVar(&createDisk, "disk", "", "Extra primary disk size (e.g. 50G)")
+	createCmd.Flags().StringVar(&createDisk, "disk", "", "Attach an additional blank disk of this size, alongside the OS disk (e.g. 50G)")
 	createCmd.Flags().StringVar(&createNicMode, "nic-mode", "user", "NIC mode: bridge or user")
 	createCmd.Flags().StringVar(&createNicBridge, "nic-bridge", "br0", "Bridge interface (when nic-mode=bridge)")
 	createCmd.Flags().IntVar(&createSpicePort, "spice-port", 0, "SPICE port (0 = use template default)")

@@ -16,7 +16,7 @@ vee create <name> [flags]
 | `--template` | VM template to use (default: `ubuntu-server`) |
 | `--memory` | RAM, e.g. `4G` (default: template-specific) |
 | `--cpus` | Number of vCPUs (default: template-specific) |
-| `--disk` | Primary disk size, e.g. `40G` |
+| `--disk` | Attach an additional blank disk of this size alongside the OS disk, e.g. `40G`. On the `macos` template it sets the size of the guest's own disk instead. |
 | `--distro` | Linux distro for templates that support it |
 | `--data-disk` | Extra raw disk in `path:label` format (repeatable) |
 | `--nvme-dev` | Pass an NVMe device through directly (passthrough template) |
@@ -29,6 +29,19 @@ vee create <name> [flags]
 | `--virtiofs-dir` | Host directory to share into the VM |
 | `--nested` | Expose nested virtualization (EL2) so the guest can run KVM — arm64 QEMU guests only; under HVF needs QEMU ≥ 11.1 plus an M3+ Mac on macOS 15+ |
 
+## Extra disks
+
+`--disk <size>` attaches one additional qcow2 disk to the guest, created under
+`~/.vee/vms/<name>/storage/`. It is blank: the guest sees an unpartitioned
+block device (typically `/dev/vdb`) and you partition, format and mount it
+yourself. The OS disk keeps the first slot, so boot order is unaffected.
+
+To grow the OS disk instead of adding a second one, set `default_disk_size` in
+`~/.vee/config.yaml` before creating the VM.
+
+`--data-disk` is a different thing: it passes an existing *host* block device
+through to the guest, rather than creating a new image.
+
 ## Examples
 
 ```sh
@@ -37,6 +50,9 @@ vee create myvm
 
 # Developer VM with Docker
 vee create dev --template devbox
+
+# Developer VM with a second, blank 60G disk to format in the guest
+vee create dev --template devbox --disk 60G
 
 # TrueNAS with data drives
 vee create mynas --template truenas \

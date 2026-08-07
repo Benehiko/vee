@@ -267,7 +267,7 @@ type vmCreateIn struct {
 	// Common knobs — empty/zero means "use the template default".
 	Memory        string `json:"memory,omitempty" jsonschema:"guest memory such as 4G or 8192M"`
 	CPUs          int    `json:"cpus,omitempty" jsonschema:"vCPU count"`
-	Disk          string `json:"disk,omitempty" jsonschema:"primary disk size such as 50G"`
+	Disk          string `json:"disk,omitempty" jsonschema:"attach an additional blank disk of this size alongside the OS disk, such as 50G; on the macos template it sets the guest's own disk size instead"`
 	Distro        string `json:"distro,omitempty" jsonschema:"distro for templates that support it: ubuntu, arch, fedora"`
 	DistroVersion string `json:"distro_version,omitempty" jsonschema:"distro version, or latest"`
 	Hostname      string `json:"hostname,omitempty"`
