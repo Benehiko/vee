@@ -335,6 +335,58 @@ func TestRenderFirstBootScript(t *testing.T) {
 	}
 }
 
+// TestFirstBootScriptDoesNotChownExistingHome covers issue #74: the recursive
+// chown of an already-correct home directory hits Desktop, Documents,
+// Downloads and Library/Autosave Information, which TCC protects. A launch
+// daemon has no Full Disk Access on first boot, so each one fails with
+// "Operation not permitted" and a successful provisioning run reads as a
+// failed one. The chown must run only where it can do something: right after
+// ditto populates a home that did not exist.
+func TestFirstBootScriptDoesNotChownExistingHome(t *testing.T) {
+	script, err := renderFirstBootScript(Options{
+		User:          "vee",
+		SSHPublicKeys: []string{"ssh-ed25519 AAAAKEY1 a@h"},
+	}, "pw")
+	if err != nil {
+		t.Fatalf("renderFirstBootScript: %v", err)
+	}
+
+	// The only recursive chown of the home root must sit inside the branch
+	// that just created it — i.e. after the ditto call and before the else.
+	created, rest, found := strings.Cut(script, `/usr/bin/ditto --noqtn`)
+	if !found {
+		t.Fatal("script no longer populates the home directory with ditto")
+	}
+	populated, afterBranch, found := strings.Cut(rest, "\telse\n")
+	if !found {
+		t.Fatal("script no longer has an else branch for an existing home")
+	}
+
+	// Trailing space, so this never matches the "${USER_HOME}/.ssh" chown.
+	const homeChown = `chown -R "${UID_NUM}:staff" "${USER_HOME}" `
+	if !strings.Contains(populated, homeChown) {
+		t.Error("a freshly populated home is no longer chowned; ditto leaves it root-owned")
+	}
+	for name, section := range map[string]string{
+		"before the ditto branch":      created,
+		"after the home-exists branch": afterBranch,
+	} {
+		if strings.Contains(section, homeChown) {
+			t.Errorf("recursive chown of ${USER_HOME} found %s; it will hit TCC-protected subdirectories and log EPERM", name)
+		}
+	}
+
+	// The .ssh chown is vee's own directory, not TCC-protected, and must stay.
+	if !strings.Contains(script, `chown -R "${UID_NUM}:staff" "${USER_HOME}/.ssh"`) {
+		t.Error("the .ssh chown was dropped; authorized_keys would stay root-owned")
+	}
+
+	// The log should say what happened rather than list errors.
+	if !strings.Contains(script, "home directory ownership already correct") {
+		t.Error("no log line for the already-correct case")
+	}
+}
+
 func TestLaunchDaemonPlistLogsToOpenablePath(t *testing.T) {
 	// launchd refuses to spawn a job whose Standard*Path cannot be opened.
 	// vee's helper attaches no console device, so /dev/tty.virtio must not

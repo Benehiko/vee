@@ -81,15 +81,24 @@ else
 	printf '%s' {{.PasswordQ}} | /usr/sbin/sysadminctl \
 		-addUser "${USER_NAME}" -fullName "vee" -password - -admin -shell /bin/zsh \
 		>/dev/null 2>&1
-	# sysadminctl does not populate the home directory.
+	# sysadminctl does not always populate the home directory. When it did,
+	# ownership is already correct and the recursive chown has nothing to fix
+	# — but it does hit Desktop, Documents, Downloads and Library/Autosave
+	# Information, which are TCC-protected. A launch daemon has no Full Disk
+	# Access on first boot, so chown returns EPERM on each of them even as
+	# root, and the log fills with errors that look like a failed provision.
+	# Only chown what we created.
 	if [ ! -d "${USER_HOME}" ]; then
+		log "populating home directory for ${USER_NAME}"
 		/usr/bin/ditto --noqtn "/System/Library/User Template/English.lproj" "${USER_HOME}" 2>/dev/null
+		UID_NUM=$(/usr/bin/id -u "${USER_NAME}" 2>/dev/null)
+		if [ -n "${UID_NUM}" ]; then
+			/usr/sbin/chown -R "${UID_NUM}:staff" "${USER_HOME}" 2>/dev/null
+		fi
+	else
+		log "home directory ownership already correct"
 	fi
-	UID_NUM=$(/usr/bin/id -u "${USER_NAME}" 2>/dev/null)
-	if [ -n "${UID_NUM}" ]; then
-		/usr/sbin/chown -R "${UID_NUM}:staff" "${USER_HOME}"
-		/bin/chmod 700 "${USER_HOME}"
-	fi
+	/bin/chmod 700 "${USER_HOME}"
 	/usr/sbin/dseditgroup -o edit -a "${USER_NAME}" -t user admin 2>/dev/null
 fi
 
