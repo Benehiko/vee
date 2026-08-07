@@ -21,9 +21,9 @@ var (
 )
 
 var sshCmd = &cobra.Command{
-	Use:               "ssh <name>",
+	Use:               "ssh [ssh-flags] <name> [-- <command>...]",
 	Short:             "Open an SSH session into a running VM",
-	ValidArgsFunction: completeVMNames,
+	ValidArgsFunction: completeSSHArgs,
 	Long: `Connects to a running VM via SSH.
 
 For headless VMs with a port-forward (--ssh-port), connects to 127.0.0.1 on
@@ -31,17 +31,42 @@ that port. For bridge-mode and vz (macOS guest) VMs, resolves the guest IP
 by MAC address from the host's DHCP lease and ARP/neighbour tables.
 
 The username defaults to the cloud-init user configured at creation time.
-Override with --user. Pass extra ssh(1) flags after --.
+Override with --user (or ssh's -l).
+
+ssh(1) flags are accepted directly, before the VM name — -L, -R, -D, -J, -A,
+-o and the rest of the ssh flag surface are passed through untouched. Anything
+after -- is the remote command; it is shell-quoted so the argv the guest sees
+is exactly the argv given here.
+
+Note that vee's own global flags (--verbose, --config, --mirror) must come
+before the ssh subcommand, since -v after it belongs to ssh.
 
 Examples:
   vee ssh myvm
   vee ssh myvm --user root
   vee ssh myvm --identity ~/.ssh/id_ed25519
-  vee ssh myvm -- -L 8080:localhost:8080`,
-	Args: cobra.MinimumNArgs(1),
+  vee ssh -L 8080:localhost:8080 myvm
+  vee ssh myvm -- sh -c 'echo "x  y"; echo done'
+  vee -v ssh myvm`,
+	// ssh's flag surface overlaps vee's (-v most notably, which cobra would
+	// refuse to redefine), and clustered forms like -vvv are not something
+	// pflag models. Parse the argv here instead so `vee ssh` accepts exactly
+	// what ssh accepts.
+	DisableFlagParsing: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		name := args[0]
-		extra := args[1:]
+		if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
+			return cmd.Help()
+		}
+
+		parsed, err := parseSSHArgv(args)
+		if err != nil {
+			return err
+		}
+		name := parsed.Name
+		sshUser = parsed.User
+		sshIdentity = parsed.Identity
+		sshExtraFlags = parsed.SSHFlags
+		remoteCmd := parsed.Command
 
 		cfg, state, err := loadRunningVM(name)
 		if err != nil {
@@ -120,7 +145,7 @@ Examples:
 			scrubKnownHost(veeKnownHosts, host, port)
 		}
 
-		sshArgs := buildSSHArgs(user, host, port, sshIdentity, veeKnownHosts, extra, sshExtraFlags)
+		sshArgs := buildSSHArgs(user, host, port, sshIdentity, veeKnownHosts, remoteCmd, sshExtraFlags)
 
 		sshBin, err := exec.LookPath("ssh")
 		if err != nil {
@@ -190,7 +215,7 @@ func knownToMacOSTerminfo(term string) bool {
 	return false
 }
 
-func buildSSHArgs(user, host string, port int, identity, knownHosts string, positional, extra []string) []string {
+func buildSSHArgs(user, host string, port int, identity, knownHosts string, remoteCmd, extra []string) []string {
 	var args []string
 	if port != 22 {
 		args = append(args, "-p", fmt.Sprintf("%d", port))
@@ -198,12 +223,16 @@ func buildSSHArgs(user, host string, port int, identity, knownHosts string, posi
 	if identity != "" {
 		args = append(args, "-i", identity)
 	}
+	// extra holds the user's ssh flags (-L 8080:..., -o ...) — before host, and
+	// ahead of vee's own -o defaults below: ssh honours the first value it sees
+	// for any given option, so a user -o has to come first to take effect. A
+	// user -p is the exception (ssh takes the last one), which is also what we
+	// want — an explicit port overrides the one vee resolved.
+	args = append(args, extra...)
 	if knownHosts != "" {
 		args = append(args, "-o", "UserKnownHostsFile="+knownHosts)
 		args = append(args, "-o", "StrictHostKeyChecking=accept-new")
 	}
-	// extra holds --ssh-flag values (ssh flags, e.g. -L 8080:...) — before host.
-	args = append(args, extra...)
 
 	dest := host
 	if user != "" {
@@ -211,15 +240,64 @@ func buildSSHArgs(user, host string, port int, identity, knownHosts string, posi
 	}
 	args = append(args, dest)
 
-	// positional holds remote command args — after host.
-	args = append(args, positional...)
+	// remoteCmd holds the remote command argv — after host. ssh joins its
+	// remote-command arguments with single spaces and hands the result to the
+	// remote shell, which re-splits and re-evaluates it, so every argument has
+	// to be shell-quoted to survive the round trip and reach the guest as the
+	// same argv the caller typed.
+	if len(remoteCmd) > 0 {
+		quoted := make([]string, len(remoteCmd))
+		for i, a := range remoteCmd {
+			quoted[i] = shellQuote(a)
+		}
+		args = append(args, strings.Join(quoted, " "))
+	}
 	return args
 }
 
+// shellQuote renders s as a single POSIX shell word. Single quotes disable
+// every form of expansion, so the only character needing care is the single
+// quote itself: close the string, emit an escaped quote, reopen.
+func shellQuote(s string) string {
+	if s == "" {
+		return "''"
+	}
+	// Unquoted is safe only for characters no shell assigns meaning to.
+	if strings.IndexFunc(s, func(r rune) bool {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			return false
+		}
+		return !strings.ContainsRune("@%_-+=:,./", r)
+	}) < 0 {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 func init() {
-	sshCmd.Flags().StringVarP(&sshUser, "user", "u", "", "SSH username (default: cloud-init user)")
-	sshCmd.Flags().StringVarP(&sshIdentity, "identity", "i", "", "SSH identity file (private key)")
+	// Registered so --help lists them; sshCmd sets DisableFlagParsing, so
+	// parseSSHArgv is what actually reads them.
+	sshCmd.Flags().StringVarP(&sshUser, "user", "u", "", "SSH username (default: cloud-init user; ssh's -l is also accepted)")
+	sshCmd.Flags().StringVarP(&sshIdentity, "identity", "i", "", "SSH identity file (private key; same as ssh's -i)")
 	sshCmd.Flags().StringArrayVar(&sshExtraFlags, "ssh-flag", nil, "Extra flags passed to ssh(1) (repeatable)")
+
+	// Shadow the root command's persistent flags with hidden local copies.
+	// Cobra completes a command's own and inherited flags before consulting
+	// ValidArgsFunction, and it skips hidden ones — without this, `vee ssh -`
+	// would offer --verbose/--config/--mirror, which do not work in this
+	// position: flag parsing is disabled here, so they reach ssh as
+	// remote-command words. They still work before the subcommand
+	// (`vee -v ssh myvm`), which is what the help text tells the user to do.
+	// The values are never read; only the flags' presence matters.
+	sshCmd.Flags().BoolP("verbose", "v", false, "")
+	sshCmd.Flags().String("config", "", "")
+	sshCmd.Flags().String("mirror", "", "")
+	for _, name := range []string{"verbose", "config", "mirror"} {
+		if err := sshCmd.Flags().MarkHidden(name); err != nil {
+			panic(err) // only fails for a flag that was not just registered
+		}
+	}
 }
 
 // scrubKnownHost removes all lines matching host (and [host]:port for non-22
