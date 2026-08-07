@@ -134,6 +134,6 @@ the guest.
 ## Protocol hygiene
 
 Stdout carries the MCP JSON-RPC stream. vee's logs go to
-`~/.vee/logs/vee.log` as usual; passing `--verbose` streams them to stderr,
-which is protocol-safe, and download progress bars render on stderr. Nothing
-in the tool call paths writes to stdout.
+`~/.vee/logs/vee.log` as usual; passing `--verbose` raises them to debug level
+and streams them to stderr, which is protocol-safe, and download progress bars
+render on stderr. Nothing in the tool call paths writes to stdout.

@@ -24,9 +24,10 @@ type provider struct {
 }
 
 // New returns a Provider. When verbose is false, info-level logs go only to
-// ~/.vee/logs/vee.log; when true, they are also streamed to stderr. CLI
-// commands pass false by default so spinners and step output stay clean; pass
-// true via the global --verbose flag for debugging.
+// ~/.vee/logs/vee.log; when true, they are also streamed to stderr and both
+// sinks drop to debug level. CLI commands pass false by default so spinners
+// and step output stay clean; pass true via the global --verbose flag for
+// debugging.
 func New(verbose bool) (Provider, error) {
 	return newProvider(!verbose)
 }
@@ -59,6 +60,13 @@ func newProvider(silent bool) (Provider, error) {
 	return &provider{config: config, logger: logger, db: database}, nil
 }
 
+// newLogger builds the vee logger. silent selects the sinks — file only, or
+// file plus stderr — and also the level: a --verbose run is a debugging run,
+// so both sinks drop to debug. Raising the file level too is deliberate; the
+// log file is what ends up attached to a bug report, and the debug call sites
+// (why the daemon skipped a VM, why a stop fell back to its grace period) are
+// exactly what such a report needs. Non-verbose runs stay at info, so the
+// shared journal does not fill with debug lines.
 func newLogger(logPath string, silent bool) (*zap.Logger, error) {
 	if err := os.MkdirAll(logPath, 0o750); err != nil {
 		return nil, err
@@ -75,10 +83,15 @@ func newLogger(logPath string, silent bool) (*zap.Logger, error) {
 	encCfg.TimeKey = "ts"
 	encCfg.EncodeTime = zapcore.ISO8601TimeEncoder
 
+	level := zapcore.InfoLevel
+	if !silent {
+		level = zapcore.DebugLevel
+	}
+
 	fileCore := zapcore.NewCore(
 		zapcore.NewJSONEncoder(encCfg),
 		zapcore.AddSync(f),
-		zapcore.InfoLevel,
+		level,
 	)
 
 	if silent {
@@ -88,7 +101,7 @@ func newLogger(logPath string, silent bool) (*zap.Logger, error) {
 	consoleCore := zapcore.NewCore(
 		zapcore.NewConsoleEncoder(encCfg),
 		zapcore.AddSync(os.Stderr),
-		zapcore.InfoLevel,
+		level,
 	)
 
 	return zap.New(zapcore.NewTee(fileCore, consoleCore), zap.AddCaller()), nil
