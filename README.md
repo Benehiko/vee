@@ -179,6 +179,17 @@ vee gpu status 08:00.0 --memory 16G  # pre-flight check before boot
 
 All devices in the same IOMMU group must be bound together. `vee gpu status` reports peer devices and their current drivers.
 
+### Resizable BAR (optional)
+
+A GPU bound to `vfio-pci` at boot keeps its firmware-default BAR (typically 256M), and the guest is stuck with it — gaming guests lose ReBAR/SAM, and compute stacks that map all VRAM CPU-visible (e.g. tinygrad) fail outright. `vee gpu rebar` installs a boot-time resize that runs before any driver binds:
+
+```sh
+vee gpu rebar 08:00.0             # show current + supported BAR sizes
+vee gpu rebar 08:00.0 --size 16G  # resize BAR0 to 16G on every boot (reboot to apply)
+```
+
+See [docs/gpu-rebar.md](docs/gpu-rebar.md) for how it works and why runtime resizing is not safe on cards with reset quirks.
+
 ### Create a gaming VM
 
 ```sh
