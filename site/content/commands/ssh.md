@@ -31,6 +31,11 @@ vee -v ssh myvm     # vee's verbose logging
 vee ssh -v myvm     # ssh's verbose output
 ```
 
+Shell completion knows this grammar: it offers the ssh flags (and completes
+clustered forms such as `-N` into `-NT`), VM names in the destination slot,
+`--` once a VM name is given, and nothing after `--`, since the remote command
+runs in the guest rather than on the host.
+
 Where vee and ssh set the same option, vee's value is a default the flag
 overrides: an explicit `-p` wins over the port vee resolved, and an explicit
 `-o` wins over vee's own `-o` defaults.

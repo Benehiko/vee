@@ -4,6 +4,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 func TestParseSSHArgv(t *testing.T) {
@@ -172,6 +174,98 @@ func TestParseSSHArgvErrors(t *testing.T) {
 			t.Errorf("parseSSHArgv(%q) succeeded, want an error", argv)
 		}
 	}
+}
+
+// TestSSHFlagHelpCoversFlags keeps the completion descriptions in sync with
+// the flags the parser accepts: a flag added to either table without a
+// description would complete with an empty one.
+func TestSSHFlagHelpCoversFlags(t *testing.T) {
+	all := sshBoolFlags + sshValueFlags
+	for i := range all {
+		if sshFlagHelp[all[i]] == "" {
+			t.Errorf("ssh flag -%c has no description in sshFlagHelp", all[i])
+		}
+	}
+	if len(sshFlagHelp) != len(all) {
+		t.Errorf("sshFlagHelp has %d entries for %d flags; a description exists for a flag the parser rejects", len(sshFlagHelp), len(all))
+	}
+	// A flag cannot be both a boolean and a value flag.
+	for i := range sshBoolFlags {
+		if strings.IndexByte(sshValueFlags, sshBoolFlags[i]) >= 0 {
+			t.Errorf("-%c is in both sshBoolFlags and sshValueFlags", sshBoolFlags[i])
+		}
+	}
+}
+
+func TestCompleteSSHArgs(t *testing.T) {
+	// hasPrefixIn reports whether any completion starts with want.
+	hasPrefixIn := func(comps []string, want string) bool {
+		return slices.ContainsFunc(comps, func(c string) bool {
+			return strings.HasPrefix(c, want+"\t") || c == want
+		})
+	}
+
+	t.Run("short flags are offered", func(t *testing.T) {
+		got, directive := completeSSHArgs(nil, nil, "-")
+		for _, want := range []string{"-L", "-o", "-J", "-A", "-v"} {
+			if !hasPrefixIn(got, want) {
+				t.Errorf("completion for %q missing from %q", want, got)
+			}
+		}
+		if directive != cobra.ShellCompDirectiveNoFileComp {
+			t.Errorf("directive = %v, want NoFileComp", directive)
+		}
+	})
+
+	t.Run("long form adds nothing, since ssh flags are short", func(t *testing.T) {
+		// Cobra has already offered --user/--identity/--ssh-flag by now.
+		if got, _ := completeSSHArgs(nil, nil, "--"); len(got) != 0 {
+			t.Errorf("got %q, want no completions", got)
+		}
+	})
+
+	t.Run("a cluster in progress completes onto itself", func(t *testing.T) {
+		got, _ := completeSSHArgs(nil, nil, "-N")
+		if !hasPrefixIn(got, "-NT") {
+			t.Errorf("completion -NT missing from %q", got)
+		}
+		// A value flag ends a cluster, so there is nothing to append to it.
+		if got, _ := completeSSHArgs(nil, nil, "-o"); len(got) != 0 {
+			t.Errorf("got %q for a cluster ending in a value flag, want none", got)
+		}
+	})
+
+	t.Run("a value flag's argument is not a VM name", func(t *testing.T) {
+		got, directive := completeSSHArgs(nil, []string{"-o"}, "")
+		if len(got) != 0 {
+			t.Errorf("got %q, want no completions for an -o value", got)
+		}
+		if directive != cobra.ShellCompDirectiveNoFileComp {
+			t.Errorf("directive = %v, want NoFileComp", directive)
+		}
+		// Path-valued flags should still complete files.
+		if _, directive := completeSSHArgs(nil, []string{"-i"}, ""); directive != cobra.ShellCompDirectiveDefault {
+			t.Errorf("-i directive = %v, want Default (file completion)", directive)
+		}
+	})
+
+	t.Run("only -- follows a VM name", func(t *testing.T) {
+		got, _ := completeSSHArgs(nil, []string{"myvm"}, "")
+		if !hasPrefixIn(got, "--") {
+			t.Errorf("got %q, want the -- separator", got)
+		}
+	})
+
+	t.Run("the remote command is not completed from the host", func(t *testing.T) {
+		// Host paths and VM names are both wrong for a guest command.
+		got, directive := completeSSHArgs(nil, []string{"myvm", "--", "ls"}, "")
+		if len(got) != 0 {
+			t.Errorf("got %q, want no completions past --", got)
+		}
+		if directive != cobra.ShellCompDirectiveNoFileComp {
+			t.Errorf("directive = %v, want NoFileComp", directive)
+		}
+	})
 }
 
 func TestShellQuote(t *testing.T) {

@@ -23,7 +23,7 @@ var (
 var sshCmd = &cobra.Command{
 	Use:               "ssh [ssh-flags] <name> [-- <command>...]",
 	Short:             "Open an SSH session into a running VM",
-	ValidArgsFunction: completeVMNames,
+	ValidArgsFunction: completeSSHArgs,
 	Long: `Connects to a running VM via SSH.
 
 For headless VMs with a port-forward (--ssh-port), connects to 127.0.0.1 on
@@ -276,11 +276,28 @@ func shellQuote(s string) string {
 }
 
 func init() {
-	// Registered for --help and shell completion only: sshCmd sets
-	// DisableFlagParsing, so parseSSHArgv is what actually reads them.
+	// Registered so --help lists them; sshCmd sets DisableFlagParsing, so
+	// parseSSHArgv is what actually reads them.
 	sshCmd.Flags().StringVarP(&sshUser, "user", "u", "", "SSH username (default: cloud-init user; ssh's -l is also accepted)")
 	sshCmd.Flags().StringVarP(&sshIdentity, "identity", "i", "", "SSH identity file (private key; same as ssh's -i)")
 	sshCmd.Flags().StringArrayVar(&sshExtraFlags, "ssh-flag", nil, "Extra flags passed to ssh(1) (repeatable)")
+
+	// Shadow the root command's persistent flags with hidden local copies.
+	// Cobra completes a command's own and inherited flags before consulting
+	// ValidArgsFunction, and it skips hidden ones — without this, `vee ssh -`
+	// would offer --verbose/--config/--mirror, which do not work in this
+	// position: flag parsing is disabled here, so they reach ssh as
+	// remote-command words. They still work before the subcommand
+	// (`vee -v ssh myvm`), which is what the help text tells the user to do.
+	// The values are never read; only the flags' presence matters.
+	sshCmd.Flags().BoolP("verbose", "v", false, "")
+	sshCmd.Flags().String("config", "", "")
+	sshCmd.Flags().String("mirror", "", "")
+	for _, name := range []string{"verbose", "config", "mirror"} {
+		if err := sshCmd.Flags().MarkHidden(name); err != nil {
+			panic(err) // only fails for a flag that was not just registered
+		}
+	}
 }
 
 // scrubKnownHost removes all lines matching host (and [host]:port for non-22
