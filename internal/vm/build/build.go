@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"go.uber.org/zap"
@@ -415,8 +416,6 @@ func configFromTemplate(ctx context.Context, prov provider.Provider, opts Opts, 
 // Mirrors the cobra `Flags().Changed(...)` checks of the original cmd/create.go
 // so the CLI and TUI produce identical configs.
 func applyOverrides(cfg *vm.VMConfig, opts Opts, prov provider.Provider) {
-	_ = prov
-
 	if opts.Memory != "" {
 		cfg.Memory = opts.Memory
 	}
@@ -485,16 +484,22 @@ func applyOverrides(cfg *vm.VMConfig, opts Opts, prov provider.Provider) {
 		})
 	}
 	// vz (macOS) guests already consumed opts.Disk as the raw restore-disk
-	// size inside the template; prepending a generic qcow2 disk here would
-	// make every start fail (the vz backend is raw-only).
+	// size inside the template; adding a generic qcow2 disk here would make
+	// every start fail (the vz backend is raw-only).
 	if opts.Disk != "" && cfg.BackendName() != backend.VZ {
-		cfg.Disks = append([]vm.DiskConfig{{
+		// Append, never prepend: the template's cloud-image disk must keep
+		// slot 0 or the firmware boots the empty extra disk and halts. Path
+		// is absolute under the VM's storage directory — a bare relative
+		// name would create the qcow2 in the caller's working directory.
+		extra := vm.DiskConfig{
+			Path:      filepath.Join(prov.Config().StoragePath, opts.Name, "storage", fmt.Sprintf("disk-extra-%s.qcow2", opts.Disk)),
 			Size:      opts.Disk,
 			Format:    "qcow2",
 			Interface: "virtio",
 			Media:     "disk",
 			Cache:     "none",
-		}}, cfg.Disks...)
+		}
+		cfg.Disks = append(cfg.Disks, extra)
 	}
 	// When skipping install with a boot disk, the passthrough disk is the OS
 	// disk — strip any template-default qcow2 disks so they are not created.
