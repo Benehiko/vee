@@ -72,11 +72,12 @@ func torrentBaseRunCmds() []string {
 // torrentMountAndAppCmds returns the mount commands followed by the qBittorrent
 // setup, in the order they must run.
 //
-// Ordering is the whole point of this function and a real first boot proved
-// each constraint: mounting or chowning ahead of cloud-init's users module
-// fails with "chown: invalid group: vee:vee", and starting qBittorrent before
-// the shares are mounted quietly sends every download to the VM's own disk.
-// Callers must append the result, never prepend it.
+// Ordering is the whole point of this function: the shares must be mounted
+// before qBittorrent starts, or every download quietly lands on the VM's own
+// disk. Callers must append the result, never prepend it.
+//
+// Note that chowns here name the user only, never "vee:vee" — cloudinit
+// renders the account with no_user_group, so no vee group exists.
 func torrentMountAndAppCmds(mounts []ShareMount, nfsMounts []NFSMount) []string {
 	var cmds []string
 
@@ -94,7 +95,7 @@ func torrentMountAndAppCmds(mounts []ShareMount, nfsMounts []NFSMount) []string 
 			fmt.Sprintf("mkdir -p %s", guestPath),
 			appendFstab(fstabEntry(tag, guestPath, "virtiofs", "defaults,nofail"), guestPath),
 			fmt.Sprintf("mount -t virtiofs %s %s", tag, guestPath),
-			fmt.Sprintf("chown vee:vee %s", guestPath),
+			fmt.Sprintf("chown vee %s", guestPath),
 		)
 	}
 
@@ -121,12 +122,12 @@ func torrentMountAndAppCmds(mounts []ShareMount, nfsMounts []NFSMount) []string 
 
 	return append(cmds,
 		"mkdir -p /home/vee/.config/qBittorrent",
-		"chown -R vee:vee /home/vee/.config",
+		"chown -R vee /home/vee/.config",
 		// Incomplete torrents live on the VM's own disk, not on a share: the
 		// random small writes of an in-progress torrent are pathological over
 		// a network filesystem, and only the completed file is moved out.
 		fmt.Sprintf("mkdir -p %s", incompletePath),
-		fmt.Sprintf("chown -R vee:vee %s", incompletePath),
+		fmt.Sprintf("chown -R vee %s", incompletePath),
 		"systemctl enable --now qbittorrent-nox@vee",
 	)
 }
@@ -206,8 +207,11 @@ func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, ssh
 			Path:        "/home/vee/.config/qBittorrent/qBittorrent.conf",
 			Content:     qbittorrentConf(savePath, incompletePath),
 			Permissions: "0600",
-			Owner:       "vee:vee",
-			Defer:       true,
+			// Owner is the user only: cloudinit renders the vee account with
+			// no_user_group, so there is no "vee" group to chown to and
+			// "vee:vee" fails the deferred write, which fails cloud-final.
+			Owner: "vee",
+			Defer: true,
 		},
 	}
 	runCmds := torrentBaseRunCmds()
