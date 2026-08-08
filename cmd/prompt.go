@@ -117,6 +117,55 @@ func promptShareMounts(prefillHostDir string) ([]templates.ShareMount, error) {
 	return mounts, nil
 }
 
+// parseNFSMounts parses --nfs-mount specs of the form SERVER:EXPORT:GUESTPATH,
+// e.g. 192.168.178.76:/mnt/Data/Movies:/downloads/movies. An IPv6 server must
+// be bracketed ([fd00::1]:/export:/guest).
+func parseNFSMounts(specs []string) ([]templates.NFSMount, error) {
+	var out []templates.NFSMount
+	for _, spec := range specs {
+		spec = strings.TrimSpace(spec)
+		if spec == "" {
+			continue
+		}
+
+		var server, rest string
+		if strings.HasPrefix(spec, "[") {
+			end := strings.Index(spec, "]")
+			if end < 0 {
+				return nil, fmt.Errorf("nfs mount %q: unterminated IPv6 address", spec)
+			}
+			server = spec[1:end]
+			rest = strings.TrimPrefix(spec[end+1:], ":")
+		} else {
+			host, remainder, ok := strings.Cut(spec, ":")
+			if !ok {
+				return nil, fmt.Errorf("nfs mount %q: want SERVER:EXPORT:GUESTPATH", spec)
+			}
+			server, rest = host, remainder
+		}
+
+		export, guestPath, ok := strings.Cut(rest, ":")
+		if !ok {
+			return nil, fmt.Errorf("nfs mount %q: want SERVER:EXPORT:GUESTPATH", spec)
+		}
+		switch {
+		case server == "":
+			return nil, fmt.Errorf("nfs mount %q: empty server", spec)
+		case !strings.HasPrefix(export, "/"):
+			return nil, fmt.Errorf("nfs mount %q: export %q must be an absolute path", spec, export)
+		case !strings.HasPrefix(guestPath, "/"):
+			return nil, fmt.Errorf("nfs mount %q: guest path %q must be an absolute path", spec, guestPath)
+		}
+
+		out = append(out, templates.NFSMount{
+			Server:    server,
+			Export:    export,
+			GuestPath: guestPath,
+		})
+	}
+	return out, nil
+}
+
 // promptVPN interactively asks whether to configure a VPN for the torrent VM.
 // Returns (nordConf, wgConf, providerName, error). At most one of nordConf/wgConf is non-nil.
 func promptVPN() (*vpn.NordVPNConfig, *vpn.WireGuardConfig, string, error) {

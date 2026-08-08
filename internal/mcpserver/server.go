@@ -260,6 +260,13 @@ type shareMountIn struct {
 	GuestPath string `json:"guest_path" jsonschema:"absolute mount point inside the VM"`
 }
 
+type nfsMountIn struct {
+	Server    string `json:"server" jsonschema:"NFS server host or IP, e.g. 192.168.178.76"`
+	Export    string `json:"export" jsonschema:"absolute export path on the server, e.g. /mnt/Data/Movies"`
+	GuestPath string `json:"guest_path" jsonschema:"absolute mount point inside the VM"`
+	Options   string `json:"options,omitempty" jsonschema:"mount options; defaults to rw,hard,proto=tcp,timeo=600,retrans=2,_netdev"`
+}
+
 type vmCreateIn struct {
 	Name     string `json:"name" jsonschema:"name for the new VM"`
 	Template string `json:"template" jsonschema:"template to build from; see template_list"`
@@ -322,7 +329,8 @@ type vmCreateIn struct {
 	SkipFirstBoot bool   `json:"skip_first_boot,omitempty" jsonschema:"leave the restored macOS guest at Setup Assistant"`
 
 	// torrent template.
-	ShareMounts    []shareMountIn `json:"share_mounts,omitempty" jsonschema:"host directories shared into the torrent VM"`
+	ShareMounts    []shareMountIn `json:"share_mounts,omitempty" jsonschema:"host directories shared into the torrent VM via virtiofs"`
+	NFSMounts      []nfsMountIn   `json:"nfs_mounts,omitempty" jsonschema:"NFS exports mounted directly by the torrent guest; requires nic_mode=bridge"`
 	NordVPNToken   string         `json:"nordvpn_token,omitempty" jsonschema:"NordVPN access token for the VPN kill-switch"`
 	NordVPNCountry string         `json:"nordvpn_country,omitempty" jsonschema:"NordVPN country to connect to; empty for auto"`
 	WireGuardConf  string         `json:"wireguard_conf,omitempty" jsonschema:"path to a WireGuard config file for a generic VPN kill-switch"`
@@ -354,6 +362,23 @@ func (s *server) templateExtras(in vmCreateIn, opts *build.Opts) (runnerPubKey s
 		extras := &build.TorrentExtras{}
 		for _, m := range in.ShareMounts {
 			extras.Mounts = append(extras.Mounts, templates.ShareMount{HostDir: m.HostDir, GuestPath: m.GuestPath})
+		}
+		for _, m := range in.NFSMounts {
+			if m.Server == "" || !strings.HasPrefix(m.Export, "/") || !strings.HasPrefix(m.GuestPath, "/") {
+				return "", fmt.Errorf("nfs mount %q:%q -> %q: server is required and export/guest_path must be absolute",
+					m.Server, m.Export, m.GuestPath)
+			}
+			extras.NFSMounts = append(extras.NFSMounts, templates.NFSMount{
+				Server:    m.Server,
+				Export:    m.Export,
+				GuestPath: m.GuestPath,
+				Options:   m.Options,
+			})
+		}
+		// The guest reaches the NFS server over the LAN, which user-mode NAT
+		// cannot route.
+		if len(extras.NFSMounts) > 0 && opts.NICMode == "user" {
+			return "", fmt.Errorf("nfs_mounts requires nic_mode=bridge (user-mode NAT cannot reach an NFS server on the LAN)")
 		}
 		switch {
 		case in.NordVPNToken != "":

@@ -20,14 +20,67 @@ type ShareMount struct {
 	GuestPath string // absolute path inside the VM (e.g. /downloads)
 }
 
+// NFSMount maps an NFS export to a guest mount point. Unlike ShareMount the
+// guest mounts the export directly over the network, so the host does not need
+// the export mounted itself.
+type NFSMount struct {
+	Server    string // NFS server host or IP, e.g. 192.168.178.76
+	Export    string // export path on the server, e.g. /mnt/Data/Movies
+	GuestPath string // absolute path inside the VM, e.g. /downloads/movies
+	Options   string // mount options; defaults to nfsMountOptions when empty
+}
+
+// incompletePath is where qBittorrent writes in-progress torrents. It lives on
+// the VM's own disk rather than under the save path so that the random small
+// writes of an in-progress torrent never cross the network; the completed file
+// is moved to the save path in one sequential pass.
+const incompletePath = "/var/lib/qbittorrent/incomplete"
+
+// nfsMountOptions are the default mount options for guest NFS mounts.
+//
+// hard (not soft) is deliberate: qBittorrent writes to these paths for the
+// lifetime of a torrent, and a soft mount surfaces a NAS hiccup as EIO
+// mid-write, which qBittorrent reports as a errored torrent rather than
+// retrying. hard blocks until the server comes back instead.
+const nfsMountOptions = "rw,hard,proto=tcp,timeo=600,retrans=2,_netdev"
+
+// nfsServers returns the unique server addresses across mounts, preserving
+// first-seen order so generated runcmds are deterministic.
+func nfsServers(mounts []NFSMount) []string {
+	seen := make(map[string]bool, len(mounts))
+	var out []string
+	for _, m := range mounts {
+		if m.Server == "" || seen[m.Server] {
+			continue
+		}
+		seen[m.Server] = true
+		out = append(out, m.Server)
+	}
+	return out
+}
+
+// fstabEntry renders a single /etc/fstab line.
+func fstabEntry(source, target, fstype, options string) string {
+	return fmt.Sprintf("%s %s %s %s 0 0", source, target, fstype, options)
+}
+
+// appendFstab returns a runcmd that appends line to /etc/fstab unless an entry
+// for the same target already exists. Cloud-init runcmds only fire on first
+// boot, so the mounts must be recorded in fstab to survive a reboot.
+func appendFstab(line, target string) string {
+	return fmt.Sprintf("grep -qs ' %s ' /etc/fstab || echo %q >> /etc/fstab", target, line)
+}
+
 // NewTorrentConfig returns a VMConfig for a lightweight torrent VM with SPICE display.
 // spicePort defaults to 5934 if 0. sshKeys are injected into the VM's authorized_keys.
 // mounts is an optional list of host→guest directory mappings shared via virtiofs.
+// nfsMounts is an optional list of NFS exports mounted directly by the guest;
+// these require a NIC mode that can reach the server (bridge, not user-mode NAT).
 // nordConf, if non-nil, installs the nordvpn snap and connects via NordLynx on first boot.
 // wgConf, if non-nil, injects a generic WireGuard config with a ufw kill-switch.
 // vpnProvider records the provider name (e.g. "nordvpn", "generic") for display/monitoring.
 // Only one of nordConf or wgConf should be set; nordConf takes precedence.
-func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, sshKeys []string, mounts []ShareMount, nordConf *vpn.NordVPNConfig, wgConf *vpn.WireGuardConfig, vpnProvider string, spicePort int) (*vm.VMConfig, error) {
+func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, sshKeys []string, mounts []ShareMount, nfsMounts []NFSMount, nordConf *vpn.NordVPNConfig, wgConf *vpn.WireGuardConfig, vpnProvider string, spicePort int) (*vm.VMConfig, error) {
 	conf := p.Config()
 	// port 0 → manager assigns a random free port at create time
 	_ = spicePort
@@ -44,15 +97,20 @@ func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, ssh
 	vmDir := filepath.Join(conf.StoragePath, name)
 
 	// Pick the first mount's guest path as the default save path, or /downloads.
+	// virtiofs mounts take precedence over NFS ones purely for backwards
+	// compatibility with configs created before NFS was supported.
 	savePath := "/downloads"
-	if len(mounts) > 0 && mounts[0].GuestPath != "" {
+	switch {
+	case len(mounts) > 0 && mounts[0].GuestPath != "":
 		savePath = mounts[0].GuestPath
+	case len(nfsMounts) > 0 && nfsMounts[0].GuestPath != "":
+		savePath = nfsMounts[0].GuestPath
 	}
 
 	writeFiles := []vm.CloudInitWriteFile{
 		{
 			Path:        "/home/vee/.config/qBittorrent/qBittorrent.conf",
-			Content:     qbittorrentConf(savePath),
+			Content:     qbittorrentConf(savePath, incompletePath),
 			Permissions: "0600",
 			Owner:       "vee:vee",
 			Defer:       true,
@@ -64,6 +122,11 @@ func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, ssh
 		"ufw --force enable",
 		"mkdir -p /home/vee/.config/qBittorrent",
 		"chown -R vee:vee /home/vee/.config",
+		// Incomplete torrents live on the VM's own disk, not on a share: the
+		// random small writes of an in-progress torrent are pathological over
+		// a network filesystem, and only the completed file is moved out.
+		fmt.Sprintf("mkdir -p %s", incompletePath),
+		fmt.Sprintf("chown -R vee:vee %s", incompletePath),
 		"systemctl enable --now qbittorrent-nox@vee",
 	}
 
@@ -82,8 +145,13 @@ func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, ssh
 			"nordvpn set technology nordlynx",
 			"nordvpn set killswitch on",
 			"nordvpn set autoconnect on",
-			connectCmd,
 		}
+		// NordVPN's kill-switch drops non-tunnel traffic too, so each NFS
+		// server has to be whitelisted before the connection comes up.
+		for _, server := range nfsServers(nfsMounts) {
+			nordCmds = append(nordCmds, fmt.Sprintf("nordvpn whitelist add subnet %s/32", server))
+		}
+		nordCmds = append(nordCmds, connectCmd)
 		runCmds = append(nordCmds, runCmds...)
 
 	case wgConf != nil:
@@ -98,8 +166,14 @@ func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, ssh
 			"ufw default deny forward",
 			"ufw allow out on wg0",
 			"ufw allow out on lo",
-			"systemctl enable --now wg-quick@wg0",
 		}
+		// NFS servers are reached over the LAN, not the tunnel, so the
+		// default-deny outbound policy above would otherwise block every guest
+		// NFS mount. Punch a hole per server rather than for the whole subnet.
+		for _, server := range nfsServers(nfsMounts) {
+			wgCmds = append(wgCmds, fmt.Sprintf("ufw allow out to %s", server))
+		}
+		wgCmds = append(wgCmds, "systemctl enable --now wg-quick@wg0")
 		runCmds = append(wgCmds, runCmds...)
 		packages = append(packages, "wireguard", "resolvconf")
 	}
@@ -118,11 +192,36 @@ func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, ssh
 		if guestPath == "" {
 			guestPath = "/share" + fmt.Sprintf("%d", i)
 		}
+		// The fstab entry is what makes the mount survive a reboot: runcmds
+		// only ever run on first boot, so without it the guest path silently
+		// reverts to an empty local directory and qBittorrent writes into the
+		// VM's own disk instead of the share.
 		runCmds = append([]string{
 			fmt.Sprintf("mkdir -p %s", guestPath),
+			appendFstab(fstabEntry(tag, guestPath, "virtiofs", "defaults,nofail"), guestPath),
 			fmt.Sprintf("mount -t virtiofs %s %s", tag, guestPath),
 			fmt.Sprintf("chown vee:vee %s", guestPath),
 		}, runCmds...)
+	}
+
+	for _, m := range nfsMounts {
+		guestPath := m.GuestPath
+		if guestPath == "" {
+			continue
+		}
+		opts := m.Options
+		if opts == "" {
+			opts = nfsMountOptions
+		}
+		source := fmt.Sprintf("%s:%s", m.Server, m.Export)
+		runCmds = append([]string{
+			fmt.Sprintf("mkdir -p %s", guestPath),
+			appendFstab(fstabEntry(source, guestPath, "nfs4", opts), guestPath),
+			fmt.Sprintf("mount -t nfs4 -o %s %s %s", opts, source, guestPath),
+		}, runCmds...)
+	}
+	if len(nfsMounts) > 0 {
+		packages = append(packages, "nfs-common")
 	}
 
 	return &vm.VMConfig{

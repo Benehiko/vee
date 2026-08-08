@@ -9,15 +9,20 @@ import "strings"
 //   - Seed ratio 3.0 before stopping
 //   - 20 active downloads + 20 active uploads
 //   - Save path set to savePath (e.g. /downloads)
-func qbittorrentConf(savePath string) string {
+//   - In-progress torrents written to tempPath, which callers point at local
+//     disk so that random small writes never cross a network filesystem
+func qbittorrentConf(savePath, tempPath string) string {
 	if savePath == "" {
 		savePath = "/downloads"
+	}
+	if tempPath == "" {
+		tempPath = savePath + "/incomplete"
 	}
 
 	lines := []string{
 		"[BitTorrent]",
 		"Session\\DefaultSavePath=" + savePath,
-		"Session\\TempPath=" + savePath + "/incomplete",
+		"Session\\TempPath=" + tempPath,
 		"Session\\TempPathEnabled=true",
 
 		// Encryption: forced (0=prefer, 1=force enabled, 2=force disabled)

@@ -138,6 +138,7 @@ type MacOSExtras struct {
 // which is normally collected from interactive prompts.
 type TorrentExtras struct {
 	Mounts      []templates.ShareMount
+	NFSMounts   []templates.NFSMount
 	NordConf    *vpn.NordVPNConfig
 	WireGuard   *vpn.WireGuardConfig
 	VPNProvider string
@@ -325,7 +326,7 @@ func configFromTemplate(ctx context.Context, prov provider.Provider, opts Opts, 
 			spicePort = *opts.SPICEPort
 		}
 		return templates.NewTorrentConfig(ctx, prov, opts.Name, sshKeys,
-			opts.TorrentExtras.Mounts, opts.TorrentExtras.NordConf,
+			opts.TorrentExtras.Mounts, opts.TorrentExtras.NFSMounts, opts.TorrentExtras.NordConf,
 			opts.TorrentExtras.WireGuard, opts.TorrentExtras.VPNProvider, spicePort)
 	case "devbox":
 		return templates.NewDevboxConfig(ctx, prov, opts.Name, sshKeys, opts.Distro, opts.DistroVersion)
