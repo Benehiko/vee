@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Benehiko/vee/internal/backend"
+	"github.com/Benehiko/vee/internal/platform"
 	"github.com/Benehiko/vee/internal/vm"
 )
 
@@ -106,8 +107,16 @@ Examples:
 		// win — nothing listens on 127.0.0.1.
 		vzBackend := state.BackendName() == backend.VZ
 
+		// A recorded SSHPort is only meaningful for user-mode NAT — on a
+		// bridge the hostfwd forwards nothing. The manager no longer records
+		// one for bridge VMs, but states written by older versions still
+		// carry the stale port, so gate on the effective NIC mode too. A
+		// "bridge" config on a host without bridge support falls back to
+		// user-mode NAT at start, where the port-forward is real.
+		bridged := cfg.NIC.Mode == "bridge" && platform.SupportsBridgeNetworking()
+
 		switch {
-		case !vzBackend && state.SSHPort > 0:
+		case !vzBackend && !bridged && state.SSHPort > 0:
 			// Headless user-mode port-forward.
 			host = "127.0.0.1"
 			port = state.SSHPort

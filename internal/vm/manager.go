@@ -1475,18 +1475,26 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 	if cfg.NIC.MAC == "" {
 		cfg.NIC.MAC = qemu.DeterministicMAC(cfg.Name)
 	}
-	nicHostFwds := cfg.NIC.HostFwds
-	if cfg.SSHPort > 0 {
-		port := availablePort(cfg.SSHPort, 2200, 2299)
-		cfg.SSHPort = port
-		nicHostFwds = append(nicHostFwds, fmt.Sprintf("tcp:127.0.0.1:%d-:22", port))
-	}
 	nicMode := cfg.NIC.Mode
 	if nicMode == "bridge" && !platform.SupportsBridgeNetworking() {
 		m.provider.Logger().Warn("bridge networking is unsupported on this host (Linux only) — falling back to user-mode NAT",
 			zap.String("vm", cfg.Name),
 			zap.String("host_os", platform.HostOS()))
 		nicMode = "user"
+	}
+	nicHostFwds := cfg.NIC.HostFwds
+	if cfg.SSHPort > 0 {
+		if nicMode == "bridge" {
+			// A hostfwd only exists through user-mode NAT; on a bridge it
+			// silently forwards nothing. Zero the port so state never records
+			// a 127.0.0.1 port that nothing listens on — vee ssh would dial
+			// it before trying the guest's LAN address (#110).
+			cfg.SSHPort = 0
+		} else {
+			port := availablePort(cfg.SSHPort, 2200, 2299)
+			cfg.SSHPort = port
+			nicHostFwds = append(nicHostFwds, fmt.Sprintf("tcp:127.0.0.1:%d-:22", port))
+		}
 	}
 	nic := qemu.NewNIC(qemu.NICMode(nicMode), cfg.NIC.Bridge, cfg.NIC.MAC, nicHostFwds...)
 	if nicMode == "bridge" {
