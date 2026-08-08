@@ -72,11 +72,12 @@ func torrentBaseRunCmds() []string {
 // torrentMountAndAppCmds returns the mount commands followed by the qBittorrent
 // setup, in the order they must run.
 //
-// Ordering is the whole point of this function and a real first boot proved
-// each constraint: mounting or chowning ahead of cloud-init's users module
-// fails with "chown: invalid group: vee:vee", and starting qBittorrent before
-// the shares are mounted quietly sends every download to the VM's own disk.
-// Callers must append the result, never prepend it.
+// Ordering is the whole point of this function: the shares must be mounted
+// before qBittorrent starts, or every download quietly lands on the VM's own
+// disk. Callers must append the result, never prepend it.
+//
+// Note that chowns here name the user only, never "vee:vee" — cloudinit
+// renders the account with no_user_group, so no vee group exists.
 func torrentMountAndAppCmds(mounts []ShareMount, nfsMounts []NFSMount) []string {
 	var cmds []string
 
@@ -94,7 +95,7 @@ func torrentMountAndAppCmds(mounts []ShareMount, nfsMounts []NFSMount) []string 
 			fmt.Sprintf("mkdir -p %s", guestPath),
 			appendFstab(fstabEntry(tag, guestPath, "virtiofs", "defaults,nofail"), guestPath),
 			fmt.Sprintf("mount -t virtiofs %s %s", tag, guestPath),
-			fmt.Sprintf("chown vee:vee %s", guestPath),
+			fmt.Sprintf("chown vee %s", guestPath),
 		)
 	}
 
@@ -121,12 +122,12 @@ func torrentMountAndAppCmds(mounts []ShareMount, nfsMounts []NFSMount) []string 
 
 	return append(cmds,
 		"mkdir -p /home/vee/.config/qBittorrent",
-		"chown -R vee:vee /home/vee/.config",
+		"chown -R vee /home/vee/.config",
 		// Incomplete torrents live on the VM's own disk, not on a share: the
 		// random small writes of an in-progress torrent are pathological over
 		// a network filesystem, and only the completed file is moved out.
 		fmt.Sprintf("mkdir -p %s", incompletePath),
-		fmt.Sprintf("chown -R vee:vee %s", incompletePath),
+		fmt.Sprintf("chown -R vee %s", incompletePath),
 		"systemctl enable --now qbittorrent-nox@vee",
 	)
 }
@@ -137,6 +138,54 @@ func virtiofsTagFor(m ShareMount, i int) string {
 		return fmt.Sprintf("share%d", i)
 	}
 	return strings.NewReplacer("/", "-", " ", "_").Replace(strings.TrimPrefix(m.GuestPath, "/"))
+}
+
+// nordVPNCmds returns the first-boot commands that install and connect the
+// NordVPN snap. connectCmd is the final "nordvpn connect [country]".
+//
+// This sequence is order-sensitive and every step was verified by hand on a
+// live guest.
+//
+// The snap ships its interfaces unconnected, and until they are connected
+// every command fails with "Permission needed ... To start using the app, log
+// in to your Nord Account by entering nordvpn login" — a message that reads
+// like an authentication problem but is really about the missing permissions.
+//
+// "set analytics off" then has to precede the login. Without it the login
+// prompts "Do you allow us to collect and use limited app performance data?
+// (y/n)" on stdin, which cloud-init cannot answer: the read hits EOF
+// immediately, nordvpn re-prompts, and the runcmd spins forever, writing
+// hundreds of megabytes to the serial log and stalling cloud-init before it
+// ever reaches the mounts. Disabling analytics records the consent up front
+// and the login returns cleanly. It does not require an authenticated
+// session, so running it before the login is not circular.
+func nordVPNCmds(token, connectCmd string, nfsMounts []NFSMount) []string {
+	cmds := []string{
+		"snap install nordvpn",
+		"snap connect nordvpn:network-control",
+		"snap connect nordvpn:firewall-control",
+		"snap connect nordvpn:network-observe",
+		"snap connect nordvpn:system-observe",
+		"snap connect nordvpn:hardware-observe",
+		"snap connect nordvpn:login-session-observe",
+		"snap connect nordvpn:network-manager",
+		// The daemon needs a moment after the interfaces land before it will
+		// accept a login.
+		"for i in 1 2 3 4 5 6 7 8 9 10; do nordvpn status >/dev/null 2>&1 && break || sleep 3; done",
+		"nordvpn set analytics off",
+		fmt.Sprintf("nordvpn login --token %s", token),
+		"nordvpn set technology nordlynx",
+		"nordvpn set killswitch on",
+		"nordvpn set autoconnect on",
+	}
+	// NordVPN's kill-switch is enforced inside the daemon rather than through
+	// ufw, so the ufw holes elsewhere do not cover it and each NFS server must
+	// also be whitelisted here — before the connection comes up, or the mounts
+	// race the kill-switch.
+	for _, server := range nfsServers(nfsMounts) {
+		cmds = append(cmds, fmt.Sprintf("nordvpn whitelist add subnet %s/32", server))
+	}
+	return append(cmds, connectCmd)
 }
 
 // nfsBypassRules returns the ufw rules that let the guest reach each NFS
@@ -206,8 +255,11 @@ func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, ssh
 			Path:        "/home/vee/.config/qBittorrent/qBittorrent.conf",
 			Content:     qbittorrentConf(savePath, incompletePath),
 			Permissions: "0600",
-			Owner:       "vee:vee",
-			Defer:       true,
+			// Owner is the user only: cloudinit renders the vee account with
+			// no_user_group, so there is no "vee" group to chown to and
+			// "vee:vee" fails the deferred write, which fails cloud-final.
+			Owner: "vee",
+			Defer: true,
 		},
 	}
 	runCmds := torrentBaseRunCmds()
@@ -221,37 +273,7 @@ func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, ssh
 		if nordConf.Country != "" {
 			connectCmd = fmt.Sprintf("nordvpn connect %q", nordConf.Country)
 		}
-		// The snap ships its interfaces unconnected, and until they are
-		// connected every nordvpn command no-ops with "To start using the app,
-		// log in ... by entering nordvpn login" — including login itself, so
-		// the whitelist and connect below silently do nothing and the guest
-		// ends up with no VPN and no route to the NAS.
-		nordCmds := []string{
-			"snap install nordvpn",
-			"snap connect nordvpn:network-control",
-			"snap connect nordvpn:firewall-control",
-			"snap connect nordvpn:network-observe",
-			"snap connect nordvpn:system-observe",
-			"snap connect nordvpn:hardware-observe",
-			"snap connect nordvpn:login-session-observe",
-			"snap connect nordvpn:network-manager",
-			// The daemon needs a moment after the interfaces land before it
-			// will accept a login.
-			"for i in 1 2 3 4 5 6 7 8 9 10; do nordvpn status >/dev/null 2>&1 && break || sleep 3; done",
-			fmt.Sprintf("nordvpn login --token %s", nordConf.Token),
-			"nordvpn set technology nordlynx",
-			"nordvpn set killswitch on",
-			"nordvpn set autoconnect on",
-		}
-		// NordVPN's kill-switch is enforced inside the daemon rather than
-		// through ufw, so the ufw holes below do not cover it and each NFS
-		// server must also be whitelisted here — before the connection comes
-		// up, or the mounts race the kill-switch.
-		for _, server := range nfsServers(nfsMounts) {
-			nordCmds = append(nordCmds, fmt.Sprintf("nordvpn whitelist add subnet %s/32", server))
-		}
-		nordCmds = append(nordCmds, connectCmd)
-		runCmds = append(nordCmds, runCmds...)
+		runCmds = append(nordVPNCmds(nordConf.Token, connectCmd, nfsMounts), runCmds...)
 
 	case wgConf != nil:
 		writeFiles = append(writeFiles, vm.CloudInitWriteFile{

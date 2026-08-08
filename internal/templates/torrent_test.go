@@ -140,10 +140,9 @@ func TestWireGuardBypassOrdering(t *testing.T) {
 	}
 }
 
-// TestTorrentRuncmdOrdering pins the ordering constraints that a real first
-// boot exposed: mounting and chowning ahead of cloud-init's users module fails
-// with "chown: invalid group: vee:vee", and starting qBittorrent before the
-// shares are mounted sends downloads to the VM's own disk.
+// TestTorrentRuncmdOrdering pins the ordering constraint a real first boot
+// exposed: starting qBittorrent before the shares are mounted sends downloads
+// to the VM's own disk instead of the NAS.
 func TestTorrentRuncmdOrdering(t *testing.T) {
 	cmds := append(torrentBaseRunCmds(), torrentMountAndAppCmds(
 		nil,
@@ -160,7 +159,7 @@ func TestTorrentRuncmdOrdering(t *testing.T) {
 	}
 
 	mount := idx("mount -t nfs4")
-	chownIncomplete := idx("chown -R vee:vee " + incompletePath)
+	chownIncomplete := idx("chown -R vee " + incompletePath)
 	start := idx("systemctl enable --now qbittorrent-nox@vee")
 	ufwEnable := idx("ufw --force enable")
 
@@ -180,6 +179,78 @@ func TestTorrentRuncmdOrdering(t *testing.T) {
 		if strings.HasPrefix(c, "chown") && i < ufwEnable {
 			t.Errorf("chown at index %d precedes the base runcmds: %q", i, c)
 		}
+	}
+}
+
+// TestChownNeverNamesAGroup pins the fix for a real boot failure. The vee
+// account is rendered with no_user_group (see internal/cloudinit), so there is
+// no "vee" group: any "chown vee:vee" fails with "chown: invalid group", and
+// the same owner on a deferred write_files entry fails cloud-final.service.
+func TestChownNeverNamesAGroup(t *testing.T) {
+	cmds := torrentMountAndAppCmds(
+		[]ShareMount{{HostDir: "/srv/media", GuestPath: "/downloads/virtiofs"}},
+		[]NFSMount{{Server: "192.168.178.76", Export: "/mnt/Data/Movies", GuestPath: "/downloads/movies"}},
+	)
+
+	for _, c := range cmds {
+		if strings.Contains(c, "vee:vee") {
+			t.Errorf("runcmd names a nonexistent vee group: %q", c)
+		}
+	}
+
+	// And the chowns must still be there — dropping them entirely would leave
+	// the incomplete dir owned by root and unwritable by qbittorrent-nox.
+	var chowns int
+	for _, c := range cmds {
+		if strings.HasPrefix(c, "chown ") || strings.HasPrefix(c, "chown -R ") {
+			chowns++
+		}
+	}
+	if chowns == 0 {
+		t.Error("no chown commands generated; the incomplete dir would stay root-owned")
+	}
+}
+
+// TestNordVPNCmdOrdering pins a sequence that hangs cloud-init when it is
+// wrong. Verified by hand on a live guest: the snap interfaces must be
+// connected before any nordvpn command works, and "set analytics off" must
+// precede the login or the login blocks forever on an interactive consent
+// prompt that cloud-init cannot answer.
+func TestNordVPNCmdOrdering(t *testing.T) {
+	cmds := nordVPNCmds("tok", `nordvpn connect "sweden"`,
+		[]NFSMount{{Server: "192.168.178.76", Export: "/mnt/Data/Movies", GuestPath: "/downloads/movies"}})
+
+	idx := func(substr string) int {
+		for i, c := range cmds {
+			if strings.Contains(c, substr) {
+				return i
+			}
+		}
+		t.Fatalf("no command containing %q in:\n%s", substr, strings.Join(cmds, "\n"))
+		return -1
+	}
+
+	install := idx("snap install nordvpn")
+	connectIface := idx("snap connect nordvpn:network-control")
+	analytics := idx("set analytics off")
+	login := idx("nordvpn login --token")
+	whitelist := idx("whitelist add subnet 192.168.178.76/32")
+	connect := idx("nordvpn connect")
+
+	if connectIface < install {
+		t.Error("interfaces must be connected after the snap is installed")
+	}
+	if analytics < connectIface {
+		t.Error("set analytics needs the snap interfaces connected first")
+	}
+	if login < analytics {
+		t.Error("login before 'set analytics off' blocks forever on the consent prompt")
+	}
+	if whitelist > connect {
+		t.Error("the NFS whitelist must be registered before connecting, or mounts race the kill-switch")
+	}
+	if connect != len(cmds)-1 {
+		t.Errorf("connect must be last, got index %d of %d", connect, len(cmds))
 	}
 }
 
