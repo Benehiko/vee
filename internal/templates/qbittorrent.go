@@ -80,6 +80,11 @@ func qbittorrentConf(savePath, tempPath string) string {
 
 		// Disable CSRF protection for LAN access
 		"WebUI\\CSRFProtection=false",
+
+		// vee tunnel proxies the WebUI through a random local port, so the
+		// browser's Host header never matches port 8080 — validation would
+		// 401 every tunnelled request.
+		"WebUI\\HostHeaderValidation=false",
 	}
 
 	return strings.Join(lines, "\n") + "\n"
