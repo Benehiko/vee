@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -49,9 +50,11 @@ func fakeGuest(t *testing.T) (host string, port int) {
 func TestSSHLoopbackProxyForwards(t *testing.T) {
 	guestHost, guestPort := fakeGuest(t)
 
-	resolves := 0
+	// The resolver runs on the proxy's per-connection goroutines, so the
+	// count must be atomic for -race.
+	var resolves atomic.Int32
 	resolve := func(context.Context) (string, error) {
-		resolves++
+		resolves.Add(1)
 		return guestHost, nil
 	}
 
@@ -85,8 +88,8 @@ func TestSSHLoopbackProxyForwards(t *testing.T) {
 
 	// Per-connection resolution is what keeps the proxy working across DHCP
 	// renewals; a cached resolve would break silently.
-	if resolves != 2 {
-		t.Errorf("resolver called %d times, want once per connection (2)", resolves)
+	if got := resolves.Load(); got != 2 {
+		t.Errorf("resolver called %d times, want once per connection (2)", got)
 	}
 }
 
