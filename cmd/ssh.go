@@ -2,16 +2,18 @@ package cmd
 
 import (
 	"bufio"
+	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/Benehiko/vee/internal/backend"
-	"github.com/Benehiko/vee/internal/platform"
 	"github.com/Benehiko/vee/internal/vm"
 )
 
@@ -21,15 +23,29 @@ var (
 	sshExtraFlags []string
 )
 
+// loopbackSSHAlive reports whether anything accepts on the recorded loopback
+// port. 500ms is generous for a loopback dial: the listener is either there
+// (QEMU hostfwd or the daemon's bridge proxy) or refused instantly.
+func loopbackSSHAlive(ctx context.Context, port int) bool {
+	d := net.Dialer{Timeout: 500 * time.Millisecond}
+	conn, err := d.DialContext(ctx, "tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
 var sshCmd = &cobra.Command{
 	Use:               "ssh [ssh-flags] <name> [-- <command>...]",
 	Short:             "Open an SSH session into a running VM",
 	ValidArgsFunction: completeSSHArgs,
 	Long: `Connects to a running VM via SSH.
 
-For headless VMs with a port-forward (--ssh-port), connects to 127.0.0.1 on
-that port. For bridge-mode and vz (macOS guest) VMs, resolves the guest IP
-by MAC address from the host's DHCP lease and ARP/neighbour tables.
+Connects to 127.0.0.1 when a live loopback endpoint exists for the VM — the
+user-mode NAT port-forward (--ssh-port), or the vee daemon's loopback proxy
+for bridge-mode VMs. Otherwise (and for vz macOS guests) resolves the guest
+IP by MAC address from the host's DHCP lease and ARP/neighbour tables.
 
 The username defaults to the cloud-init user configured at creation time.
 Override with --user (or ssh's -l).
@@ -107,17 +123,14 @@ Examples:
 		// win — nothing listens on 127.0.0.1.
 		vzBackend := state.BackendName() == backend.VZ
 
-		// A recorded SSHPort is only meaningful for user-mode NAT — on a
-		// bridge the hostfwd forwards nothing. The manager no longer records
-		// one for bridge VMs, but states written by older versions still
-		// carry the stale port, so gate on the effective NIC mode too. A
-		// "bridge" config on a host without bridge support falls back to
-		// user-mode NAT at start, where the port-forward is real.
-		bridged := cfg.NIC.Mode == "bridge" && platform.SupportsBridgeNetworking()
-
 		switch {
-		case !vzBackend && !bridged && state.SSHPort > 0:
-			// Headless user-mode port-forward.
+		case !vzBackend && state.SSHPort > 0 && loopbackSSHAlive(cmd.Context(), state.SSHPort):
+			// Something really listens on the recorded loopback port —
+			// QEMU's user-mode hostfwd, or the daemon's loopback proxy for
+			// bridge VMs. Probing beats trusting: states written by older
+			// versions can carry a port nothing serves (#110), and the
+			// daemon proxy disappears when the daemon stops; either way the
+			// dead port is skipped and the guest's LAN address is used.
 			host = "127.0.0.1"
 			port = state.SSHPort
 

@@ -45,6 +45,12 @@ type Manager struct {
 	// hold entries; short-lived CLI Managers leave it empty and fall back to
 	// dialing QMP sockets directly.
 	qmp *qmpRegistry
+
+	// sshProxies holds the daemon's loopback SSH proxies for running
+	// bridge-mode VMs, keyed by VM name. Like qmp, only the daemon's
+	// long-lived Manager populates it.
+	sshProxyMu sync.Mutex
+	sshProxies map[string]*sshLoopbackProxy
 }
 
 func NewManager(p provider.Provider) *Manager {
@@ -429,7 +435,7 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 		if cfg.SPICE != nil {
 			fgState.SPICEPort = cfg.SPICE.Port
 		}
-		if cfg.SSHPort > 0 {
+		if cfg.SSHPort > 0 && !effectiveBridge(cfg) {
 			fgState.SSHPort = cfg.SSHPort
 		}
 		if err := m.saveState(name, fgState); err != nil {
@@ -478,7 +484,7 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 	if cfg.SPICE != nil {
 		newState.SPICEPort = cfg.SPICE.Port
 	}
-	if cfg.SSHPort > 0 {
+	if cfg.SSHPort > 0 && !effectiveBridge(cfg) {
 		newState.SSHPort = cfg.SSHPort
 	}
 	if err := m.saveState(name, newState); err != nil {
@@ -1410,6 +1416,14 @@ func (m *Manager) List() ([]*ListEntry, error) {
 }
 
 // buildMachine constructs a BaseMachine from a VMConfig, starting virtiofsd if needed.
+// effectiveBridge reports whether the VM actually attaches to a bridge when
+// started: the config asks for one and the host supports it. A "bridge"
+// config on a host without bridge support falls back to user-mode NAT, where
+// hostfwds are real.
+func effectiveBridge(cfg *VMConfig) bool {
+	return cfg.NIC.Mode == "bridge" && platform.SupportsBridgeNetworking()
+}
+
 func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMachine, []int, error) {
 	machine, err := qemu.NewEmptyMachine(m.provider)
 	if err != nil {
@@ -1476,25 +1490,22 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 		cfg.NIC.MAC = qemu.DeterministicMAC(cfg.Name)
 	}
 	nicMode := cfg.NIC.Mode
-	if nicMode == "bridge" && !platform.SupportsBridgeNetworking() {
+	if nicMode == "bridge" && !effectiveBridge(cfg) {
 		m.provider.Logger().Warn("bridge networking is unsupported on this host (Linux only) — falling back to user-mode NAT",
 			zap.String("vm", cfg.Name),
 			zap.String("host_os", platform.HostOS()))
 		nicMode = "user"
 	}
 	nicHostFwds := cfg.NIC.HostFwds
-	if cfg.SSHPort > 0 {
-		if nicMode == "bridge" {
-			// A hostfwd only exists through user-mode NAT; on a bridge it
-			// silently forwards nothing. Zero the port so state never records
-			// a 127.0.0.1 port that nothing listens on — vee ssh would dial
-			// it before trying the guest's LAN address (#110).
-			cfg.SSHPort = 0
-		} else {
-			port := availablePort(cfg.SSHPort, 2200, 2299)
-			cfg.SSHPort = port
-			nicHostFwds = append(nicHostFwds, fmt.Sprintf("tcp:127.0.0.1:%d-:22", port))
-		}
+	// A hostfwd only exists through user-mode NAT; on a bridge it would
+	// silently forward nothing (#110). Bridge VMs keep cfg.SSHPort as the
+	// *desired* loopback port — the daemon's SSH loopback proxy serves it —
+	// but no hostfwd is added and Start does not record it in state; the
+	// proxy records the port it actually bound.
+	if cfg.SSHPort > 0 && nicMode != "bridge" {
+		port := availablePort(cfg.SSHPort, 2200, 2299)
+		cfg.SSHPort = port
+		nicHostFwds = append(nicHostFwds, fmt.Sprintf("tcp:127.0.0.1:%d-:22", port))
 	}
 	nic := qemu.NewNIC(qemu.NICMode(nicMode), cfg.NIC.Bridge, cfg.NIC.MAC, nicHostFwds...)
 	if nicMode == "bridge" {
