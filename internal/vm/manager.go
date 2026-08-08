@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha1" //nolint:gosec // sha1 used only to derive a stable non-cryptographic vsock CID from the VM name; changing it would break existing VMs' CIDs
 	"database/sql"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -804,8 +805,8 @@ func (m *Manager) waitIP(ctx context.Context, cfg *VMConfig, state *VMState, tim
 }
 
 // ResolveIPFromMAC scans the kernel neighbour table for the IP matching a MAC.
-// If the MAC is not found on the first pass, it sends a broadcast ping on each
-// local subnet to trigger ARP responses, then retries the neighbour table once.
+// If the MAC is not found on the first pass, it sweeps each local subnet to
+// force ARP resolution of every host, then retries the neighbour table once.
 // On macOS hosts (no iproute2) it consults the bootpd DHCP lease database and
 // the ARP table instead.
 func ResolveIPFromMAC(mac string) (string, error) {
@@ -821,9 +822,10 @@ func ResolveIPFromMAC(mac string) (string, error) {
 		return ip, nil
 	}
 
-	// MAC not in neighbour table — ping each local broadcast address to
-	// stimulate ARP, then scan again.
-	pingBroadcasts()
+	// MAC not in neighbour table — the cache is cold (host reboot, guest
+	// freshly booted, or entries aged out). Sweep the local subnets to
+	// repopulate it, then scan again.
+	arpSweepSubnets()
 	//nolint:noctx // exported helper without ctx; adding one changes its signature and all cmd/ callers
 	out, err = exec.Command("ip", "neigh").Output()
 	if err != nil {
@@ -832,59 +834,64 @@ func ResolveIPFromMAC(mac string) (string, error) {
 	return parseIPNeigh(string(out), mac)
 }
 
-// pingBroadcasts sends a single ICMP echo request to each local IPv4 broadcast
-// address using a raw socket, stimulating ARP replies from guests on the subnet.
-func pingBroadcasts() {
+// arpSweepMaxHosts caps how many addresses a subnet sweep will touch, so a
+// host sitting on a huge prefix (corporate /16) doesn't stall resolution.
+// A /22 fits exactly; anything larger sweeps only its first 1022 hosts.
+const arpSweepMaxHosts = 1022
+
+// arpSweepSubnets sends one UDP datagram to every host address on each local
+// IPv4 subnet. The payload is irrelevant and no reply is expected: writing to
+// an on-link address forces the kernel to ARP for it, and the guest's ARP
+// reply lands in the neighbour table. Unlike a broadcast ping this needs no
+// raw-socket privileges, and it works on guests that drop ICMP (Linux ignores
+// broadcast echo by default; VPN kill-switch firewalls drop pings outright —
+// ARP is layer 2 and unaffected).
+func arpSweepSubnets() {
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
 		return
 	}
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 128)
 	for _, addr := range addrs {
 		ipNet, ok := addr.(*net.IPNet)
 		if !ok || ipNet.IP.IsLoopback() || ipNet.IP.To4() == nil {
 			continue
 		}
-		ip4 := ipNet.IP.To4()
-		mask := ipNet.Mask
-		bcast := make(net.IP, 4)
-		for i := range 4 {
-			bcast[i] = ip4[i] | ^mask[i]
+		self := ipNet.IP.To4()
+		network := self.Mask(ipNet.Mask)
+		ones, bits := ipNet.Mask.Size()
+		if bits != 32 || ones >= 31 {
+			continue
 		}
-		sendICMPEcho(bcast.String())
+		hosts := 1<<(bits-ones) - 2
+		hosts = min(hosts, arpSweepMaxHosts)
+		base := binary.BigEndian.Uint32(network)
+		for i := 1; i <= hosts; i++ {
+			ip := make(net.IP, 4)
+			binary.BigEndian.PutUint32(ip, base+uint32(i)) //nolint:gosec // i <= arpSweepMaxHosts, no overflow
+			if ip.Equal(self) {
+				continue
+			}
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(target string) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				// Port 9 (discard); the datagram itself is the point.
+				//nolint:noctx // best-effort ARP stimulation; no ctx in this call chain
+				conn, derr := net.DialTimeout("udp4", target+":9", 200*time.Millisecond)
+				if derr != nil {
+					return
+				}
+				_, _ = conn.Write([]byte{0})
+				_ = conn.Close()
+			}(ip.String())
+		}
 	}
-}
-
-// sendICMPEcho sends a single ICMP echo request to addr using a UDP "ping"
-// socket (unprivileged on Linux 3.11+ with net.ipv4.ping_group_range set).
-// Falls back silently — this is best-effort ARP stimulation only.
-func sendICMPEcho(addr string) {
-	//nolint:noctx // best-effort ARP stimulation; no ctx in this call chain and adding one changes exported ResolveIPFromMAC
-	conn, err := net.DialTimeout("ip4:icmp", addr, time.Second)
-	if err != nil {
-		return
-	}
-	defer func() { _ = conn.Close() }()
-	_ = conn.SetDeadline(time.Now().Add(time.Second))
-	// Minimal ICMP echo request: type=8 code=0 checksum id=0 seq=1 data=none.
-	msg := []byte{8, 0, 0, 0, 0, 1, 0, 1}
-	cs := icmpChecksum(msg)
-	msg[2] = byte((cs >> 8) & 0xff)
-	msg[3] = byte(cs & 0xff)
-	_, _ = conn.Write(msg)
-}
-
-func icmpChecksum(b []byte) uint16 {
-	var sum uint32
-	for i := 0; i+1 < len(b); i += 2 {
-		sum += uint32(b[i])<<8 | uint32(b[i+1])
-	}
-	if len(b)%2 != 0 {
-		sum += uint32(b[len(b)-1]) << 8
-	}
-	for sum>>16 != 0 {
-		sum = (sum & 0xffff) + (sum >> 16)
-	}
-	return ^uint16(sum)
+	wg.Wait()
+	// Give in-flight ARP replies a moment to land in the neighbour table.
+	time.Sleep(time.Second)
 }
 
 func parseIPNeigh(output, wantMAC string) (string, error) {
