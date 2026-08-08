@@ -140,6 +140,54 @@ func virtiofsTagFor(m ShareMount, i int) string {
 	return strings.NewReplacer("/", "-", " ", "_").Replace(strings.TrimPrefix(m.GuestPath, "/"))
 }
 
+// nordVPNCmds returns the first-boot commands that install and connect the
+// NordVPN snap. connectCmd is the final "nordvpn connect [country]".
+//
+// This sequence is order-sensitive and every step was verified by hand on a
+// live guest.
+//
+// The snap ships its interfaces unconnected, and until they are connected
+// every command fails with "Permission needed ... To start using the app, log
+// in to your Nord Account by entering nordvpn login" — a message that reads
+// like an authentication problem but is really about the missing permissions.
+//
+// "set analytics off" then has to precede the login. Without it the login
+// prompts "Do you allow us to collect and use limited app performance data?
+// (y/n)" on stdin, which cloud-init cannot answer: the read hits EOF
+// immediately, nordvpn re-prompts, and the runcmd spins forever, writing
+// hundreds of megabytes to the serial log and stalling cloud-init before it
+// ever reaches the mounts. Disabling analytics records the consent up front
+// and the login returns cleanly. It does not require an authenticated
+// session, so running it before the login is not circular.
+func nordVPNCmds(token, connectCmd string, nfsMounts []NFSMount) []string {
+	cmds := []string{
+		"snap install nordvpn",
+		"snap connect nordvpn:network-control",
+		"snap connect nordvpn:firewall-control",
+		"snap connect nordvpn:network-observe",
+		"snap connect nordvpn:system-observe",
+		"snap connect nordvpn:hardware-observe",
+		"snap connect nordvpn:login-session-observe",
+		"snap connect nordvpn:network-manager",
+		// The daemon needs a moment after the interfaces land before it will
+		// accept a login.
+		"for i in 1 2 3 4 5 6 7 8 9 10; do nordvpn status >/dev/null 2>&1 && break || sleep 3; done",
+		"nordvpn set analytics off",
+		fmt.Sprintf("nordvpn login --token %s", token),
+		"nordvpn set technology nordlynx",
+		"nordvpn set killswitch on",
+		"nordvpn set autoconnect on",
+	}
+	// NordVPN's kill-switch is enforced inside the daemon rather than through
+	// ufw, so the ufw holes elsewhere do not cover it and each NFS server must
+	// also be whitelisted here — before the connection comes up, or the mounts
+	// race the kill-switch.
+	for _, server := range nfsServers(nfsMounts) {
+		cmds = append(cmds, fmt.Sprintf("nordvpn whitelist add subnet %s/32", server))
+	}
+	return append(cmds, connectCmd)
+}
+
 // nfsBypassRules returns the ufw rules that let the guest reach each NFS
 // server directly. NFS traffic always bypasses the VPN: the server sits on the
 // LAN and is not reachable through the tunnel, so a default-deny outbound
@@ -225,37 +273,7 @@ func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, ssh
 		if nordConf.Country != "" {
 			connectCmd = fmt.Sprintf("nordvpn connect %q", nordConf.Country)
 		}
-		// The snap ships its interfaces unconnected, and until they are
-		// connected every nordvpn command no-ops with "To start using the app,
-		// log in ... by entering nordvpn login" — including login itself, so
-		// the whitelist and connect below silently do nothing and the guest
-		// ends up with no VPN and no route to the NAS.
-		nordCmds := []string{
-			"snap install nordvpn",
-			"snap connect nordvpn:network-control",
-			"snap connect nordvpn:firewall-control",
-			"snap connect nordvpn:network-observe",
-			"snap connect nordvpn:system-observe",
-			"snap connect nordvpn:hardware-observe",
-			"snap connect nordvpn:login-session-observe",
-			"snap connect nordvpn:network-manager",
-			// The daemon needs a moment after the interfaces land before it
-			// will accept a login.
-			"for i in 1 2 3 4 5 6 7 8 9 10; do nordvpn status >/dev/null 2>&1 && break || sleep 3; done",
-			fmt.Sprintf("nordvpn login --token %s", nordConf.Token),
-			"nordvpn set technology nordlynx",
-			"nordvpn set killswitch on",
-			"nordvpn set autoconnect on",
-		}
-		// NordVPN's kill-switch is enforced inside the daemon rather than
-		// through ufw, so the ufw holes below do not cover it and each NFS
-		// server must also be whitelisted here — before the connection comes
-		// up, or the mounts race the kill-switch.
-		for _, server := range nfsServers(nfsMounts) {
-			nordCmds = append(nordCmds, fmt.Sprintf("nordvpn whitelist add subnet %s/32", server))
-		}
-		nordCmds = append(nordCmds, connectCmd)
-		runCmds = append(nordCmds, runCmds...)
+		runCmds = append(nordVPNCmds(nordConf.Token, connectCmd, nfsMounts), runCmds...)
 
 	case wgConf != nil:
 		writeFiles = append(writeFiles, vm.CloudInitWriteFile{

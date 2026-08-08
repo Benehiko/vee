@@ -211,6 +211,49 @@ func TestChownNeverNamesAGroup(t *testing.T) {
 	}
 }
 
+// TestNordVPNCmdOrdering pins a sequence that hangs cloud-init when it is
+// wrong. Verified by hand on a live guest: the snap interfaces must be
+// connected before any nordvpn command works, and "set analytics off" must
+// precede the login or the login blocks forever on an interactive consent
+// prompt that cloud-init cannot answer.
+func TestNordVPNCmdOrdering(t *testing.T) {
+	cmds := nordVPNCmds("tok", `nordvpn connect "sweden"`,
+		[]NFSMount{{Server: "192.168.178.76", Export: "/mnt/Data/Movies", GuestPath: "/downloads/movies"}})
+
+	idx := func(substr string) int {
+		for i, c := range cmds {
+			if strings.Contains(c, substr) {
+				return i
+			}
+		}
+		t.Fatalf("no command containing %q in:\n%s", substr, strings.Join(cmds, "\n"))
+		return -1
+	}
+
+	install := idx("snap install nordvpn")
+	connectIface := idx("snap connect nordvpn:network-control")
+	analytics := idx("set analytics off")
+	login := idx("nordvpn login --token")
+	whitelist := idx("whitelist add subnet 192.168.178.76/32")
+	connect := idx("nordvpn connect")
+
+	if connectIface < install {
+		t.Error("interfaces must be connected after the snap is installed")
+	}
+	if analytics < connectIface {
+		t.Error("set analytics needs the snap interfaces connected first")
+	}
+	if login < analytics {
+		t.Error("login before 'set analytics off' blocks forever on the consent prompt")
+	}
+	if whitelist > connect {
+		t.Error("the NFS whitelist must be registered before connecting, or mounts race the kill-switch")
+	}
+	if connect != len(cmds)-1 {
+		t.Errorf("connect must be last, got index %d of %d", connect, len(cmds))
+	}
+}
+
 // TestAppendFstab checks the generated runcmd is idempotent: cloud-init may be
 // re-run, and a duplicated fstab entry makes the guest fail to boot cleanly.
 func TestAppendFstab(t *testing.T) {
