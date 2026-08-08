@@ -59,6 +59,86 @@ func nfsServers(mounts []NFSMount) []string {
 	return out
 }
 
+// torrentBaseRunCmds returns the ufw rules that open the guest's own ports.
+// VPN commands are inserted after these by the caller.
+func torrentBaseRunCmds() []string {
+	return []string{
+		"ufw allow OpenSSH",
+		"ufw allow 8080/tcp",
+		"ufw --force enable",
+	}
+}
+
+// torrentMountAndAppCmds returns the mount commands followed by the qBittorrent
+// setup, in the order they must run.
+//
+// Ordering is the whole point of this function and a real first boot proved
+// each constraint: mounting or chowning ahead of cloud-init's users module
+// fails with "chown: invalid group: vee:vee", and starting qBittorrent before
+// the shares are mounted quietly sends every download to the VM's own disk.
+// Callers must append the result, never prepend it.
+func torrentMountAndAppCmds(mounts []ShareMount, nfsMounts []NFSMount) []string {
+	var cmds []string
+
+	for i, m := range mounts {
+		guestPath := m.GuestPath
+		if guestPath == "" {
+			guestPath = fmt.Sprintf("/share%d", i)
+		}
+		tag := virtiofsTagFor(m, i)
+		// The fstab entry is what makes the mount survive a reboot: runcmds
+		// only ever run on first boot, so without it the guest path silently
+		// reverts to an empty local directory and qBittorrent writes into the
+		// VM's own disk instead of the share.
+		cmds = append(cmds,
+			fmt.Sprintf("mkdir -p %s", guestPath),
+			appendFstab(fstabEntry(tag, guestPath, "virtiofs", "defaults,nofail"), guestPath),
+			fmt.Sprintf("mount -t virtiofs %s %s", tag, guestPath),
+			fmt.Sprintf("chown vee:vee %s", guestPath),
+		)
+	}
+
+	for _, m := range nfsMounts {
+		if m.GuestPath == "" {
+			continue
+		}
+		opts := m.Options
+		if opts == "" {
+			opts = nfsMountOptions
+		}
+		source := fmt.Sprintf("%s:%s", m.Server, m.Export)
+		// cloud-init's runcmd can fire before the NIC has an address on a
+		// bridge that is slow to forward. Retry rather than fail silently: an
+		// unmounted share sends every download to the VM's own disk, which is
+		// exactly the failure this template exists to avoid.
+		cmds = append(cmds,
+			fmt.Sprintf("mkdir -p %s", m.GuestPath),
+			appendFstab(fstabEntry(source, m.GuestPath, "nfs4", opts), m.GuestPath),
+			fmt.Sprintf("for i in 1 2 3 4 5 6 7 8 9 10; do mount -t nfs4 -o %s %s %s && break || sleep 3; done",
+				opts, source, m.GuestPath),
+		)
+	}
+
+	return append(cmds,
+		"mkdir -p /home/vee/.config/qBittorrent",
+		"chown -R vee:vee /home/vee/.config",
+		// Incomplete torrents live on the VM's own disk, not on a share: the
+		// random small writes of an in-progress torrent are pathological over
+		// a network filesystem, and only the completed file is moved out.
+		fmt.Sprintf("mkdir -p %s", incompletePath),
+		fmt.Sprintf("chown -R vee:vee %s", incompletePath),
+		"systemctl enable --now qbittorrent-nox@vee",
+	)
+}
+
+// virtiofsTagFor derives the virtiofs mount tag for a share.
+func virtiofsTagFor(m ShareMount, i int) string {
+	if m.GuestPath == "" {
+		return fmt.Sprintf("share%d", i)
+	}
+	return strings.NewReplacer("/", "-", " ", "_").Replace(strings.TrimPrefix(m.GuestPath, "/"))
+}
+
 // nfsBypassRules returns the ufw rules that let the guest reach each NFS
 // server directly. NFS traffic always bypasses the VPN: the server sits on the
 // LAN and is not reachable through the tunnel, so a default-deny outbound
@@ -130,19 +210,7 @@ func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, ssh
 			Defer:       true,
 		},
 	}
-	runCmds := []string{
-		"ufw allow OpenSSH",
-		"ufw allow 8080/tcp",
-		"ufw --force enable",
-		"mkdir -p /home/vee/.config/qBittorrent",
-		"chown -R vee:vee /home/vee/.config",
-		// Incomplete torrents live on the VM's own disk, not on a share: the
-		// random small writes of an in-progress torrent are pathological over
-		// a network filesystem, and only the completed file is moved out.
-		fmt.Sprintf("mkdir -p %s", incompletePath),
-		fmt.Sprintf("chown -R vee:vee %s", incompletePath),
-		"systemctl enable --now qbittorrent-nox@vee",
-	}
+	runCmds := torrentBaseRunCmds()
 
 	packages := cloudinit.PackagesFor(cloudinit.Ubuntu, cloudinit.CategoryTorrent)
 
@@ -153,8 +221,23 @@ func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, ssh
 		if nordConf.Country != "" {
 			connectCmd = fmt.Sprintf("nordvpn connect %q", nordConf.Country)
 		}
+		// The snap ships its interfaces unconnected, and until they are
+		// connected every nordvpn command no-ops with "To start using the app,
+		// log in ... by entering nordvpn login" — including login itself, so
+		// the whitelist and connect below silently do nothing and the guest
+		// ends up with no VPN and no route to the NAS.
 		nordCmds := []string{
 			"snap install nordvpn",
+			"snap connect nordvpn:network-control",
+			"snap connect nordvpn:firewall-control",
+			"snap connect nordvpn:network-observe",
+			"snap connect nordvpn:system-observe",
+			"snap connect nordvpn:hardware-observe",
+			"snap connect nordvpn:login-session-observe",
+			"snap connect nordvpn:network-manager",
+			// The daemon needs a moment after the interfaces land before it
+			// will accept a login.
+			"for i in 1 2 3 4 5 6 7 8 9 10; do nordvpn status >/dev/null 2>&1 && break || sleep 3; done",
 			fmt.Sprintf("nordvpn login --token %s", nordConf.Token),
 			"nordvpn set technology nordlynx",
 			"nordvpn set killswitch on",
@@ -200,49 +283,18 @@ func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, ssh
 
 	var virtiofsMounts []vm.VirtiofsMount
 	for i, m := range mounts {
-		tag := fmt.Sprintf("share%d", i)
-		if m.GuestPath != "" {
-			tag = strings.NewReplacer("/", "-", " ", "_").Replace(strings.TrimPrefix(m.GuestPath, "/"))
-		}
 		virtiofsMounts = append(virtiofsMounts, vm.VirtiofsMount{
 			SharedDir: m.HostDir,
-			Tag:       tag,
+			Tag:       virtiofsTagFor(m, i),
 		})
-		guestPath := m.GuestPath
-		if guestPath == "" {
-			guestPath = "/share" + fmt.Sprintf("%d", i)
-		}
-		// The fstab entry is what makes the mount survive a reboot: runcmds
-		// only ever run on first boot, so without it the guest path silently
-		// reverts to an empty local directory and qBittorrent writes into the
-		// VM's own disk instead of the share.
-		runCmds = append([]string{
-			fmt.Sprintf("mkdir -p %s", guestPath),
-			appendFstab(fstabEntry(tag, guestPath, "virtiofs", "defaults,nofail"), guestPath),
-			fmt.Sprintf("mount -t virtiofs %s %s", tag, guestPath),
-			fmt.Sprintf("chown vee:vee %s", guestPath),
-		}, runCmds...)
-	}
-
-	for _, m := range nfsMounts {
-		guestPath := m.GuestPath
-		if guestPath == "" {
-			continue
-		}
-		opts := m.Options
-		if opts == "" {
-			opts = nfsMountOptions
-		}
-		source := fmt.Sprintf("%s:%s", m.Server, m.Export)
-		runCmds = append([]string{
-			fmt.Sprintf("mkdir -p %s", guestPath),
-			appendFstab(fstabEntry(source, guestPath, "nfs4", opts), guestPath),
-			fmt.Sprintf("mount -t nfs4 -o %s %s %s", opts, source, guestPath),
-		}, runCmds...)
 	}
 	if len(nfsMounts) > 0 {
 		packages = append(packages, "nfs-common")
 	}
+
+	// Appended, never prepended: these must follow the users module and the
+	// VPN commands above. See torrentMountAndAppCmds.
+	runCmds = append(runCmds, torrentMountAndAppCmds(mounts, nfsMounts)...)
 
 	return &vm.VMConfig{
 		Name:     name,
