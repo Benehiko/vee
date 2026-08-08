@@ -29,6 +29,17 @@ func TestQbittorrentConfTempPath(t *testing.T) {
 	}
 }
 
+// TestQbittorrentConfWebUIThroughTunnel covers WebUI access via vee tunnel.
+// The tunnel proxies through a random local port, so the browser's Host
+// header ("localhost:42903") never matches the WebUI port — qBittorrent's
+// host header validation 401s every such request.
+func TestQbittorrentConfWebUIThroughTunnel(t *testing.T) {
+	conf := qbittorrentConf("/downloads", "")
+	if !strings.Contains(conf, "WebUI\\HostHeaderValidation=false") {
+		t.Errorf("host header validation must be off, or tunnelled requests get 401:\n%s", conf)
+	}
+}
+
 // TestQbittorrentConfTempPathFallback checks that an empty tempPath keeps the
 // pre-split behaviour rather than producing a bare "incomplete" relative path.
 func TestQbittorrentConfTempPathFallback(t *testing.T) {

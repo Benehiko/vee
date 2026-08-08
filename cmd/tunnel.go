@@ -38,7 +38,9 @@ HTTP/HTTPS services open in the default browser.
 SPICE services print a spice:// URL.
 TCP services print the forwarded address.
 
-For bridge-mode VMs, opens a direct TCP proxy — no SSH needed.
+For bridge-mode VMs, opens a direct TCP proxy — no SSH needed. If the guest
+firewall blocks the port from the LAN (e.g. a VPN kill-switch), falls back to
+an SSH -L tunnel.
 For user-mode VMs, opens an SSH -L tunnel.`,
 	Args:              cobra.RangeArgs(1, 2),
 	ValidArgsFunction: completeTunnelArgs,
@@ -190,6 +192,16 @@ func connectService(cmd *cobra.Command, cfg *vm.VMConfig, state *vm.VMState, s r
 		if resolveErr != nil {
 			return resolveErr
 		}
+		// Kill-switched guests (e.g. the torrent template) accept only SSH
+		// from the LAN, so a direct proxy would hang on every connection.
+		if !tcpReachable(cmd.Context(), vmIP, s.Port) && state.SSHPort > 0 {
+			fmt.Printf("%s:%d not reachable directly (guest firewall?) — tunnelling over SSH\n", vmIP, s.Port)
+			url := localServiceURL(s, localPort)
+			fmt.Printf("tunnelling localhost:%d → %s:%d\n", localPort, cfg.Name, s.Port)
+			fmt.Println(url)
+			maybeBrowser(s, url)
+			return runSSHTunnel(cfg.Name, localPort, "127.0.0.1", state.SSHPort, s.Port, cfg)
+		}
 		url := localServiceURL(s, localPort)
 		fmt.Printf("tunnelling localhost:%d → %s:%d\n", localPort, cfg.Name, s.Port)
 		fmt.Println(url)
@@ -288,6 +300,19 @@ func launchSPICEClient(url string) bool {
 		}
 	}
 	return false
+}
+
+// tcpReachable reports whether host:port accepts a TCP connection within a
+// short timeout. A dropped SYN (firewalled guest) times out rather than
+// erroring, hence the tight deadline.
+func tcpReachable(ctx context.Context, host string, port int) bool {
+	d := net.Dialer{Timeout: 2 * time.Second}
+	conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
 }
 
 func tunnelResolveIP(ctx context.Context, cfg *vm.VMConfig, state *vm.VMState) (string, error) {
