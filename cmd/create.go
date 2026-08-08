@@ -20,6 +20,7 @@ import (
 	"github.com/Benehiko/vee/internal/platform"
 	"github.com/Benehiko/vee/internal/runnercreds"
 	"github.com/Benehiko/vee/internal/runnersetup"
+	"github.com/Benehiko/vee/internal/templates"
 	"github.com/Benehiko/vee/internal/tui"
 	"github.com/Benehiko/vee/internal/vm"
 	"github.com/Benehiko/vee/internal/vm/build"
@@ -42,6 +43,7 @@ var (
 	createAntiDetect    bool
 	createVirtiofsDir   string
 	createVirtiofsTag   string
+	createNFSMounts     []string
 	createSSHKeyFile    string
 	createUser          string
 	createSSHShare      bool
@@ -159,9 +161,25 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
 			return tui.RunConfigWizard(cmd.Context(), prov, !createNoStart, name)
 		}
 		if opts.Template == "torrent" {
-			mounts, mountErr := promptShareMounts(opts.VirtiofsDir)
-			if mountErr != nil {
-				return fmt.Errorf("prompt share mounts: %w", mountErr)
+			nfsMounts, nfsErr := parseNFSMounts(createNFSMounts)
+			if nfsErr != nil {
+				return nfsErr
+			}
+			// The guest mounts NFS itself, so it needs LAN reachability to the
+			// server; user-mode NAT cannot route to it.
+			if len(nfsMounts) > 0 && opts.NICMode == "user" {
+				return fmt.Errorf("--nfs-mount requires --nic-mode=bridge (user-mode NAT cannot reach an NFS server on the LAN)")
+			}
+			// Only prompt for virtiofs shares when no NFS mount was given:
+			// otherwise a fully flag-driven invocation would still block on a
+			// prompt.
+			var mounts []templates.ShareMount
+			if len(nfsMounts) == 0 {
+				var mountErr error
+				mounts, mountErr = promptShareMounts(opts.VirtiofsDir)
+				if mountErr != nil {
+					return fmt.Errorf("prompt share mounts: %w", mountErr)
+				}
 			}
 			nordConf, wgConf, vpnProvider, vpnErr := promptVPN()
 			if vpnErr != nil {
@@ -169,6 +187,7 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
 			}
 			opts.TorrentExtras = &build.TorrentExtras{
 				Mounts:      mounts,
+				NFSMounts:   nfsMounts,
 				NordConf:    nordConf,
 				WireGuard:   wgConf,
 				VPNProvider: vpnProvider,
@@ -548,6 +567,7 @@ func init() {
 	createCmd.Flags().BoolVar(&createAntiDetect, "anti-detect", false, "Apply anti-hypervisor-detection CPU flags (gaming passthrough)")
 	createCmd.Flags().StringVar(&createVirtiofsDir, "virtiofs-dir", "", "Host directory to share via virtiofsd")
 	createCmd.Flags().StringVar(&createVirtiofsTag, "virtiofs-tag", "share", "Mount tag for the virtiofs share")
+	createCmd.Flags().StringArrayVar(&createNFSMounts, "nfs-mount", nil, "NFS export mounted inside the guest as SERVER:EXPORT:GUESTPATH (repeatable; torrent template; requires --nic-mode=bridge)")
 	createCmd.Flags().StringVar(&createSSHKeyFile, "ssh-keys", "", "Path to file containing SSH public keys (one per line)")
 	createCmd.Flags().StringVar(&createUser, "user", "", "Guest login username (gaming-arch and macos templates; others hard-code their user)")
 	createCmd.Flags().StringVar(&createPassword, "password", "", "Guest login password (chpasswd via cloud-init; gaming-arch defaults to the username)")
