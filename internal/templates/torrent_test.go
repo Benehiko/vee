@@ -140,6 +140,49 @@ func TestWireGuardBypassOrdering(t *testing.T) {
 	}
 }
 
+// TestTorrentRuncmdOrdering pins the ordering constraints that a real first
+// boot exposed: mounting and chowning ahead of cloud-init's users module fails
+// with "chown: invalid group: vee:vee", and starting qBittorrent before the
+// shares are mounted sends downloads to the VM's own disk.
+func TestTorrentRuncmdOrdering(t *testing.T) {
+	cmds := append(torrentBaseRunCmds(), torrentMountAndAppCmds(
+		nil,
+		[]NFSMount{{Server: "192.168.178.76", Export: "/mnt/Data/Movies", GuestPath: "/downloads/movies"}},
+	)...)
+	idx := func(substr string) int {
+		for i, c := range cmds {
+			if strings.Contains(c, substr) {
+				return i
+			}
+		}
+		t.Fatalf("no runcmd containing %q in:\n%s", substr, strings.Join(cmds, "\n"))
+		return -1
+	}
+
+	mount := idx("mount -t nfs4")
+	chownIncomplete := idx("chown -R vee:vee " + incompletePath)
+	start := idx("systemctl enable --now qbittorrent-nox@vee")
+	ufwEnable := idx("ufw --force enable")
+
+	if mount < ufwEnable {
+		t.Error("NFS mount must follow the ufw rules, not precede them")
+	}
+	if start < mount {
+		t.Error("qBittorrent must start after the shares are mounted, or downloads land on the local disk")
+	}
+	if chownIncomplete > start {
+		t.Error("the incomplete dir must be chowned before qBittorrent starts")
+	}
+	// Every chown has to come after the users module, which cloud-init runs
+	// before runcmd — so what matters here is that no chown is prepended ahead
+	// of the base commands.
+	for i, c := range cmds {
+		if strings.HasPrefix(c, "chown") && i < ufwEnable {
+			t.Errorf("chown at index %d precedes the base runcmds: %q", i, c)
+		}
+	}
+}
+
 // TestAppendFstab checks the generated runcmd is idempotent: cloud-init may be
 // re-run, and a duplicated fstab entry makes the guest fail to boot cleanly.
 func TestAppendFstab(t *testing.T) {
