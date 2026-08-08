@@ -56,11 +56,12 @@ arguments.
 
 ## IP resolution
 
-vee resolves the VM's IP address in this order:
+vee first checks whether something is actually listening on the VM's recorded loopback SSH port — QEMU's user-mode NAT port-forward, or the [daemon's loopback proxy]({{< relref "daemon" >}}#ssh-loopback-proxies) for bridge-mode VMs — and connects to `127.0.0.1` if so. A recorded port that nothing serves (for example, the daemon is stopped) is skipped rather than trusted.
 
-1. **Guest agent** — if `guest_agent: true` and `qemu-guest-agent` is installed, reads the IP directly from the guest without ARP. This is the most reliable method.
-2. **ARP / neighbour table** — matches the VM's MAC address to an IP in the host's neighbour table. IPv4 is preferred over IPv6 link-local.
-3. **NAT port forward** — for user-mode NAT VMs, connects via `127.0.0.1` and the forwarded SSH port.
+Otherwise vee resolves the VM's LAN address:
+
+1. **ARP / neighbour table** — matches the VM's MAC address to an IP in the host's neighbour table. IPv4 is preferred over IPv6 link-local.
+2. **Guest agent** — if `guest_agent: true` and `qemu-guest-agent` is installed, reads the IP directly from the guest without ARP.
 
 ## SSH key
 

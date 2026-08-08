@@ -185,6 +185,12 @@ func nordVPNCmds(token, connectCmd string, nfsMounts []NFSMount) []string {
 	for _, server := range nfsServers(nfsMounts) {
 		cmds = append(cmds, fmt.Sprintf("nordvpn whitelist add subnet %s/32", server))
 	}
+	// SSH is the only management path into a kill-switched guest: with the
+	// kill-switch up the guest stops answering ARP on the LAN entirely, so
+	// without this the VM is reachable only from its console. Port 22 alone,
+	// never the qBittorrent port — vee tunnel forwards services over this SSH
+	// connection (ssh -L), so nothing else needs to be exposed to the LAN.
+	cmds = append(cmds, "nordvpn whitelist add port 22")
 	return append(cmds, connectCmd)
 }
 
@@ -288,6 +294,14 @@ func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, ssh
 			"ufw allow out on wg0",
 			"ufw allow out on lo",
 		}
+		// SSH is the only management path into a kill-switched guest, so its
+		// replies have to survive the deny-outgoing policy above. The inbound
+		// "ufw allow OpenSSH" in the base rules is not enough on its own: the
+		// outbound half of an established SSH connection leaves on the LAN
+		// interface, not wg0, and would otherwise be dropped. Everything else
+		// stays inside the tunnel — vee tunnel forwards services over this SSH
+		// connection rather than exposing their ports.
+		wgCmds = append(wgCmds, "ufw allow out 22/tcp")
 		// The NFS holes must be punched after the deny policy is set (ufw
 		// evaluates in order, so an allow ahead of the policy is overridden)
 		// but before wg-quick brings the tunnel up.

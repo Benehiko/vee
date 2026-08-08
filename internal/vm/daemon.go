@@ -108,6 +108,8 @@ func (m *Manager) RunDaemon(ctx context.Context) error {
 		log.Warn("initial autostart pass had errors", zap.Error(err))
 	}
 	reconcileInhibitor()
+	m.reconcileSSHProxies(ctx)
+	defer m.stopAllSSHProxies()
 
 	ticker := time.NewTicker(daemonPollInterval)
 	defer ticker.Stop()
@@ -139,6 +141,7 @@ func (m *Manager) RunDaemon(ctx context.Context) error {
 				log.Warn("autostart watch pass had errors", zap.Error(err))
 			}
 			reconcileInhibitor()
+			m.reconcileSSHProxies(ctx)
 		}
 	}
 }

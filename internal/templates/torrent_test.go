@@ -254,6 +254,73 @@ func TestNordVPNCmdOrdering(t *testing.T) {
 	}
 }
 
+// TestNordVPNWhitelistsSSHOnly covers management access through the
+// kill-switch. With it up the guest stops answering ARP on the LAN, so port 22
+// is the only way in short of the console — but only port 22: vee tunnel
+// forwards services over the SSH connection (ssh -L), so exposing the
+// qBittorrent port to the LAN would be a hole with no purpose.
+func TestNordVPNWhitelistsSSHOnly(t *testing.T) {
+	cmds := nordVPNCmds("tok", "nordvpn connect", nil)
+	joined := strings.Join(cmds, "\n")
+
+	if !strings.Contains(joined, "nordvpn whitelist add port 22") {
+		t.Errorf("SSH is not whitelisted; the guest would be console-only:\n%s", joined)
+	}
+	if strings.Contains(joined, "port 8080") {
+		t.Error("qBittorrent's port must stay closed: vee tunnel forwards it over SSH")
+	}
+
+	// The whitelist has to be registered before the connection comes up.
+	var whitelist, connect int
+	for i, c := range cmds {
+		switch {
+		case strings.Contains(c, "whitelist add port 22"):
+			whitelist = i
+		case strings.HasPrefix(c, "nordvpn connect"):
+			connect = i
+		}
+	}
+	if whitelist > connect {
+		t.Error("the SSH whitelist must precede connect, or the kill-switch locks the guest first")
+	}
+}
+
+// TestWireGuardAllowsSSHOutbound covers the same management path for the
+// WireGuard kill-switch, which works through ufw rather than a daemon. The
+// inbound "ufw allow OpenSSH" in the base rules is not sufficient: the
+// outbound half of an established SSH connection leaves on the LAN interface,
+// not wg0, so "default deny outgoing" would drop the replies.
+func TestWireGuardAllowsSSHOutbound(t *testing.T) {
+	// Mirrors the wgConf branch of NewTorrentConfig.
+	wgCmds := []string{
+		"ufw default deny outgoing",
+		"ufw default deny forward",
+		"ufw allow out on wg0",
+		"ufw allow out on lo",
+		"ufw allow out 22/tcp",
+	}
+	wgCmds = append(wgCmds, nfsBypassRules(nil)...)
+	wgCmds = append(wgCmds, "systemctl enable --now wg-quick@wg0")
+
+	var deny, allowSSH, tunnel int
+	for i, c := range wgCmds {
+		switch c {
+		case "ufw default deny outgoing":
+			deny = i
+		case "ufw allow out 22/tcp":
+			allowSSH = i
+		case "systemctl enable --now wg-quick@wg0":
+			tunnel = i
+		}
+	}
+	if allowSSH < deny {
+		t.Error("an allow ahead of the deny policy is overridden by it")
+	}
+	if allowSSH > tunnel {
+		t.Error("the SSH hole must exist before the tunnel comes up")
+	}
+}
+
 // TestAppendFstab checks the generated runcmd is idempotent: cloud-init may be
 // re-run, and a duplicated fstab entry makes the guest fail to boot cleanly.
 func TestAppendFstab(t *testing.T) {
