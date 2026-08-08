@@ -457,6 +457,15 @@ func optsFromFlags(cmd *cobra.Command, name string) build.Opts {
 	if cmd.Flags().Changed("nic-bridge") {
 		opts.NICBridge = createNicBridge
 	}
+	// --nic-mode=bridge without --nic-bridge must still get the flag's default
+	// bridge. The Changed() guards above exist so unset flags do not clobber
+	// values the TUI prefilled, but that also means an unset --nic-bridge never
+	// reaches opts — QEMU then gets "br=" and the bridge helper fails with
+	// "access denied by acl file", which reads like a permissions problem
+	// rather than a missing interface name.
+	if opts.NICMode == "bridge" && opts.NICBridge == "" {
+		opts.NICBridge = createNicBridge
+	}
 	if cmd.Flags().Changed("nic-mac") {
 		opts.NICMAC = createNICMAC
 	}
