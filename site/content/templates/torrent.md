@@ -37,9 +37,18 @@ vee create dl --template torrent --nic-mode bridge \
 ```
 
 Because the guest reaches the server over the LAN, `--nic-mode=bridge` is required —
-user-mode NAT cannot route to it. When a VPN kill-switch is enabled, each NFS server
-is automatically excepted from the default-deny outbound policy so that the tunnel
-does not block the mounts.
+user-mode NAT cannot route to it.
+
+**NFS traffic always bypasses the VPN.** The server sits on the LAN and is not
+reachable through the tunnel, so an outbound exception is created for every NFS
+server whether or not a VPN is configured. With a kill-switch enabled this is what
+keeps the mounts working; without one the rule is redundant against ufw's default
+allow-outgoing policy, but it is still emitted so that hardening the base rules later
+cannot silently break every mount. Exceptions are per-server and de-duplicated, so
+several exports on one server produce a single rule.
+
+One consequence worth knowing: on a VPN'd VM, torrent traffic goes through the tunnel
+while NFS deliberately does not, so the NAS sees the VM's real LAN address.
 
 Mounts are written to `/etc/fstab`, so they survive a reboot. NFS mounts default to
 `rw,hard,proto=tcp,timeo=600,retrans=2,_netdev`. `hard` is deliberate: a `soft` mount

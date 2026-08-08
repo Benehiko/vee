@@ -82,6 +82,64 @@ func TestNFSServers(t *testing.T) {
 	}
 }
 
+// TestNFSBypassRules covers the unconditional VPN bypass: NFS servers sit on
+// the LAN, not behind the tunnel, so every mount needs an outbound hole
+// regardless of whether a VPN is configured.
+func TestNFSBypassRules(t *testing.T) {
+	mounts := []NFSMount{
+		{Server: "192.168.178.76", Export: "/mnt/Data/Movies", GuestPath: "/downloads/movies"},
+		{Server: "192.168.178.76", Export: "/mnt/Data/Shows", GuestPath: "/downloads/shows"},
+	}
+
+	got := nfsBypassRules(mounts)
+	if len(got) != 1 {
+		t.Fatalf("two exports on one server should yield one rule, got %v", got)
+	}
+	if got[0] != "ufw allow out to 192.168.178.76" {
+		t.Errorf("nfsBypassRules() = %q", got[0])
+	}
+
+	if rules := nfsBypassRules(nil); len(rules) != 0 {
+		t.Errorf("no mounts should yield no rules, got %v", rules)
+	}
+}
+
+// TestWireGuardBypassOrdering pins rule ordering against the kill-switch. ufw
+// evaluates rules in order, so an allow emitted before "default deny outgoing"
+// is overridden by it — and the hole must exist before wg-quick brings the
+// tunnel up.
+func TestWireGuardBypassOrdering(t *testing.T) {
+	wgCmds := []string{
+		"ufw default deny outgoing",
+		"ufw default deny forward",
+		"ufw allow out on wg0",
+		"ufw allow out on lo",
+	}
+	wgCmds = append(wgCmds, nfsBypassRules([]NFSMount{{Server: "192.168.178.76"}})...)
+	wgCmds = append(wgCmds, "systemctl enable --now wg-quick@wg0")
+
+	idx := func(want string) int {
+		for i, c := range wgCmds {
+			if c == want {
+				return i
+			}
+		}
+		t.Fatalf("command %q not found in %v", want, wgCmds)
+		return -1
+	}
+
+	deny := idx("ufw default deny outgoing")
+	allow := idx("ufw allow out to 192.168.178.76")
+	tunnel := idx("systemctl enable --now wg-quick@wg0")
+
+	if allow < deny {
+		t.Error("NFS allow must come after the deny policy, or ufw overrides it")
+	}
+	if allow > tunnel {
+		t.Error("NFS allow must come before wg-quick, or the mount races the kill-switch")
+	}
+}
+
 // TestAppendFstab checks the generated runcmd is idempotent: cloud-init may be
 // re-run, and a duplicated fstab entry makes the guest fail to boot cleanly.
 func TestAppendFstab(t *testing.T) {

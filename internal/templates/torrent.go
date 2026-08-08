@@ -59,6 +59,20 @@ func nfsServers(mounts []NFSMount) []string {
 	return out
 }
 
+// nfsBypassRules returns the ufw rules that let the guest reach each NFS
+// server directly. NFS traffic always bypasses the VPN: the server sits on the
+// LAN and is not reachable through the tunnel, so a default-deny outbound
+// policy would otherwise block every mount. One rule per server rather than
+// per mount, and per host rather than per subnet.
+func nfsBypassRules(mounts []NFSMount) []string {
+	servers := nfsServers(mounts)
+	rules := make([]string, 0, len(servers))
+	for _, server := range servers {
+		rules = append(rules, fmt.Sprintf("ufw allow out to %s", server))
+	}
+	return rules
+}
+
 // fstabEntry renders a single /etc/fstab line.
 func fstabEntry(source, target, fstype, options string) string {
 	return fmt.Sprintf("%s %s %s %s 0 0", source, target, fstype, options)
@@ -146,8 +160,10 @@ func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, ssh
 			"nordvpn set killswitch on",
 			"nordvpn set autoconnect on",
 		}
-		// NordVPN's kill-switch drops non-tunnel traffic too, so each NFS
-		// server has to be whitelisted before the connection comes up.
+		// NordVPN's kill-switch is enforced inside the daemon rather than
+		// through ufw, so the ufw holes below do not cover it and each NFS
+		// server must also be whitelisted here — before the connection comes
+		// up, or the mounts race the kill-switch.
 		for _, server := range nfsServers(nfsMounts) {
 			nordCmds = append(nordCmds, fmt.Sprintf("nordvpn whitelist add subnet %s/32", server))
 		}
@@ -167,15 +183,19 @@ func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, ssh
 			"ufw allow out on wg0",
 			"ufw allow out on lo",
 		}
-		// NFS servers are reached over the LAN, not the tunnel, so the
-		// default-deny outbound policy above would otherwise block every guest
-		// NFS mount. Punch a hole per server rather than for the whole subnet.
-		for _, server := range nfsServers(nfsMounts) {
-			wgCmds = append(wgCmds, fmt.Sprintf("ufw allow out to %s", server))
-		}
+		// The NFS holes must be punched after the deny policy is set (ufw
+		// evaluates in order, so an allow ahead of the policy is overridden)
+		// but before wg-quick brings the tunnel up.
+		wgCmds = append(wgCmds, nfsBypassRules(nfsMounts)...)
 		wgCmds = append(wgCmds, "systemctl enable --now wg-quick@wg0")
 		runCmds = append(wgCmds, runCmds...)
 		packages = append(packages, "wireguard", "resolvconf")
+
+	default:
+		// No VPN. ufw's default outgoing policy is allow, so NFS already
+		// works — but emit the rules anyway to pin the intent, so that
+		// hardening the base policy later cannot silently break every mount.
+		runCmds = append(nfsBypassRules(nfsMounts), runCmds...)
 	}
 
 	var virtiofsMounts []vm.VirtiofsMount
