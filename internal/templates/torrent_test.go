@@ -280,6 +280,9 @@ func TestNordVPNGroupAccess(t *testing.T) {
 	if !strings.Contains(joined, "usermod -aG nordvpn vee") {
 		t.Errorf("vee is not added to the nordvpn group; unprivileged status checks would fail:\n%s", joined)
 	}
+	if !strings.Contains(joined, "usermod -aG nordvpn ubuntu") {
+		t.Errorf("ubuntu is not added to the nordvpn group; `vee network` probes as the cloud-init default user and its nordvpn checks would fail:\n%s", joined)
+	}
 }
 
 // TestNordVPNWhitelistsSSHOnly covers management access through the

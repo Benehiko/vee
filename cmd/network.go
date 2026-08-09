@@ -94,6 +94,9 @@ func printNetworkReport(r *vm.NetworkReport) {
 	if r.Guest.DefaultRoute != "" {
 		printNetFact("route", "default "+r.Guest.DefaultRoute)
 	}
+	if r.Guest.PolicyRoute != "" {
+		printNetFact("policy route", r.Guest.PolicyRoute)
+	}
 	if len(r.Guest.DNSServers) > 0 {
 		printNetFact("dns", strings.Join(r.Guest.DNSServers, ", "))
 	}
