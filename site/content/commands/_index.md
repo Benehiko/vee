@@ -23,6 +23,7 @@ Complete reference for all `vee` commands.
 | [`vee list`]({{< relref "list" >}}) | List all VMs and their status |
 | [`vee status`]({{< relref "status" >}}) | Show detailed VM status and guest info |
 | [`vee check`]({{< relref "check" >}}) | Run health checks on an installed VM |
+| [`vee network`]({{< relref "network" >}}) | Show firewall, VPN, DNS, and egress state of a VM |
 | [`vee ip`]({{< relref "ip" >}}) | Print the VM's IP address |
 | [`vee ports`]({{< relref "ports" >}}) | List bound TCP ports inside a running VM |
 | [`vee logs`]({{< relref "logs" >}}) | Stream QEMU output |

@@ -73,6 +73,7 @@ switch, each link guarded by a test.
 | `vm_services` | read-only | Declared services (HTTP/HTTPS/SPICE/TCP) with host-reachable URLs |
 | `vm_logs` | read-only | Tail of the process log; `journal=true` for the guest systemd journal, `kernel=true` for kernel messages |
 | `vm_check` | mutating | Run the guest's health-check script now |
+| `vm_network` | read-only | Full network report: interfaces, routes, DNS, ufw, VPN/kill-switch, egress IP, with template-aware checks |
 | `vm_stats` | read-only | One CPU/memory/disk/network sample via QMP |
 | `vm_qmp` | mutating | Raw QMP command passthrough (daemon-routed when applicable) |
 | `vm_display` | read-only | How to connect to the VM's display (VNC/SPICE/Moonlight) with reachability probe |

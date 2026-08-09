@@ -2049,24 +2049,37 @@ func (m *Manager) RunHealthCheck(ctx context.Context, name string) ([]HealthChec
 // runCheckScript executes /usr/local/bin/vee-check in the VM and returns stdout.
 // Prefers QGA (works without network routing); falls back to SSH port.
 func (m *Manager) runCheckScript(ctx context.Context, cfg *VMConfig, state *VMState) (string, error) {
+	out, stderr, exitCode, err := m.execGuestShell(ctx, cfg, state, "/usr/local/bin/vee-check")
+	if err != nil {
+		return "", err
+	}
+	if exitCode != 0 {
+		detail := strings.TrimSpace(stderr)
+		if detail == "" {
+			detail = strings.TrimSpace(out)
+		}
+		return "", fmt.Errorf("/usr/local/bin/vee-check exited %d: %s", exitCode, detail)
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// execGuestShell runs a shell command line inside the guest, preferring QGA
+// (works without network routing) and falling back to the SSH port. Under QGA
+// the script runs via /bin/sh -c; over SSH the remote login shell interprets
+// it, which is equivalent for POSIX command lines. A nonzero guest exit is
+// not an error — callers inspect exitCode; err reports transport failures.
+func (m *Manager) execGuestShell(ctx context.Context, cfg *VMConfig, state *VMState, script string) (stdout, stderr string, exitCode int, err error) {
 	if state.QGASocket != "" {
-		client, err := qemu.NewQGAClient(ctx, state.QGASocket, 5*time.Second)
-		if err != nil {
-			return "", fmt.Errorf("connect QGA socket %s: %w", state.QGASocket, err)
+		client, cerr := qemu.NewQGAClient(ctx, state.QGASocket, 10*time.Second)
+		if cerr != nil {
+			return "", "", 0, fmt.Errorf("connect QGA socket %s: %w", state.QGASocket, cerr)
 		}
 		defer func() { _ = client.Close() }()
-		out, stderr, exitCode, runErr := client.RunCommand("/usr/local/bin/vee-check", nil)
+		out, errOut, code, runErr := client.RunCommand("/bin/sh", []string{"-c", script})
 		if runErr != nil {
-			return "", fmt.Errorf("QGA exec /usr/local/bin/vee-check: %w", runErr)
+			return "", "", 0, fmt.Errorf("QGA exec %q: %w", script, runErr)
 		}
-		if exitCode != 0 {
-			detail := strings.TrimSpace(stderr)
-			if detail == "" {
-				detail = strings.TrimSpace(out)
-			}
-			return "", fmt.Errorf("/usr/local/bin/vee-check exited %d: %s", exitCode, detail)
-		}
-		return strings.TrimSpace(out), nil
+		return out, errOut, code, nil
 	}
 	if state.SSHPort > 0 {
 		home, _ := os.UserHomeDir()
@@ -2086,13 +2099,19 @@ func (m *Manager) runCheckScript(ctx context.Context, cfg *VMConfig, state *VMSt
 			"-o", "LogLevel=ERROR",
 			"-p", fmt.Sprintf("%d", state.SSHPort),
 			fmt.Sprintf("%s@127.0.0.1", user),
-			"/usr/local/bin/vee-check",
+			script,
 		}
 		out, execErr := exec.CommandContext(ctx, "ssh", args...).Output() //nolint:gosec // ssh binary is fixed; args are vee-controlled identity/port/user for the managed VM
 		if execErr != nil {
-			return "", fmt.Errorf("ssh exec: %w", execErr)
+			var ee *exec.ExitError
+			// 255 is ssh's own exit code for connection/auth failures; any
+			// other nonzero code came from the remote command itself.
+			if errors.As(execErr, &ee) && ee.ExitCode() != 255 {
+				return string(out), string(ee.Stderr), ee.ExitCode(), nil
+			}
+			return "", "", 0, fmt.Errorf("ssh exec: %w", execErr)
 		}
-		return strings.TrimSpace(string(out)), nil
+		return string(out), "", 0, nil
 	}
-	return "", fmt.Errorf("no QGA socket or SSH port available for health check")
+	return "", "", 0, fmt.Errorf("no QGA socket or SSH port available for guest exec")
 }

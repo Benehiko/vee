@@ -242,6 +242,7 @@ See [docs/gpu-passthrough-gaming.md](docs/gpu-passthrough-gaming.md) for Sunshin
 | `vee view <name>` | Open or connect to a VM's display (SPICE, GPU, or Screen Sharing for a macOS guest) |
 | `vee config <name>` | Edit a VM's configuration in an interactive TUI |
 | `vee check <name>` | Run health checks on an installed VM |
+| `vee network <name>` | Show firewall, VPN, DNS, route, and egress state of a running VM |
 | `vee backup <name>` | Back up directories from a running VM |
 | `vee autostart <name>` | Enable or disable autostart for a VM |
 | `vee move <name> <target-dir>` | Move a VM's boot disk to another directory |
