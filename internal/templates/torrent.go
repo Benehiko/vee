@@ -66,6 +66,9 @@ func torrentBaseRunCmds() []string {
 		"ufw allow OpenSSH",
 		"ufw allow 8080/tcp",
 		"ufw --force enable",
+		// vee tunnel + vee ssh on bridge mode resolve the VM IP via QGA, so
+		// the guest agent has to be live before the readiness check fires.
+		"systemctl enable --now qemu-guest-agent",
 	}
 }
 
@@ -358,6 +361,7 @@ func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, ssh
 		SSHPort:        deterministicSSHPort(name),
 		GPU:            vm.GPUConfig{Mode: vm.GPUNone},
 		Headless:       false,
+		GuestAgent:     true,
 		UEFI:           vm.UEFIConfig{Enabled: false},
 		VirtiofsMounts: virtiofsMounts,
 		VPNProvider:    vpnProvider,
