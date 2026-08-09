@@ -265,6 +265,23 @@ func TestNordVPNCmdOrdering(t *testing.T) {
 	}
 }
 
+// TestNordVPNGroupAccess covers unprivileged daemon access. The daemon only
+// answers root or members of the "nordvpn" group, and the snap does not create
+// the group — without these commands "nordvpn status" as the vee user prints
+// "We couldn't reach System Daemon", which reads like the VPN is down when it
+// is actually connected.
+func TestNordVPNGroupAccess(t *testing.T) {
+	cmds := nordVPNCmds("tok", "nordvpn connect", nil)
+	joined := strings.Join(cmds, "\n")
+
+	if !strings.Contains(joined, "groupadd -f nordvpn") {
+		t.Errorf("nordvpn group is never created:\n%s", joined)
+	}
+	if !strings.Contains(joined, "usermod -aG nordvpn vee") {
+		t.Errorf("vee is not added to the nordvpn group; unprivileged status checks would fail:\n%s", joined)
+	}
+}
+
 // TestNordVPNWhitelistsSSHOnly covers management access through the
 // kill-switch. With it up the guest stops answering ARP on the LAN, so port 22
 // is the only way in short of the console — but only port 22: vee tunnel
