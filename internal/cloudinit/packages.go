@@ -45,6 +45,7 @@ var packageMap = map[Distro]map[PackageCategory][]string{
 			"ufw",
 			"curl",
 			"wget",
+			"qemu-guest-agent",
 		},
 		CategoryDevbox: {
 			"git",
@@ -87,6 +88,7 @@ var packageMap = map[Distro]map[PackageCategory][]string{
 			"firewalld",
 			"curl",
 			"wget",
+			"qemu-guest-agent",
 		},
 		CategoryDevbox: {
 			"git",
@@ -157,6 +159,7 @@ var packageMap = map[Distro]map[PackageCategory][]string{
 			"ufw",
 			"curl",
 			"wget",
+			"qemu-guest-agent",
 		},
 		CategoryDevbox: {
 			"git",
