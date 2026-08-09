@@ -180,9 +180,12 @@ func nordVPNCmds(token, connectCmd string, nfsMounts []NFSMount) []string {
 		// The daemon only answers root or members of the "nordvpn" group;
 		// anyone else gets "We couldn't reach System Daemon", which reads like
 		// the VPN is down when it is actually up. The snap does not create the
-		// group, so create it and add vee for unprivileged status checks.
+		// group, so create it and add both login users: vee for interactive
+		// status checks, and the cloud-init default user (ubuntu) because
+		// `vee network` probes the guest as that user when no ssh_user is set.
 		"groupadd -f nordvpn",
 		"usermod -aG nordvpn vee",
+		"usermod -aG nordvpn ubuntu",
 	}
 	// NordVPN's kill-switch is enforced inside the daemon rather than through
 	// ufw, so the ufw holes elsewhere do not cover it and each NFS server must

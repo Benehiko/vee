@@ -24,6 +24,7 @@ VM networking is otherwise opaque — an IP and a MAC say nothing about whether 
 
 - Interfaces and addresses
 - Default route (and whether it leaves through the VPN tunnel device)
+- Policy routing — the fwmark rule and routing table NordLynx and wg-quick use to divert traffic into the tunnel
 - DNS servers
 - `ufw` state (active, default outgoing policy, rule count)
 - VPN state — `nordvpn status`/`settings` or `wg show`, depending on how the VM was created
@@ -34,8 +35,8 @@ VM networking is otherwise opaque — an IP and a MAC say nothing about whether 
 For VPN-configured VMs (the [torrent template]({{< relref "/templates" >}})), the report includes pass/fail checks:
 
 - **Kill-switch enabled** — NordVPN's daemon-enforced kill switch, or ufw `deny (outgoing)` for generic WireGuard
-- **Default route through the tunnel** (`nordlynx` or `wg0`)
-- **No DNS leak** — no DNS server pointing at the LAN resolver
+- **Traffic routed through the tunnel** (`nordlynx` or `wg0`) — either as the default route, or via the fwmark policy-routing rule NordLynx and wg-quick actually install (the main table's default route legitimately stays on the LAN NIC)
+- **No DNS leak** — no DNS server pointing at the LAN resolver; a LAN entry alongside VPN-pushed resolvers is reported as `INFO` rather than a failure, since the kill switch blocks the LAN resolver and the DNS-egress check verifies where queries really exit
 - **Egress IP differs from the host's public IP** — traffic is actually tunnelled
 - **DNS egress differs from the host's public IP** — DNS queries don't bypass the VPN
 

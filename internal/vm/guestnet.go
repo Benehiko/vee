@@ -55,12 +55,18 @@ type HostNetwork struct {
 type GuestNetwork struct {
 	Interfaces   []qemu.GuestNetworkInterface `json:"interfaces,omitempty"`
 	DefaultRoute string                       `json:"default_route,omitempty"`
-	DNSServers   []string                     `json:"dns_servers,omitempty"`
-	UFW          UFWState                     `json:"ufw"`
-	VPN          VPNState                     `json:"vpn"`
-	EgressIP     string                       `json:"egress_ip,omitempty"`
-	DNSEgressIP  string                       `json:"dns_egress_ip,omitempty"`
-	Checks       []NetCheck                   `json:"checks"`
+	// PolicyRoute describes an fwmark policy-routing rule that steers traffic
+	// into the VPN tunnel (e.g. "fwmark 0xe1f1 lookup 205 dev nordlynx").
+	// NordLynx and wg-quick both route this way: the main table's default
+	// route legitimately stays on the LAN NIC while every unmarked packet is
+	// diverted to the tunnel's own table.
+	PolicyRoute string     `json:"policy_route,omitempty"`
+	DNSServers  []string   `json:"dns_servers,omitempty"`
+	UFW         UFWState   `json:"ufw"`
+	VPN         VPNState   `json:"vpn"`
+	EgressIP    string     `json:"egress_ip,omitempty"`
+	DNSEgressIP string     `json:"dns_egress_ip,omitempty"`
+	Checks      []NetCheck `json:"checks"`
 }
 
 // UFWState summarizes `ufw status verbose` inside the guest.
@@ -271,6 +277,24 @@ func (m *Manager) guestNetwork(ctx context.Context, cfg *VMConfig, state *VMStat
 		}
 	}
 
+	// NordLynx and wg-quick never rewrite the main table's default route;
+	// they add an fwmark rule diverting unmarked traffic to the tunnel's own
+	// table. Read both rules and tables so the route check can recognize that.
+	if cfg.VPNProvider != "" {
+		if out, ok := probe("ip rule 2>/dev/null || echo " + guestUnavailable); ok {
+			if fwmark, table := ParseIPRuleFwmark(out); table != "" {
+				dev := ""
+				if tout, tok := probe(fmt.Sprintf("ip route show table %s 2>/dev/null || echo %s", table, guestUnavailable)); tok {
+					_, dev = ParseDefaultRoute(tout)
+				}
+				guest.PolicyRoute = strings.TrimSpace(fmt.Sprintf("fwmark %s lookup %s dev %s", fwmark, table, dev))
+				if dev == "" {
+					guest.PolicyRoute = fmt.Sprintf("fwmark %s lookup %s", fwmark, table)
+				}
+			}
+		}
+	}
+
 	if out, ok := probe("resolvectl dns 2>/dev/null || cat /etc/resolv.conf 2>/dev/null || echo " + guestUnavailable); ok {
 		guest.DNSServers = ParseDNSServers(out)
 	}
@@ -341,40 +365,67 @@ func guestChecks(cfg *VMConfig, opts NetworkOptions, host *HostNetwork, guest *G
 		tunnelDev = "nordlynx"
 	}
 
-	// Default route must leave through the tunnel device.
+	// Traffic must leave through the tunnel device — either as the main
+	// table's default route, or via an fwmark policy-routing rule diverting
+	// into the tunnel's own table (how NordLynx and wg-quick actually route;
+	// the main table's default route stays on the LAN NIC).
 	switch {
+	case strings.Contains(guest.PolicyRoute, "dev "+tunnelDev):
+		add("guest:route", NetCheckPass, "policy-routed: "+guest.PolicyRoute)
 	case guest.DefaultRoute == "":
 		add("guest:route", NetCheckUnavailable, "default route not readable")
 	case strings.Contains(guest.DefaultRoute, "dev "+tunnelDev):
 		add("guest:route", NetCheckPass, guest.DefaultRoute)
 	default:
 		add("guest:route", NetCheckFail,
-			fmt.Sprintf("%s — expected dev %s", guest.DefaultRoute, tunnelDev))
+			fmt.Sprintf("%s — expected dev %s (no fwmark policy rule found)", guest.DefaultRoute, tunnelDev))
 	}
 
-	// DNS servers must not point at a LAN resolver (the classic leak).
+	// DNS servers must not point at a LAN resolver (the classic leak). A LAN
+	// entry alongside VPN-pushed resolvers is only notable, not a failure:
+	// NordVPN leaves the DHCP resolver on the link and injects its own, and
+	// the kill-switch blocks the LAN one anyway — the dns-egress check below
+	// is the ground truth for where queries actually exit.
 	switch {
 	case len(guest.DNSServers) == 0:
 		add("guest:dns-leak", NetCheckUnavailable, "DNS configuration not readable")
 	default:
 		lans := lanNetworks(guest.Interfaces)
-		status, detail := NetCheckPass, strings.Join(guest.DNSServers, ", ")
+		var lanHits, publicHits []string
+		loopback := ""
 		for _, s := range guest.DNSServers {
 			ip := net.ParseIP(s)
 			if ip == nil {
 				continue
 			}
 			if ip.IsLoopback() {
-				status, detail = NetCheckInfo, s+" is a local resolver stub; upstream not verified"
+				loopback = s
 				continue
 			}
+			inLAN := false
 			for _, lan := range lans {
 				if lan.Contains(ip) {
-					status, detail = NetCheckFail, s+" is the LAN resolver — DNS bypasses the VPN"
+					inLAN = true
 				}
 			}
+			if inLAN {
+				lanHits = append(lanHits, s)
+			} else {
+				publicHits = append(publicHits, s)
+			}
 		}
-		add("guest:dns-leak", status, detail)
+		switch {
+		case len(lanHits) > 0 && len(publicHits) > 0:
+			add("guest:dns-leak", NetCheckInfo, fmt.Sprintf(
+				"%s is on the LAN but VPN DNS %s is also configured; see guest:dns-egress",
+				strings.Join(lanHits, ", "), strings.Join(publicHits, ", ")))
+		case len(lanHits) > 0:
+			add("guest:dns-leak", NetCheckFail, lanHits[0]+" is the LAN resolver — DNS bypasses the VPN")
+		case loopback != "":
+			add("guest:dns-leak", NetCheckInfo, loopback+" is a local resolver stub; upstream not verified")
+		default:
+			add("guest:dns-leak", NetCheckPass, strings.Join(guest.DNSServers, ", "))
+		}
 	}
 
 	// Firewall.
@@ -548,6 +599,29 @@ func ParseDefaultRoute(output string) (via, dev string) {
 		}
 	}
 	return via, dev
+}
+
+// ParseIPRuleFwmark finds the VPN's fwmark diversion rule in `ip rule`
+// output — e.g. NordLynx's "32765: not from all fwmark 0xe1f1 lookup 205" or
+// wg-quick's "32764: not from all fwmark 0xca6c lookup 51820" — and returns
+// the mark and the routing table it diverts to.
+func ParseIPRuleFwmark(output string) (fwmark, table string) {
+	for line := range strings.SplitSeq(strings.TrimSpace(output), "\n") {
+		fields := strings.Fields(line)
+		for i := 0; i < len(fields)-1; i++ {
+			switch fields[i] {
+			case "fwmark":
+				fwmark = fields[i+1]
+			case "lookup":
+				table = fields[i+1]
+			}
+		}
+		if fwmark != "" && table != "" && table != "main" && table != "local" && table != "default" {
+			return fwmark, table
+		}
+		fwmark, table = "", ""
+	}
+	return "", ""
 }
 
 // ParseDNSServers extracts nameserver IPs from either `resolvectl dns`

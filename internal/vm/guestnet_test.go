@@ -301,6 +301,85 @@ func TestGuestChecksDNSLeak(t *testing.T) {
 	}
 }
 
+func TestParseIPRuleFwmark(t *testing.T) {
+	// NordLynx's actual layout: suppress rules plus the fwmark diversion.
+	nord := `0:	from all lookup local
+32763:	from all to 192.168.178.76 lookup main
+32764:	from all lookup main suppress_prefixlength 0 suppress_ifgroup 57841
+32765:	not from all fwmark 0xe1f1 lookup 205
+32766:	from all lookup main
+32767:	from all lookup default`
+	fwmark, table := ParseIPRuleFwmark(nord)
+	if fwmark != "0xe1f1" || table != "205" {
+		t.Errorf("nordlynx: got (%q, %q), want (0xe1f1, 205)", fwmark, table)
+	}
+
+	wg := `32764:	from all lookup main suppress_prefixlength 0
+32765:	not from all fwmark 0xca6c lookup 51820`
+	fwmark, table = ParseIPRuleFwmark(wg)
+	if fwmark != "0xca6c" || table != "51820" {
+		t.Errorf("wg-quick: got (%q, %q), want (0xca6c, 51820)", fwmark, table)
+	}
+
+	// No policy routing at all — must not match the standard rules.
+	plain := `0:	from all lookup local
+32766:	from all lookup main
+32767:	from all lookup default`
+	if fwmark, table = ParseIPRuleFwmark(plain); fwmark != "" || table != "" {
+		t.Errorf("plain: got (%q, %q), want empty", fwmark, table)
+	}
+}
+
+// TestGuestChecksPolicyRoute covers how NordLynx actually routes: the main
+// table's default route stays on the LAN NIC and an fwmark rule diverts
+// traffic into the tunnel's own table. The route check must recognize that
+// instead of failing on "default via ... dev enp0s2".
+func TestGuestChecksPolicyRoute(t *testing.T) {
+	cfg := &VMConfig{VPNProvider: "nordvpn"}
+	host := &HostNetwork{PublicIP: "82.1.2.3"}
+	guest := &GuestNetwork{
+		Interfaces: []qemu.GuestNetworkInterface{
+			{Name: "enp0s2", IPAddresses: []qemu.GuestIPAddress{{IPAddress: "192.168.178.87", Prefix: 24, IPAddressType: "ipv4"}}},
+			{Name: "nordlynx", IPAddresses: []qemu.GuestIPAddress{{IPAddress: "10.5.0.2", Prefix: 16, IPAddressType: "ipv4"}}},
+		},
+		DefaultRoute: "via 192.168.178.1 dev enp0s2",
+		PolicyRoute:  "fwmark 0xe1f1 lookup 205 dev nordlynx",
+		// NordVPN injects its resolvers next to the DHCP one; the LAN entry
+		// alongside VPN DNS is notable, not a leak verdict.
+		DNSServers:  []string{"192.168.178.1", "103.86.99.100", "103.86.96.100"},
+		UFW:         UFWState{Available: true, Active: true, DefaultOutgoing: "allow", RuleCount: 4},
+		VPN:         VPNState{Provider: "nordvpn", Available: true, Connected: true, Endpoint: "de1004.nordvpn.com", Killswitch: "on"},
+		EgressIP:    "187.40.48.239",
+		DNSEgressIP: "187.40.48.239",
+	}
+	checks := guestChecks(cfg, NetworkOptions{}, host, guest)
+	got := map[string]string{}
+	for _, c := range checks {
+		got[c.Name] = c.Status
+	}
+	if got["guest:route"] != NetCheckPass {
+		t.Errorf("route = %q, want pass (fwmark policy routing)", got["guest:route"])
+	}
+	if got["guest:dns-leak"] != NetCheckInfo {
+		t.Errorf("dns-leak = %q, want info (LAN resolver alongside VPN DNS)", got["guest:dns-leak"])
+	}
+	for _, name := range []string{"guest:killswitch", "guest:vpn", "guest:egress-ip", "guest:dns-egress"} {
+		if got[name] != NetCheckPass {
+			t.Errorf("%s = %q, want pass", name, got[name])
+		}
+	}
+
+	// Same guest without the fwmark rule: the LAN default route is a real
+	// failure again.
+	guest.PolicyRoute = ""
+	checks = guestChecks(cfg, NetworkOptions{}, host, guest)
+	for _, c := range checks {
+		if c.Name == "guest:route" && c.Status != NetCheckFail {
+			t.Errorf("route without policy rule = %q, want fail", c.Status)
+		}
+	}
+}
+
 func TestGuestChecksNonVPN(t *testing.T) {
 	cfg := &VMConfig{}
 	checks := guestChecks(cfg, NetworkOptions{}, &HostNetwork{}, &GuestNetwork{})
