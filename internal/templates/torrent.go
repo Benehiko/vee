@@ -177,6 +177,12 @@ func nordVPNCmds(token, connectCmd string, nfsMounts []NFSMount) []string {
 		"nordvpn set technology nordlynx",
 		"nordvpn set killswitch on",
 		"nordvpn set autoconnect on",
+		// The daemon only answers root or members of the "nordvpn" group;
+		// anyone else gets "We couldn't reach System Daemon", which reads like
+		// the VPN is down when it is actually up. The snap does not create the
+		// group, so create it and add vee for unprivileged status checks.
+		"groupadd -f nordvpn",
+		"usermod -aG nordvpn vee",
 	}
 	// NordVPN's kill-switch is enforced inside the daemon rather than through
 	// ufw, so the ufw holes elsewhere do not cover it and each NFS server must
