@@ -39,6 +39,13 @@ func (s *server) registerOps(srv *mcp.Server) []string {
 	}, s.vmCheck)
 
 	addTool(srv, &names, &mcp.Tool{
+		Name: "vm_network",
+		Description: "Report a running VM's network state: interfaces, default route, DNS, firewall (ufw), VPN/kill-switch status, and egress IP, " +
+			"with template-aware pass/fail checks for VPN-configured VMs. Set skip_egress=true to avoid the external egress-IP lookups.",
+		Annotations: readOnly,
+	}, s.vmNetwork)
+
+	addTool(srv, &names, &mcp.Tool{
 		Name:        "vm_ports",
 		Description: "List listening TCP ports and their process names inside a running guest (via the QEMU guest agent).",
 		Annotations: readOnly,
@@ -169,6 +176,25 @@ func (s *server) vmCheck(ctx context.Context, _ *mcp.CallToolRequest, in vmNameI
 		return nil, vmCheckOut{}, err
 	}
 	return nil, vmCheckOut{Checks: checks}, nil
+}
+
+// ---- vm_network ----
+
+type vmNetworkIn struct {
+	Name       string `json:"name"`
+	SkipEgress bool   `json:"skip_egress,omitempty" jsonschema:"skip the external egress-IP lookups (no HTTPS/DNS requests leave the host or guest)"`
+}
+
+type vmNetworkOut struct {
+	Report *vm.NetworkReport `json:"report"`
+}
+
+func (s *server) vmNetwork(ctx context.Context, _ *mcp.CallToolRequest, in vmNetworkIn) (*mcp.CallToolResult, vmNetworkOut, error) {
+	report, err := s.mgr.QueryNetwork(ctx, in.Name, vm.NetworkOptions{SkipEgress: in.SkipEgress})
+	if err != nil {
+		return nil, vmNetworkOut{}, err
+	}
+	return nil, vmNetworkOut{Report: report}, nil
 }
 
 // ---- vm_ports ----
