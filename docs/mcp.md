@@ -58,7 +58,7 @@ switch, each link guarded by a test.
 | `vm_create` | mutating | Create a VM from any template — full CLI flag parity (disks, GPU, NIC, virtiofs, SSH, per-template extras); `reinstall=true` wipes and recreates |
 | `vm_start` | mutating | Boot detached; waits for readiness by default; reports first-boot install passes |
 | `vm_stop` | mutating | Graceful powerdown; `force=true` kills the process |
-| `vm_delete` | destructive | Delete a stopped VM and its disks |
+| `vm_delete` | destructive | Delete one or more stopped VMs and their disks (`name` for one, `names` for several) |
 | `vm_move` | mutating | Move the boot disk to another directory, stopping/restarting as needed |
 | `vm_autostart` | mutating | Get or set daemon autostart |
 | `vm_config_get` | read-only | Full persisted VM configuration as JSON |

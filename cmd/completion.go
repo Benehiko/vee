@@ -11,6 +11,16 @@ func completeVMNames(_ *cobra.Command, args []string, _ string) ([]string, cobra
 	if len(args) > 0 {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
+	return listVMNames(nil)
+}
+
+// completeVMNamesMulti completes VM names for commands taking several,
+// omitting names already present on the command line.
+func completeVMNamesMulti(_ *cobra.Command, args []string, _ string) ([]string, cobra.ShellCompDirective) {
+	return listVMNames(args)
+}
+
+func listVMNames(exclude []string) ([]string, cobra.ShellCompDirective) {
 	p, err := provider.New(false)
 	if err != nil {
 		return nil, cobra.ShellCompDirectiveError
@@ -20,9 +30,15 @@ func completeVMNames(_ *cobra.Command, args []string, _ string) ([]string, cobra
 	if err != nil {
 		return nil, cobra.ShellCompDirectiveError
 	}
+	seen := make(map[string]bool, len(exclude))
+	for _, name := range exclude {
+		seen[name] = true
+	}
 	names := make([]string, 0, len(entries))
 	for _, e := range entries {
-		names = append(names, e.Config.Name)
+		if !seen[e.Config.Name] {
+			names = append(names, e.Config.Name)
+		}
 	}
 	return names, cobra.ShellCompDirectiveNoFileComp
 }

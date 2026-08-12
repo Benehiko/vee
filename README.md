@@ -246,7 +246,7 @@ See [docs/gpu-passthrough-gaming.md](docs/gpu-passthrough-gaming.md) for Sunshin
 | `vee backup <name>` | Back up directories from a running VM |
 | `vee autostart <name>` | Enable or disable autostart for a VM |
 | `vee move <name> <target-dir>` | Move a VM's boot disk to another directory |
-| `vee delete <name>` | Wipe VM and all its disks |
+| `vee delete <name>...` | Wipe one or more VMs and all their disks |
 | `vee daemon` | Run the vee daemon (starts and watches autostart VMs) |
 | `vee dashboard` | Start a web dashboard for all VMs |
 | `vee mcp` | Run an MCP server over stdio so coding agents can drive vee |
