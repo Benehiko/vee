@@ -153,4 +153,4 @@ rather than an unexplained early exit.)
 - No VFIO passthrough, virtiofs, vhost-vsock, bridge networking, CPU pinning, or
   swtpm (all Linux-host features).
 - No Windows service / daemon installer yet — `vee daemon install` targets
-  systemd and is Linux-only.
+  systemd (Linux) and launchd (macOS) only.

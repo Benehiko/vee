@@ -201,17 +201,19 @@ vee --help
 
 ## Run vee as a daemon
 
-The daemon starts every VM marked `autostart=true` on boot and restarts any
-that exit. It runs as a systemd **system** service (`/etc/systemd/system/vee.service`)
-so it can react to logind's shutdown signal in time to stop VMs cleanly.
-This is Linux-only.
-
-Install and enable it (prompts for `sudo` — it writes a system unit and runs
-`systemctl enable --now`):
+The daemon starts every VM marked `autostart=true` on boot, restarts any
+that exit, and stops running VMs cleanly when the host shuts down. It is
+supported on Linux and macOS; install it with (prompts for `sudo`):
 
 ```sh
 vee daemon install
 ```
+
+### Linux (systemd)
+
+The daemon runs as a systemd **system** service
+(`/etc/systemd/system/vee.service`) so it can react to logind's shutdown
+signal in time to stop VMs cleanly.
 
 Check status, logs, and control the service with the usual systemctl verbs:
 
@@ -222,14 +224,32 @@ sudo systemctl restart vee      # restart (e.g. after upgrading the vee binary)
 sudo systemctl stop vee         # stop
 ```
 
+### macOS (launchd)
+
+The daemon runs as a system-level launchd **LaunchDaemon**
+(`/Library/LaunchDaemons/io.vee.daemon.plist`) under your user account. At
+host shutdown, launchd's SIGTERM gives it up to 300 seconds to power off
+every running VM.
+
+```sh
+sudo launchctl print system/io.vee.daemon        # is it running?
+tail -F ~/.vee/logs/daemon.log                   # daemon stdout/stderr
+sudo launchctl kickstart -k system/io.vee.daemon # restart (e.g. after upgrading vee)
+```
+
+Note that unloading the job (`launchctl bootout`, or `vee daemon uninstall`)
+also stops running VMs gracefully — macOS gives launchd jobs no way to tell
+a plain unload apart from a host shutdown.
+
 {{< hint info >}}
 **After upgrading vee, restart the daemon** so it runs the new binary:
-`sudo systemctl restart vee`. The unit's `ExecStart` is pinned to the absolute
-path of the `vee` binary that ran `vee daemon install`. If your upgrade
-**replaces that same file in place** (a new release extracted over
-`~/.vee/bin/vee`, or `make install`), a restart is all you need. If the new
-binary lands at a **different path**, re-run `vee daemon install` so the unit
-points at it.
+`sudo systemctl restart vee` (Linux) or
+`sudo launchctl kickstart -k system/io.vee.daemon` (macOS). The service's
+executable path is pinned to the absolute path of the `vee` binary that ran
+`vee daemon install`. If your upgrade **replaces that same file in place** (a
+new release extracted over `~/.vee/bin/vee`, or `make install`), a restart is
+all you need. If the new binary lands at a **different path**, re-run
+`vee daemon install` so the service points at it.
 {{< /hint >}}
 
 Remove the service with:

@@ -28,7 +28,7 @@ WHPX accelerates **x86-64** guests. vee uses the `q35` machine type.
 | Bridge networking | Unavailable — user-mode NAT instead |
 | CPU pinning | Unavailable (needs `taskset`/`/proc`) |
 | swtpm TPM | Unavailable |
-| Daemon service installer | Unavailable — `vee daemon install` is Linux-only |
+| Daemon service installer | Unavailable — `vee daemon install` supports Linux (systemd) and macOS (launchd) only |
 
 ## Process differences
 

@@ -513,6 +513,26 @@ macOS 15.4+ hosts, the fix has sat unmerged since March 2026, and it supports
 macOS 12 guests only. Tracked in issue #50; the backend field makes adding it
 later a matter of implementing one interface.
 
+## Autostart and clean shutdown (the vee daemon)
+
+The vee daemon — which starts `autostart=true` VMs on boot, restarts exited
+ones, and powers VMs off cleanly when the host shuts down — is fully
+supported on macOS hosts:
+
+```sh
+vee daemon install     # prompts for sudo; writes /Library/LaunchDaemons/io.vee.daemon.plist
+```
+
+The installer registers a system-level launchd LaunchDaemon running as your
+user account (the macOS counterpart of the systemd system unit on Linux).
+At host shutdown, launchd delivers SIGTERM and the daemon uses its
+`ExitTimeOut` window (300 s) to power off every running VM — QEMU and vz
+guests alike — before the host goes down. While VMs run, a `caffeinate`
+assertion keeps the host from idle-sleeping under them. See
+[docs/host-shutdown.md](host-shutdown.md#macos-launchd) for the full
+behaviour, including how `launchctl bootout` interacts with running VMs, and
+diagnostics.
+
 ## Limitations summary
 
 - No VFIO GPU passthrough (Linux-host kernel feature).
