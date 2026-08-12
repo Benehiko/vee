@@ -10,6 +10,7 @@ package mcpserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -109,7 +110,7 @@ func (s *server) register(srv *mcp.Server) []string {
 
 	addTool(srv, &names, &mcp.Tool{
 		Name:        "vm_delete",
-		Description: "Delete a stopped VM and its disks permanently. Refuses to delete a running VM — stop it first with vm_stop.",
+		Description: "Delete one or more stopped VMs and their disks permanently (name for one, names for several). Refuses to delete a running VM — stop it first with vm_stop.",
 		Annotations: destructive(true),
 	}, s.vmDelete)
 
@@ -647,19 +648,50 @@ func (s *server) vmStop(ctx context.Context, _ *mcp.CallToolRequest, in vmStopIn
 
 // ---- vm_delete ----
 
-type vmDeleteOut struct {
-	Name   string `json:"name"`
-	Status string `json:"status"`
+type vmDeleteIn struct {
+	Name  string   `json:"name,omitempty" jsonschema:"name of the VM to delete"`
+	Names []string `json:"names,omitempty" jsonschema:"names of additional VMs to delete in the same call"`
 }
 
-func (s *server) vmDelete(_ context.Context, _ *mcp.CallToolRequest, in vmNameIn) (*mcp.CallToolResult, vmDeleteOut, error) {
-	if state, err := s.mgr.LoadState(in.Name); err == nil && state.Running {
-		return nil, vmDeleteOut{}, fmt.Errorf("VM %q is running; stop it with vm_stop before deleting", in.Name)
+type vmDeleteOut struct {
+	Deleted []string `json:"deleted" jsonschema:"names of the VMs that were deleted"`
+	Status  string   `json:"status"`
+}
+
+func (s *server) vmDelete(_ context.Context, _ *mcp.CallToolRequest, in vmDeleteIn) (*mcp.CallToolResult, vmDeleteOut, error) {
+	var names []string
+	if in.Name != "" {
+		names = append(names, in.Name)
 	}
-	if err := s.mgr.Delete(in.Name); err != nil {
-		return nil, vmDeleteOut{}, err
+	for _, n := range in.Names {
+		if !slices.Contains(names, n) {
+			names = append(names, n)
+		}
 	}
-	return nil, vmDeleteOut{Name: in.Name, Status: "deleted"}, nil
+	if len(names) == 0 {
+		return nil, vmDeleteOut{}, fmt.Errorf("provide the VM to delete via name, or several via names")
+	}
+
+	var deleted []string
+	var errs []error
+	for _, name := range names {
+		if state, err := s.mgr.LoadState(name); err == nil && state.Running {
+			errs = append(errs, fmt.Errorf("VM %q is running; stop it with vm_stop before deleting", name))
+			continue
+		}
+		if err := s.mgr.Delete(name); err != nil {
+			errs = append(errs, fmt.Errorf("delete %s: %w", name, err))
+			continue
+		}
+		deleted = append(deleted, name)
+	}
+	if len(errs) > 0 {
+		if len(deleted) > 0 {
+			errs = append(errs, fmt.Errorf("deleted successfully: %s", strings.Join(deleted, ", ")))
+		}
+		return nil, vmDeleteOut{}, errors.Join(errs...)
+	}
+	return nil, vmDeleteOut{Deleted: deleted, Status: "deleted"}, nil
 }
 
 // ---- vm_ip ----
