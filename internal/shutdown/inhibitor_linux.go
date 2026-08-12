@@ -1,4 +1,8 @@
-// Package shutdown wraps the systemd-logind D-Bus API for blocking host
+//go:build linux
+
+package shutdown
+
+// Linux backend: wraps the systemd-logind D-Bus API for blocking host
 // shutdown until vee can gracefully power off running VMs.
 //
 // Two-layer design:
@@ -10,7 +14,6 @@
 //   - Lock: the inhibitor file descriptor itself. Releasing the lock is
 //     what unblocks logind. The daemon takes a Lock only while ≥1 VM is
 //     running so the host is not blocked when there is nothing to wait for.
-package shutdown
 
 import (
 	"context"
@@ -102,6 +105,11 @@ func (l *Lock) Release() error {
 // and returns a channel that receives exactly once when shutdown begins
 // (signal payload true). Unsubscribes when ctx is cancelled. May only be
 // called once per Conn.
+//
+// The channel is never closed: if the subscription dies without a shutdown
+// signal (ctx cancelled, bus connection closed) it simply never fires.
+// Closing it instead would race the caller's ctx.Done select branch and
+// could make a plain daemon stop look like a host shutdown.
 func (c *Conn) PrepareForShutdown(ctx context.Context) (<-chan struct{}, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -130,7 +138,6 @@ func (c *Conn) PrepareForShutdown(ctx context.Context) (<-chan struct{}, error) 
 
 	out := make(chan struct{}, 1)
 	go func() {
-		defer close(out)
 		for {
 			select {
 			case <-ctx.Done():

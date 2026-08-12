@@ -384,7 +384,7 @@ docs also live in this repo:
 - [docs/gpu-passthrough-gaming.md](docs/gpu-passthrough-gaming.md) — Sunshine + Moonlight streaming over GPU passthrough
 - [docs/media-sources.md](docs/media-sources.md) — attaching NFS/SMB/host-dir/block/USB media to VMs
 - [docs/pacman-mirror.md](docs/pacman-mirror.md) — host-side pacman caching proxy for Arch VMs
-- [docs/host-shutdown.md](docs/host-shutdown.md) — how the daemon blocks host poweroff while VMs are running
+- [docs/host-shutdown.md](docs/host-shutdown.md) — how the daemon stops VMs cleanly at host shutdown (logind on Linux, launchd on macOS)
 - [docs/install-iso-lifecycle.md](docs/install-iso-lifecycle.md) — one-shot installer ISO lifecycle and repair
 - [docs/github-runner.md](docs/github-runner.md) — self-hosted GitHub Actions runner: cred persistence, SSH keys, disk GC
 - [docs/docs-site.md](docs/docs-site.md) — Hugo documentation site: local preview and Cloudflare deploy

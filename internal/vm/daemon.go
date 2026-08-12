@@ -21,32 +21,42 @@ const (
 )
 
 // RunDaemon starts all AutoStart VMs and watches them, restarting any that
-// have exited. It also acquires a logind shutdown inhibitor *while at least
-// one VM is running* so the host blocks on power-off/reboot only when there
-// is something to wait for. With no VMs running the inhibitor is released,
+// have exited. It also acquires a shutdown inhibitor *while at least one VM
+// is running* so the host blocks on power-off/reboot only when there is
+// something to wait for. With no VMs running the inhibitor is released,
 // letting KDE / systemctl poweroff proceed without the 30s "shutdown
 // blocked" abort dialog.
 //
+// Host-shutdown detection is platform-specific behind internal/shutdown:
+// logind's PrepareForShutdown signal and a block inhibitor on Linux;
+// launchd's SIGTERM-at-shutdown contract on macOS, where the inhibitor is
+// a caffeinate sleep assertion and *every* SIGTERM reports
+// PreparingForShutdown=true because launchd offers no way to tell a plain
+// stop from a host power-off.
+//
 // Exit paths:
-//   - ctx.Done()         → user/systemd stopped the daemon (e.g. systemctl
-//     stop vee). Inhibitor is released; running VMs are
-//     intentionally left alone.
-//   - host shutdown      → logind PrepareForShutdown(true) fires. Notify
-//     the user, gracefully stop all VMs, release the
-//     inhibitor, then return so the unit exits.
+//   - ctx.Done()         → user/service manager stopped the daemon (e.g.
+//     systemctl stop vee, SIGINT). Inhibitor is
+//     released; running VMs are intentionally left
+//     alone — except on macOS, where SIGTERM takes
+//     the host-shutdown path below.
+//   - host shutdown      → PrepareForShutdown fires (or ctx.Done reports a
+//     shutdown in progress). Notify the user,
+//     gracefully stop all VMs, release the inhibitor,
+//     then return so the service exits.
 func (m *Manager) RunDaemon(ctx context.Context) error {
 	log := m.provider.Logger()
 	log.Info("vee daemon starting")
 
 	conn, err := shutdown.Connect()
 	if err != nil {
-		log.Warn("could not open logind connection; host shutdown will not wait for VMs",
+		log.Warn("host shutdown integration unavailable; host shutdown will not wait for VMs",
 			zap.Error(err))
 	}
 	defer func() {
 		if conn != nil {
 			if err := conn.Close(); err != nil {
-				log.Debug("logind connection close failed", zap.Error(err))
+				log.Debug("shutdown monitor close failed", zap.Error(err))
 			}
 		}
 	}()
@@ -117,11 +127,13 @@ func (m *Manager) RunDaemon(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			// Disambiguate "user ran systemctl stop vee" (leave VMs alone)
+			// Disambiguate "user stopped the daemon" (leave VMs alone)
 			// from "daemon SIGTERMed during host shutdown" (stop VMs).
 			// Without this check the select branches race on shutdown:
 			// if ctx.Done wins before shutdownCh, VMs survive the daemon
 			// only to be SIGKILLed seconds later by the host poweroff.
+			// On macOS PreparingForShutdown is true for any SIGTERM —
+			// launchd has no separate shutdown notification.
 			if conn != nil {
 				if preparing, perr := conn.PreparingForShutdown(); perr == nil && preparing {
 					log.Info("ctx cancelled during host shutdown; stopping VMs")
@@ -162,10 +174,12 @@ func (m *Manager) runningVMCount() int {
 	return n
 }
 
-// handleHostShutdown is invoked when logind signals that the host is
-// powering off or rebooting. It notifies the user, stops every running VM
-// in parallel, and notifies again once done. The inhibitor release in
-// RunDaemon is what actually unblocks logind.
+// handleHostShutdown is invoked when the host is powering off or rebooting
+// (logind's PrepareForShutdown on Linux, launchd's SIGTERM on macOS). It
+// notifies the user, stops every running VM in parallel, and notifies again
+// once done. On Linux the inhibitor release in RunDaemon is what actually
+// unblocks logind; on macOS the daemon exiting within the launchd job's
+// ExitTimeOut is what lets shutdown proceed.
 func (m *Manager) handleHostShutdown(ctx context.Context) {
 	log := m.provider.Logger()
 	log.Info("host shutdown signal received; stopping running VMs")
@@ -190,9 +204,9 @@ func (m *Manager) handleHostShutdown(ctx context.Context) {
 		daemonStopPerVMTimeout+30*time.Second,
 	)
 	defer cancel()
-	_ = ctx // outer ctx may already be cancelled by systemd; use a fresh one for stop work
+	_ = ctx // outer ctx may already be cancelled by the service manager; use a fresh one for stop work
 
-	//nolint:contextcheck // deliberately uses a fresh ctx: the inherited ctx is already cancelled by systemd during shutdown, so stop work must not inherit its cancellation
+	//nolint:contextcheck // deliberately uses a fresh ctx: the inherited ctx is already cancelled by the service manager during shutdown, so stop work must not inherit its cancellation
 	if err := m.StopAllRunning(stopCtx, daemonStopPerVMTimeout, ShutdownReasonHost); err != nil {
 		log.Warn("some VMs did not stop cleanly", zap.Error(err))
 		_ = notify.Send(

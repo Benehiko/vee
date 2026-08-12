@@ -3,19 +3,23 @@ title: vee daemon
 weight: 140
 ---
 
-Run vee as a long-lived daemon. On startup it starts every VM with `autostart=true`, then polls every 30 seconds and restarts any that have exited.
+Run vee as a long-lived daemon. On startup it starts every VM with `autostart=true`, then polls periodically and restarts any that have exited.
 
 ```
 vee daemon
 ```
 
-The daemon is normally launched by the installed systemd service rather than run by hand. It also owns each supervised VM's single QMP connection — which is why [`vee qmp`]({{< relref "qmp" >}}) and [`vee stop`]({{< relref "stop" >}}) route through it when it is running.
+The daemon is normally launched by the installed system service (systemd on Linux, launchd on macOS) rather than run by hand. It also owns each supervised VM's single QMP connection — which is why [`vee qmp`]({{< relref "qmp" >}}) and [`vee stop`]({{< relref "stop" >}}) route through it when it is running.
 
 ## Subcommands
 
 ### vee daemon install
 
-Install and enable the vee systemd **system** service. Writes `/etc/systemd/system/vee.service` plus the vfio modprobe, polkit, and udev rules vee needs. Requires root/sudo.
+On **Linux**, install and enable the vee systemd **system** service. Writes `/etc/systemd/system/vee.service` plus the vfio modprobe, polkit, and udev rules vee needs.
+
+On **macOS**, install and start a system-level launchd **LaunchDaemon** (`/Library/LaunchDaemons/io.vee.daemon.plist`) running as your user account. The Linux-only vfio/polkit/udev steps are skipped.
+
+Requires root/sudo on both platforms.
 
 ```sh
 sudo vee daemon install
@@ -23,7 +27,7 @@ sudo vee daemon install
 
 ### vee daemon uninstall
 
-Disable and remove the systemd service and its associated polkit/udev files.
+Disable and remove the service — the systemd unit and its associated polkit/udev files on Linux, the launchd job and its plist on macOS. On macOS, booting the job out sends the daemon SIGTERM, so it gracefully stops any running VMs before exiting.
 
 ```sh
 sudo vee daemon uninstall
@@ -37,6 +41,6 @@ The guest's address is resolved per connection (neighbour table by MAC, guest ag
 
 ## Platform support
 
-The systemd installer is Linux-only. On macOS and Windows the daemon binary runs, but there is no service installer — start it manually if you need autostart supervision.
+The service installer supports Linux (systemd) and macOS (launchd). On Windows the daemon binary runs, but there is no service installer — start it manually if you need autostart supervision.
 
-See [Host shutdown](https://github.com/Benehiko/vee/blob/main/docs/host-shutdown.md) for how the daemon blocks host poweroff while VMs are running.
+On host shutdown the daemon powers off running VMs cleanly on both platforms: via logind's `PrepareForShutdown` signal and a block inhibitor on Linux, and via launchd's SIGTERM-with-`ExitTimeOut` contract on macOS. See [Host shutdown](https://github.com/Benehiko/vee/blob/main/docs/host-shutdown.md) for the details, including the macOS caveat that unloading the daemon also stops running VMs.
