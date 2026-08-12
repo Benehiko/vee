@@ -124,6 +124,7 @@ func (m *Manager) buildVZMachine(_ context.Context, cfg *VMConfig) (backend.Mach
 		HardwareModel:     cfg.MacOS.HardwareModel,
 		MachineIdentifier: cfg.MacOS.MachineIdentifier,
 		Display:           display,
+		Vsock:             cfg.Vsock,
 	}
 	if err := spec.Validate(); err != nil {
 		return nil, err
@@ -295,9 +296,9 @@ func vzStartFailureDetail(vmDir string) string {
 	return res.Error
 }
 
-// vzControlRequest sends one op to a helper control socket and returns the
-// response.
-func vzControlRequest(ctx context.Context, sockPath, op string, timeout time.Duration) (*vzhelper.Response, error) {
+// vzControlRequest sends one request to a helper control socket and returns
+// the response.
+func vzControlRequest(ctx context.Context, sockPath string, req *vzhelper.Request, timeout time.Duration) (*vzhelper.Response, error) {
 	d := net.Dialer{Timeout: timeout}
 	conn, err := d.DialContext(ctx, "unix", sockPath)
 	if err != nil {
@@ -307,7 +308,7 @@ func vzControlRequest(ctx context.Context, sockPath, op string, timeout time.Dur
 	if timeout > 0 {
 		_ = conn.SetDeadline(time.Now().Add(timeout))
 	}
-	if err := json.NewEncoder(conn).Encode(&vzhelper.Request{Op: op}); err != nil {
+	if err := json.NewEncoder(conn).Encode(req); err != nil {
 		return nil, err
 	}
 	var resp vzhelper.Response
@@ -315,6 +316,83 @@ func vzControlRequest(ctx context.Context, sockPath, op string, timeout time.Dur
 		return nil, err
 	}
 	return &resp, nil
+}
+
+// vzVsockOpTimeout bounds the vsock control ops: the helper answers them from
+// memory (it does not wait on the guest), so a slow response means a wedged
+// helper, not a booting guest.
+const vzVsockOpTimeout = 10 * time.Second
+
+// VZVsockConnect opens a host→guest virtio-vsock connection to a port the
+// guest is listening on (AF_VSOCK), for a running vz-backend VM. The helper
+// bridges the framework's socket device onto a unix socket in the VM
+// directory; the returned conn is one hop through that bridge.
+func (m *Manager) VZVsockConnect(ctx context.Context, name string, port uint32) (net.Conn, error) {
+	sockPath, err := m.vzVsockControlSocket(name)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := vzControlRequest(ctx, sockPath, &vzhelper.Request{Op: vzhelper.OpVsockConnect, Port: port}, vzVsockOpTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("vsock-connect %s port %d: %w", name, port, err)
+	}
+	if !resp.OK {
+		return nil, fmt.Errorf("vsock-connect %s port %d: %w", name, port, vzVsockOpError(resp.Error))
+	}
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "unix", resp.Path)
+	if err != nil {
+		return nil, fmt.Errorf("dial vsock bridge %s: %w", resp.Path, err)
+	}
+	return conn, nil
+}
+
+// VZVsockListen forwards guest-initiated virtio-vsock connections to port
+// into the host unix socket at hostSocket (which the caller must be listening
+// on), for a running vz-backend VM. Repeating the call retargets the forward.
+func (m *Manager) VZVsockListen(ctx context.Context, name string, port uint32, hostSocket string) error {
+	sockPath, err := m.vzVsockControlSocket(name)
+	if err != nil {
+		return err
+	}
+	resp, err := vzControlRequest(ctx, sockPath, &vzhelper.Request{Op: vzhelper.OpVsockListen, Port: port, Path: hostSocket}, vzVsockOpTimeout)
+	if err != nil {
+		return fmt.Errorf("vsock-listen %s port %d: %w", name, port, err)
+	}
+	if !resp.OK {
+		return fmt.Errorf("vsock-listen %s port %d: %w", name, port, vzVsockOpError(resp.Error))
+	}
+	return nil
+}
+
+// vzVsockControlSocket validates that a VM can serve vsock ops — vz backend,
+// vsock enabled, running — and returns its helper control socket.
+func (m *Manager) vzVsockControlSocket(name string) (string, error) {
+	cfg, err := m.loadConfig(name)
+	if err != nil {
+		return "", err
+	}
+	if cfg.BackendName() != backend.VZ {
+		return "", fmt.Errorf("VM %q does not use the vz backend — its vsock channel is not driven through the helper control protocol", name)
+	}
+	if !cfg.Vsock {
+		return "", fmt.Errorf("VM %q has no vsock device — set vsock: true in its vm.yaml and restart it", name)
+	}
+	state, err := m.LoadState(name)
+	if err != nil || state.ControlSocket == "" || !isAlive(state.PID) {
+		return "", fmt.Errorf("VM %q is not running", name)
+	}
+	return state.ControlSocket, nil
+}
+
+// vzVsockOpError upgrades a helper-reported vsock failure into an actionable
+// error: an "unknown op" answer means the running helper predates the vsock
+// control ops (protocol version 0, issue #61).
+func vzVsockOpError(msg string) error {
+	if strings.Contains(msg, "unknown op") {
+		return fmt.Errorf("%s — the running %s predates vsock support (vee speaks control protocol v%d); update the helper (re-extract the release tarball or `make vz-helper`) and restart the VM", msg, vzhelper.HelperBinary, vzhelper.ProtocolVersion)
+	}
+	return errors.New(msg)
 }
 
 // waitReadyVZ polls until the vz guest is reachable: readiness means the
@@ -377,7 +455,7 @@ func (m *Manager) watchVZShutdown(ctx context.Context, name, sockPath string) {
 	log := m.provider.Logger()
 	// No timeout: the op blocks for the VM's lifetime, like the QMP owner
 	// connection.
-	resp, err := vzControlRequest(ctx, sockPath, vzhelper.OpWaitShutdown, 0)
+	resp, err := vzControlRequest(ctx, sockPath, &vzhelper.Request{Op: vzhelper.OpWaitShutdown}, 0)
 	switch {
 	case err != nil:
 		// The helper may have exited before its response landed (or the

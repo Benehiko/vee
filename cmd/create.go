@@ -47,6 +47,7 @@ var (
 	createSSHKeyFile    string
 	createUser          string
 	createSSHShare      bool
+	createVsock         bool
 	createHeadless      bool
 	createSSHPort       int
 	createDistro        string
@@ -513,6 +514,10 @@ func optsFromFlags(cmd *cobra.Command, name string) build.Opts {
 		v := createSSHShare
 		opts.SSHShare = &v
 	}
+	if cmd.Flags().Changed("vsock") {
+		v := createVsock
+		opts.Vsock = &v
+	}
 	if cmd.Flags().Changed("gpu-mode") {
 		opts.GPUMode = createGPUMode
 	}
@@ -581,6 +586,7 @@ func init() {
 	createCmd.Flags().StringVar(&createUser, "user", "", "Guest login username (gaming-arch and macos templates; others hard-code their user)")
 	createCmd.Flags().StringVar(&createPassword, "password", "", "Guest login password (chpasswd via cloud-init; gaming-arch defaults to the username)")
 	createCmd.Flags().BoolVar(&createSSHShare, "ssh-share", false, "Enable SSH agent sharing into VM via AF_VSOCK")
+	createCmd.Flags().BoolVar(&createVsock, "vsock", false, "Attach a virtio-vsock device for a private host<->guest channel")
 	createCmd.Flags().BoolVar(&createHeadless, "headless", false, "Run VM headless (no display window); SSH-only access")
 	createCmd.Flags().IntVar(&createSSHPort, "ssh-port", 0, "Host port forwarded to VM port 22 (headless VMs only)")
 	createCmd.Flags().StringVar(&createDistro, "distro", "ubuntu", "Base OS distro for devbox/server templates: ubuntu, arch, fedora")

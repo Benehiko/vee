@@ -35,3 +35,19 @@ func TestVZShutdownArgs(t *testing.T) {
 		}
 	}
 }
+
+func TestVZVsockOpError(t *testing.T) {
+	// A helper that predates the vsock ops answers with "unknown op"; the
+	// user needs to hear "update the helper", not a raw protocol error.
+	err := vzVsockOpError(`unknown op "vsock-connect"`)
+	for _, want := range []string{"vee-vz-helper", "make vz-helper", "restart the VM"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("unknown-op error %q is missing %q", err, want)
+		}
+	}
+
+	// Any other helper error must pass through untouched.
+	if got := vzVsockOpError("vsock is not enabled in the machine spec").Error(); got != "vsock is not enabled in the machine spec" {
+		t.Errorf("passthrough error = %q", got)
+	}
+}

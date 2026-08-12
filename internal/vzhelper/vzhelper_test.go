@@ -27,6 +27,7 @@ func TestSpecRoundTrip(t *testing.T) {
 		AuxiliaryStorage:  aux,
 		HardwareModel:     []byte{0x01, 0x02},
 		MachineIdentifier: []byte{0x03, 0x04},
+		Vsock:             true,
 	}
 	if err := WriteSpec(dir, in); err != nil {
 		t.Fatalf("WriteSpec: %v", err)
@@ -41,6 +42,9 @@ func TestSpecRoundTrip(t *testing.T) {
 	}
 	if !bytes.Equal(out.HardwareModel, in.HardwareModel) || !bytes.Equal(out.MachineIdentifier, in.MachineIdentifier) {
 		t.Errorf("blob round-trip mismatch: got %+v", out)
+	}
+	if !out.Vsock {
+		t.Error("Vsock did not survive the round-trip")
 	}
 	// Zero display must default, not stay zero (a macOS guest without a
 	// display device hangs in the boot loader).
@@ -89,6 +93,19 @@ func TestSpecValidate(t *testing.T) {
 				t.Errorf("expected validation error")
 			}
 		})
+	}
+}
+
+func TestVsockBridgePath(t *testing.T) {
+	path := VsockBridgePath("/vms/mac", 2222)
+	if path != "/vms/mac/vz-vsock-2222.sock" {
+		t.Errorf("VsockBridgePath = %q", path)
+	}
+	// The glob is what the helper uses to sweep stale bridge sockets at
+	// startup — it must keep matching what VsockBridgePath produces.
+	ok, err := filepath.Match(VsockBridgeGlob, filepath.Base(path))
+	if err != nil || !ok {
+		t.Errorf("VsockBridgeGlob %q does not match %q (err %v)", VsockBridgeGlob, filepath.Base(path), err)
 	}
 }
 

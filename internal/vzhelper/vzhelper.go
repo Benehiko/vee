@@ -45,6 +45,12 @@ const (
 	LogFileName = "vz-helper.log"
 )
 
+// ProtocolVersion identifies the control protocol this package defines,
+// bumped only on incompatible changes (issue #61). Helpers that predate
+// versioning (status/stop/wait-shutdown only) answer OpVersion with an
+// "unknown op" error and are effectively version 0.
+const ProtocolVersion = 1
+
 // Control protocol ops.
 const (
 	// OpStatus returns the VM's current run state.
@@ -56,6 +62,20 @@ const (
 	// guest initiated the shutdown. The manager uses it the way it uses QMP
 	// SHUTDOWN events for QEMU VMs.
 	OpWaitShutdown = "wait-shutdown"
+	// OpVersion returns the helper's protocol version and build version, so
+	// the manager can detect a mismatched vee / vee-vz-helper pair.
+	OpVersion = "version"
+	// OpVsockConnect bridges a guest-listening vsock port to a host unix
+	// socket: the helper listens on Response.Path and opens a fresh
+	// host→guest vsock connection to Request.Port for every connection
+	// accepted there (the Virtualization.framework analog of connecting to a
+	// vhost-vsock CID:port). Idempotent per port. Requires MachineSpec.Vsock.
+	OpVsockConnect = "vsock-connect"
+	// OpVsockListen accepts guest-initiated vsock connections to Request.Port
+	// and forwards each one to the host unix socket at Request.Path (which
+	// the caller must be listening on). Sending it again for the same port
+	// retargets the forward. Requires MachineSpec.Vsock.
+	OpVsockListen = "vsock-listen"
 )
 
 // Terminal reasons reported on the OpWaitShutdown response.
@@ -73,6 +93,11 @@ const (
 // Request is a single control-socket command. One JSON object per line.
 type Request struct {
 	Op string `json:"op"`
+	// Port is the guest vsock port for OpVsockConnect / OpVsockListen.
+	Port uint32 `json:"port,omitempty"`
+	// Path is the host unix socket OpVsockListen forwards guest connections
+	// to. Must be absolute.
+	Path string `json:"path,omitempty"`
 }
 
 // Response answers a Request. One JSON object per line.
@@ -87,6 +112,13 @@ type Response struct {
 	// Guest mirrors Reason == ReasonGuest, kept for line-protocol
 	// readability.
 	Guest bool `json:"guest,omitempty"`
+	// Path is the host unix socket the helper serves the bridge on, set on
+	// the OpVsockConnect response.
+	Path string `json:"path,omitempty"`
+	// Protocol and Version are set on the OpVersion response: the protocol
+	// version the helper speaks and its build version.
+	Protocol int    `json:"protocol,omitempty"`
+	Version  string `json:"version,omitempty"`
 }
 
 // Result is persisted to ResultFileName when the VM stops, so state can be
@@ -134,6 +166,11 @@ type MachineSpec struct {
 	HardwareModel     []byte      `json:"hardware_model"`
 	MachineIdentifier []byte      `json:"machine_identifier"`
 	Display           DisplaySpec `json:"display"`
+	// Vsock attaches a virtio-vsock (VZVirtioSocketDevice) so the host and
+	// guest share a private channel that needs no NAT networking; the
+	// OpVsockConnect / OpVsockListen control ops drive it. Optional — the
+	// QEMU-backend analog is the vhost-vsock device.
+	Vsock bool `json:"vsock,omitempty"`
 }
 
 // DefaultDisplay matches macosvm's default screen so imported guests keep
@@ -169,6 +206,17 @@ func (s *MachineSpec) Validate() error {
 		return fmt.Errorf("vz machine spec: mac is required")
 	}
 	return nil
+}
+
+// VsockBridgeGlob matches the per-port vsock bridge sockets the helper
+// creates inside a VM directory (see VsockBridgePath). The helper removes
+// stale matches at startup, like the control socket.
+const VsockBridgeGlob = "vz-vsock-*.sock"
+
+// VsockBridgePath returns the unix socket the helper bridges a guest vsock
+// port on (the OpVsockConnect response path).
+func VsockBridgePath(vmDir string, port uint32) string {
+	return filepath.Join(vmDir, fmt.Sprintf("vz-vsock-%d.sock", port))
 }
 
 // SpecPath returns the machine-spec path inside a VM directory.

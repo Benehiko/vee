@@ -10,12 +10,14 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/Code-Hex/vz/v3"
 
+	"github.com/Benehiko/vee/internal/buildinfo"
 	"github.com/Benehiko/vee/internal/vzhelper"
 )
 
@@ -82,6 +84,11 @@ func runVM(vmDir string) error {
 	sockPath := vzhelper.ControlSocketPath(vmDir)
 	_ = os.Remove(sockPath)
 	_ = os.Remove(vzhelper.ResultPath(vmDir))
+	if stale, err := filepath.Glob(filepath.Join(vmDir, vzhelper.VsockBridgeGlob)); err == nil {
+		for _, p := range stale {
+			_ = os.Remove(p)
+		}
+	}
 
 	// State observation must be registered before Start so no transition is
 	// missed (the channel is buffered by the bindings).
@@ -105,26 +112,39 @@ func runVM(vmDir string) error {
 		_ = os.Remove(sockPath)
 	}()
 
+	// The socket device only exists on the running machine when the spec
+	// asked for it; a nil device makes the vsock ops answer with a clear
+	// error instead of a crash.
+	var dev guestVsock
+	if spec.Vsock {
+		if devices := machine.SocketDevices(); len(devices) > 0 {
+			dev = &vzSocketDevice{devices[0]}
+		}
+	}
+	vsock := newVsockState(vmDir, dev)
+	defer vsock.closeAll()
+
 	// state shared with control connections: stopRequested distinguishes
 	// host-requested stops from guest-initiated shutdowns; outcome carries
 	// the terminal reason ("guest"|"host"|"error") and must be stored before
 	// shutdownDone is closed; activeWaiters counts wait-shutdown responders
 	// still writing so the process does not exit under them.
-	var stopRequested atomic.Bool
-	var outcome atomic.Value
-	shutdownDone := make(chan struct{})
-	var activeWaiters atomic.Int64
+	cs := &controlState{
+		machine:      machine,
+		vsock:        vsock,
+		shutdownDone: make(chan struct{}),
+	}
 
-	go serveControl(ln, machine, &stopRequested, &outcome, shutdownDone, &activeWaiters)
+	go serveControl(ln, cs)
 
 	finish := func(reason string, res *vzhelper.Result) {
 		_ = vzhelper.WriteResult(vmDir, res)
-		outcome.Store(reason)
-		close(shutdownDone)
+		cs.outcome.Store(reason)
+		close(cs.shutdownDone)
 		// Give in-flight wait-shutdown responders a bounded window to flush
 		// their response before the process exits.
 		deadline := time.Now().Add(2 * time.Second)
-		for activeWaiters.Load() > 0 && time.Now().Before(deadline) {
+		for cs.activeWaiters.Load() > 0 && time.Now().Before(deadline) {
 			time.Sleep(10 * time.Millisecond)
 		}
 	}
@@ -132,7 +152,7 @@ func runVM(vmDir string) error {
 	for state := range stateCh {
 		switch state {
 		case vz.VirtualMachineStateStopped:
-			if stopRequested.Load() {
+			if cs.stopRequested.Load() {
 				finish(vzhelper.ReasonHost, &vzhelper.Result{StopRequested: true})
 				fmt.Println("vee-vz-helper: stopped on host request")
 			} else {
@@ -142,7 +162,7 @@ func runVM(vmDir string) error {
 			return nil
 		case vz.VirtualMachineStateError:
 			err := fmt.Errorf("virtual machine entered error state")
-			finish(vzhelper.ReasonError, &vzhelper.Result{StopRequested: stopRequested.Load(), Error: err.Error()})
+			finish(vzhelper.ReasonError, &vzhelper.Result{StopRequested: cs.stopRequested.Load(), Error: err.Error()})
 			return err
 		default:
 			// Transitional states (starting, stopping, …) need no action.
@@ -150,6 +170,15 @@ func runVM(vmDir string) error {
 	}
 	return nil
 }
+
+// vzSocketDevice adapts the framework's socket device (whose methods return
+// concrete types) to the cgo-free guestVsock interface vsockState uses.
+type vzSocketDevice struct {
+	dev *vz.VirtioSocketDevice
+}
+
+func (d *vzSocketDevice) Connect(port uint32) (net.Conn, error)    { return d.dev.Connect(port) }
+func (d *vzSocketDevice) Listen(port uint32) (net.Listener, error) { return d.dev.Listen(port) }
 
 // startWithLockRetry starts the VM, retrying while the auxiliary storage is
 // still locked. Virtualization.framework releases that lock asynchronously
@@ -261,6 +290,16 @@ func buildConfig(spec *vzhelper.MachineSpec) (*vz.VirtualMachineConfiguration, e
 	nic.SetMACAddress(mac)
 	config.SetNetworkDevicesVirtualMachineConfiguration([]*vz.VirtioNetworkDeviceConfiguration{nic})
 
+	// Optional virtio-vsock device: a private host↔guest channel that needs
+	// no NAT networking, driven via the vsock control ops (issue #119).
+	if spec.Vsock {
+		vsockDev, err := vz.NewVirtioSocketDeviceConfiguration()
+		if err != nil {
+			return nil, fmt.Errorf("vsock device: %w", err)
+		}
+		config.SetSocketDevicesVirtualMachineConfiguration([]vz.SocketDeviceConfiguration{vsockDev})
+	}
+
 	// Input devices so a future GUI/Screen Sharing session is usable.
 	keyboard, err := vz.NewUSBKeyboardConfiguration()
 	if err != nil {
@@ -276,19 +315,36 @@ func buildConfig(spec *vzhelper.MachineSpec) (*vz.VirtualMachineConfiguration, e
 	return config, nil
 }
 
+// controlState bundles everything control connections act on: the machine,
+// the vsock bridges, and the shutdown bookkeeping runVM shares with them.
+type controlState struct {
+	machine *vz.VirtualMachine
+	vsock   *vsockState
+	// stopRequested distinguishes host-requested stops from guest-initiated
+	// shutdowns.
+	stopRequested atomic.Bool
+	// outcome carries the terminal reason ("guest"|"host"|"error") and must
+	// be stored before shutdownDone is closed.
+	outcome      atomic.Value
+	shutdownDone chan struct{}
+	// activeWaiters counts wait-shutdown responders still writing so the
+	// process does not exit under them.
+	activeWaiters atomic.Int64
+}
+
 // serveControl accepts control-socket connections for the VM's lifetime.
-func serveControl(ln net.Listener, machine *vz.VirtualMachine, stopRequested *atomic.Bool, outcome *atomic.Value, shutdownDone <-chan struct{}, activeWaiters *atomic.Int64) {
+func serveControl(ln net.Listener, cs *controlState) {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			return // listener closed on shutdown
 		}
-		go handleConn(conn, machine, stopRequested, outcome, shutdownDone, activeWaiters)
+		go handleConn(conn, cs)
 	}
 }
 
 // handleConn processes newline-delimited JSON requests on one connection.
-func handleConn(conn net.Conn, machine *vz.VirtualMachine, stopRequested *atomic.Bool, outcome *atomic.Value, shutdownDone <-chan struct{}, activeWaiters *atomic.Int64) {
+func handleConn(conn net.Conn, cs *controlState) {
 	defer func() { _ = conn.Close() }()
 	dec := json.NewDecoder(conn)
 	enc := json.NewEncoder(conn)
@@ -300,10 +356,10 @@ func handleConn(conn net.Conn, machine *vz.VirtualMachine, stopRequested *atomic
 		var resp vzhelper.Response
 		switch req.Op {
 		case vzhelper.OpStatus:
-			resp = vzhelper.Response{OK: true, State: stateString(machine.State())}
+			resp = vzhelper.Response{OK: true, State: stateString(cs.machine.State())}
 		case vzhelper.OpStop:
-			stopRequested.Store(true)
-			if ok, err := machine.RequestStop(); err != nil || !ok {
+			cs.stopRequested.Store(true)
+			if ok, err := cs.machine.RequestStop(); err != nil || !ok {
 				if err == nil {
 					err = errors.New("guest did not acknowledge the stop request")
 				}
@@ -315,13 +371,28 @@ func handleConn(conn net.Conn, machine *vz.VirtualMachine, stopRequested *atomic
 			// One-shot: respond with the terminal reason, then close the
 			// connection. The waiter registration keeps runVM's exit drain
 			// from cutting the response short.
-			activeWaiters.Add(1)
-			<-shutdownDone
-			reason, _ := outcome.Load().(string)
+			cs.activeWaiters.Add(1)
+			<-cs.shutdownDone
+			reason, _ := cs.outcome.Load().(string)
 			resp = vzhelper.Response{OK: true, Reason: reason, Guest: reason == vzhelper.ReasonGuest}
 			_ = enc.Encode(&resp)
-			activeWaiters.Add(-1)
+			cs.activeWaiters.Add(-1)
 			return
+		case vzhelper.OpVersion:
+			v, _, _ := buildinfo.Resolve(version, commit, date)
+			resp = vzhelper.Response{OK: true, Protocol: vzhelper.ProtocolVersion, Version: v}
+		case vzhelper.OpVsockConnect:
+			if path, err := cs.vsock.connectBridge(req.Port); err != nil {
+				resp = vzhelper.Response{Error: err.Error()}
+			} else {
+				resp = vzhelper.Response{OK: true, Path: path}
+			}
+		case vzhelper.OpVsockListen:
+			if err := cs.vsock.listenForward(req.Port, req.Path); err != nil {
+				resp = vzhelper.Response{Error: err.Error()}
+			} else {
+				resp = vzhelper.Response{OK: true}
+			}
 		default:
 			resp = vzhelper.Response{Error: fmt.Sprintf("unknown op %q", req.Op)}
 		}
