@@ -329,7 +329,8 @@ A `VZVirtualMachine` lives inside the process that creates it, so vee spawns
 one detached **`vee-vz-helper`** per guest — the analog of a `qemu-system`
 process. The helper owns the VM for its lifetime and serves a small
 newline-JSON control socket in the VM directory (`status`, `stop`,
-`wait-shutdown`), which is what the QMP socket does for a QEMU VM. vee's
+`wait-shutdown`, `version`, and the vsock ops `vsock-connect` /
+`vsock-listen`), which is what the QMP socket does for a QEMU VM. vee's
 lifecycle model is unchanged: PID in `VMState`, liveness by signal, graceful
 stop then SIGKILL.
 
@@ -398,6 +399,38 @@ host-only network. `--password` overrides it, which is worth doing for a
 long-lived guest since Remote Login is on. It is printed once and saved to
 `macos-credentials.txt` (mode 0600) in the VM directory. SSH uses your vee
 key.
+
+### Host↔guest vsock channel
+
+Setting `vsock: true` in a guest's `vm.yaml` attaches a virtio-vsock device
+(`VZVirtioSocketDevice`) to the VM — a private host↔guest channel that does
+not depend on the guest's NAT network: no default-gateway detection, no
+DHCP-lease matching, and no host TCP port exposed on the shared network. It is
+the vz analog of the vhost-vsock device the QEMU backend attaches on Linux
+hosts (the same `vsock: true` enables that one too); issue #119.
+
+The framework's socket-device object lives inside `vee-vz-helper`, so the
+channel is driven through the helper's control socket:
+
+- `vsock-connect {"port": N}` — the helper publishes
+  `<vm-dir>/vz-vsock-N.sock` and opens a fresh vsock connection to guest port
+  N for every host connection accepted there. The guest must be listening on
+  `AF_VSOCK` port N. Any tool that can dial a unix socket can use the bridge
+  path directly; the op is idempotent and always answers with the path.
+- `vsock-listen {"port": N, "path": "/abs/host.sock"}` — guest-initiated vsock
+  connections to port N are each forwarded to the host unix socket at that
+  path, which the caller must be listening on. Repeating the op for a port
+  retargets its forward.
+
+From Go, `Manager.VZVsockConnect(ctx, name, port)` returns a `net.Conn` to a
+guest-listening port and `Manager.VZVsockListen(ctx, name, port, hostSocket)`
+installs a forward. Inside the guest, the host is always CID 2
+(`VMADDR_CID_HOST`).
+
+The control protocol also answers a `version` op with the protocol version
+vee and the helper must agree on (currently 1). A helper that predates these
+ops answers them with `unknown op`, which vee reports as an "update
+`vee-vz-helper`" error rather than a raw protocol failure.
 
 ### Caveats
 

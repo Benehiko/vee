@@ -1882,13 +1882,14 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 		opts = append(opts, qemu.WithTPM(qemu.NewTPM(tpmSock)))
 	}
 
-	// VSock — add vhost-vsock-pci device when SSH sharing is enabled. vhost is
-	// Linux-only; on other hosts SSH sharing relies on user-mode port forwarding.
-	if cfg.SSHShare && !platform.SupportsVsock() {
+	// VSock — add vhost-vsock-pci device when SSH sharing or vsock is
+	// enabled. vhost is Linux-only; on other hosts SSH sharing relies on
+	// user-mode port forwarding.
+	if wantVsock := cfg.SSHShare || cfg.Vsock; wantVsock && !platform.SupportsVsock() {
 		m.provider.Logger().Warn("vsock (vhost-vsock-pci) is unsupported on this host — SSH share falls back to user-mode port forwarding",
 			zap.String("vm", cfg.Name),
 			zap.String("host_os", platform.HostOS()))
-	} else if cfg.SSHShare {
+	} else if wantVsock {
 		cid := cfg.VsockCID
 		if cid == 0 {
 			cid = deterministicCID(cfg.Name)

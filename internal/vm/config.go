@@ -254,8 +254,14 @@ type VMConfig struct {
 	// SSHHost overrides IP resolution for SSH-based operations (backup, status).
 	// Set this for non-template VMs whose IP cannot be resolved from the MAC.
 	// Format: host or host:port (port defaults to 22).
-	SSHHost       string   `yaml:"ssh_host,omitempty"      json:"ssh_host,omitempty"`
-	SSHShare      bool     `yaml:"ssh_share,omitempty"     json:"ssh_share,omitempty"`
+	SSHHost  string `yaml:"ssh_host,omitempty"      json:"ssh_host,omitempty"`
+	SSHShare bool   `yaml:"ssh_share,omitempty"     json:"ssh_share,omitempty"`
+	// Vsock attaches a virtio-vsock device for a private host↔guest channel
+	// (issue #119). QEMU backend: vhost-vsock-pci (Linux hosts only), the
+	// same device ssh_share enables, with vsock_cid picking the guest CID.
+	// vz backend: a VZVirtioSocketDevice, driven through the helper control
+	// protocol (Manager.VZVsockConnect / VZVsockListen).
+	Vsock         bool     `yaml:"vsock,omitempty"         json:"vsock,omitempty"`
 	VsockCID      uint32   `yaml:"vsock_cid,omitempty"     json:"vsock_cid,omitempty"`
 	Headless      bool     `yaml:"headless,omitempty"      json:"headless,omitempty"`
 	SSHPort       int      `yaml:"ssh_port,omitempty"      json:"ssh_port,omitempty"`

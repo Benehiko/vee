@@ -87,6 +87,10 @@ type Opts struct {
 	SSHShare   *bool
 	SSHPort    int
 
+	// Vsock attaches a virtio-vsock device for a private host↔guest channel
+	// (issue #119).
+	Vsock *bool
+
 	// Hostname.
 	Hostname string
 
@@ -566,6 +570,9 @@ func applyOverrides(cfg *vm.VMConfig, opts Opts, prov provider.Provider) {
 	}
 	if opts.SSHShare != nil {
 		cfg.SSHShare = *opts.SSHShare
+	}
+	if opts.Vsock != nil {
+		cfg.Vsock = *opts.Vsock
 	}
 	if opts.Headless != nil {
 		cfg.Headless = *opts.Headless

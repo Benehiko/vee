@@ -313,6 +313,7 @@ type vmCreateIn struct {
 	VirtiofsTag string `json:"virtiofs_tag,omitempty"`
 	SSHKeyFile  string `json:"ssh_key_file,omitempty" jsonschema:"extra public key file to authorize in the guest"`
 	SSHShare    *bool  `json:"ssh_share,omitempty" jsonschema:"enable host SSH-agent sharing via vsock"`
+	Vsock       *bool  `json:"vsock,omitempty" jsonschema:"attach a virtio-vsock device for a private host-guest channel"`
 
 	// passthrough template.
 	NVMeDev  string `json:"nvme_dev,omitempty" jsonschema:"raw NVMe device for the passthrough template"`
@@ -506,6 +507,7 @@ func (s *server) vmCreate(ctx context.Context, _ *mcp.CallToolRequest, in vmCrea
 		VirtiofsTag:   in.VirtiofsTag,
 		SSHKeyFile:    in.SSHKeyFile,
 		SSHShare:      in.SSHShare,
+		Vsock:         in.Vsock,
 		SSHPort:       in.SSHPort,
 		Hostname:      in.Hostname,
 		User:          in.User,

@@ -82,7 +82,7 @@ func (m *Manager) gracefulShutdown(ctx context.Context, name string, state *VMSt
 				zap.String("vm", name), zap.Error(err))
 		}
 		if state.ControlSocket != "" {
-			if _, err := vzControlRequest(ctx, state.ControlSocket, vzhelper.OpStop, 5*time.Second); err != nil {
+			if _, err := vzControlRequest(ctx, state.ControlSocket, &vzhelper.Request{Op: vzhelper.OpStop}, 5*time.Second); err != nil {
 				m.provider.Logger().Debug("vz stop request failed",
 					zap.String("vm", name), zap.Error(err))
 			}
