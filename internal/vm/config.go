@@ -299,3 +299,23 @@ func (c *VMConfig) BackendName() backend.Name {
 	}
 	return backend.Name(c.Backend)
 }
+
+// SSHUsername resolves the account SSH-based operations log in as: the
+// explicit ssh_user override, then the cloud-init user created at build time,
+// then the distro image's default user. Templates that skip creating a user
+// (docker, desktop, dns-sink — the Alpine image ships no bash for useradd)
+// inject the SSH keys into the image's default user only, so without the
+// last fallback ssh(1) would silently substitute the host username. Returns
+// "" when the config carries no account at all (e.g. macOS guests).
+func (c *VMConfig) SSHUsername() string {
+	if c.SSHUser != "" {
+		return c.SSHUser
+	}
+	if c.CloudInit == nil {
+		return ""
+	}
+	if c.CloudInit.User != "" {
+		return c.CloudInit.User
+	}
+	return c.CloudInit.DefaultUser
+}

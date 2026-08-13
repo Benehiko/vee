@@ -573,10 +573,7 @@ func (s *server) vmBackup(_ context.Context, _ *mcp.CallToolRequest, in vmBackup
 // minus the interactive fallback: persisted ssh_host, forwarded SSH port, or
 // MAC-based IP resolution — in that order.
 func backupSSHConn(cfg *vm.VMConfig, state *vm.VMState) (backup.SSHConn, error) {
-	user := cfg.SSHUser
-	if user == "" && cfg.CloudInit != nil && cfg.CloudInit.User != "" {
-		user = cfg.CloudInit.User
-	}
+	user := cfg.SSHUsername()
 	identity := veeIdentity()
 
 	switch {
@@ -807,10 +804,7 @@ func (s *server) runnerSnapshot(ctx context.Context, _ *mcp.CallToolRequest, in 
 	if state.SSHPort == 0 {
 		return nil, runnerSnapshotOut{}, fmt.Errorf("VM %q has no forwarded SSH port", in.Name)
 	}
-	user := cfg.SSHUser
-	if user == "" && cfg.CloudInit != nil {
-		user = cfg.CloudInit.User
-	}
+	user := cfg.SSHUsername()
 
 	id, err := runnercreds.LoadOrCreateIdentity()
 	if err != nil {

@@ -47,8 +47,9 @@ user-mode NAT port-forward (--ssh-port), or the vee daemon's loopback proxy
 for bridge-mode VMs. Otherwise (and for vz macOS guests) resolves the guest
 IP by MAC address from the host's DHCP lease and ARP/neighbour tables.
 
-The username defaults to the cloud-init user configured at creation time.
-Override with --user (or ssh's -l).
+The username defaults to the cloud-init user configured at creation time,
+falling back to the distro image's default user for templates that don't
+create one (docker, desktop, dns-sink). Override with --user (or ssh's -l).
 
 ssh(1) flags are accepted directly, before the VM name — -L, -R, -D, -J, -A,
 -o and the rest of the ssh flag surface are passed through untouched. Anything
@@ -92,10 +93,7 @@ Examples:
 
 		user := sshUser
 		if user == "" {
-			user = cfg.SSHUser
-		}
-		if user == "" && cfg.CloudInit != nil && cfg.CloudInit.User != "" {
-			user = cfg.CloudInit.User
+			user = cfg.SSHUsername()
 		}
 
 		// For TrueNAS, default to stored admin user.

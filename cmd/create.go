@@ -402,10 +402,7 @@ func snapshotRunnerCreds(cmd *cobra.Command, mgr *vm.Manager, name string) {
 		return
 	}
 
-	user := cfg.SSHUser
-	if user == "" && cfg.CloudInit != nil {
-		user = cfg.CloudInit.User
-	}
+	user := cfg.SSHUsername()
 
 	id, err := runnercreds.LoadOrCreateIdentity()
 	if err != nil {

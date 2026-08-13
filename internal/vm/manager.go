@@ -2085,10 +2085,7 @@ func (m *Manager) execGuestShell(ctx context.Context, cfg *VMConfig, state *VMSt
 	if state.SSHPort > 0 {
 		home, _ := os.UserHomeDir()
 		identity := home + "/.vee/ssh/id_ed25519"
-		user := cfg.SSHUser
-		if user == "" && cfg.CloudInit != nil {
-			user = cfg.CloudInit.DefaultUser
-		}
+		user := cfg.SSHUsername()
 		if user == "" {
 			user = "root"
 		}
