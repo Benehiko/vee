@@ -133,6 +133,35 @@ The `windows` template runs a fully unattended install:
 - First-logon runs `setup-guest.ps1` (WinFsp + virtio guest tools), enables the
   OpenSSH server, and installs the host's SSH public keys (see below).
 
+## Disk size
+
+The Windows system disk defaults to **64 GB** — Microsoft's stated Windows 11
+minimum. A `default_disk_size` in vee's config larger than 64G wins; smaller
+values are raised to the floor (a 20 GB install leaves only ~4 GB free, which
+the first Windows update or a Docker Desktop install exhausts). The qcow2
+image is thin-provisioned, so the larger virtual size costs no host space
+until the guest actually writes.
+
+An existing guest that has outgrown its disk can be grown in place:
+
+```sh
+vee resize winvm 100G     # absolute target
+vee resize winvm +40G     # relative increase
+```
+
+vee grows the image (stopping and restarting the VM around the operation) and
+the guest then extends `C:` over the new space — Disk Management → *Extend
+Volume*, or:
+
+```powershell
+Resize-Partition -DriveLetter C -Size (Get-PartitionSupportedSize -DriveLetter C).SizeMax
+```
+
+If Windows placed a recovery partition between `C:` and the free space, delete
+it first (`diskpart` → `select disk 0` → `list partition` → `select partition
+<n>` → `delete partition override`). vee's own unattended layout puts `C:`
+last, so guests installed by vee normally extend without this step.
+
 ## SSH access
 
 The `windows` template is reachable over SSH out of the box, the same way the
