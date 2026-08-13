@@ -259,9 +259,11 @@ jobs:
             echo
             echo 'Verify the install: `vee --help`'
             echo
-            echo "## Run as a daemon (Linux)"
+            echo "## Run as a daemon (Linux & macOS)"
             echo
-            echo "The daemon autostarts VMs on boot and stops them cleanly on host shutdown:"
+            echo "The daemon autostarts VMs on boot and stops them cleanly on host shutdown. \`vee daemon install\` registers it with the host's service manager — systemd on Linux, launchd on macOS:"
+            echo
+            echo "### Linux (systemd)"
             echo
             echo '```sh'
             echo 'vee daemon install               # writes /etc/systemd/system/vee.service, enables + starts it'
@@ -269,7 +271,15 @@ jobs:
             echo 'sudo systemctl status vee        # check it'"'"'s running'
             echo '```'
             echo
-            echo "After upgrading, restart the daemon so it runs the new binary. If the new binary lands at a different path, re-run \`vee daemon install\`."
+            echo "### macOS (launchd)"
+            echo
+            echo '```sh'
+            echo 'vee daemon install                                 # writes /Library/LaunchDaemons/io.vee.daemon.plist, loads + starts it'
+            echo 'sudo launchctl kickstart -k system/io.vee.daemon   # after upgrading the vee binary in place'
+            echo 'sudo launchctl print system/io.vee.daemon          # check it'"'"'s running'
+            echo '```'
+            echo
+            echo "After upgrading, restart the daemon so it runs the new binary. If the new binary lands at a different path, re-run \`vee daemon install\`. See [docs/host-shutdown.md](https://github.com/${{ github.repository }}/blob/main/docs/host-shutdown.md) for how graceful VM shutdown works on each platform."
           } > body.md
           cat body.md
 
