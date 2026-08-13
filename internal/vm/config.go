@@ -287,8 +287,20 @@ type VMConfig struct {
 	// SkipInstall skips the auto-install pass on first boot. The VM boots
 	// directly from its primary disk as if installation were already complete.
 	// Set this when attaching a disk that already has an OS on it.
-	SkipInstall bool      `yaml:"skip_install,omitempty" json:"skip_install,omitempty"`
-	CreatedAt   time.Time `yaml:"created_at"            json:"created_at"`
+	SkipInstall bool `yaml:"skip_install,omitempty" json:"skip_install,omitempty"`
+	// Kernel boots a Linux guest directly from this external kernel image
+	// instead of a bootloader on the disk — for minimal/appliance images that
+	// ship as kernel + command line + data disk with no EFI bootloader (issue
+	// #129). Absolute host path. Wired for the vz backend (VZLinuxBootLoader);
+	// mutually exclusive with EFI disk boot per guest.
+	Kernel string `yaml:"kernel,omitempty" json:"kernel,omitempty"`
+	// Cmdline is the kernel command line for a direct-kernel boot (e.g.
+	// "console=hvc0 root=/dev/vda"). Requires kernel.
+	Cmdline string `yaml:"cmdline,omitempty" json:"cmdline,omitempty"`
+	// Initrd is an optional initial ramdisk for a direct-kernel boot.
+	// Absolute host path; requires kernel.
+	Initrd    string    `yaml:"initrd,omitempty" json:"initrd,omitempty"`
+	CreatedAt time.Time `yaml:"created_at"            json:"created_at"`
 }
 
 // BackendName resolves the VM's virtualization backend, defaulting to QEMU

@@ -34,7 +34,8 @@ const vzStartTimeout = 10 * time.Second
 // with a macos: section runs a macOS guest (restored bundle: raw disk image,
 // auxiliary storage, hardware-model and machine-identifier blobs — issue
 // #51); without one it runs a Linux guest booted via EFI from a whole-disk
-// raw image (issue #127).
+// raw image (issue #127) or directly from an external kernel image when the
+// config names one (issue #129).
 func (m *Manager) buildVZMachine(_ context.Context, cfg *VMConfig) (backend.Machine, error) {
 	if !platform.IsMacOS() || platform.HostArch() != "arm64" {
 		return nil, fmt.Errorf("the vz backend requires an Apple Silicon macOS host (got %s/%s)",
@@ -99,6 +100,12 @@ func (m *Manager) buildVZMachine(_ context.Context, cfg *VMConfig) (backend.Mach
 	}
 
 	if cfg.MacOS != nil {
+		// Create() refuses this pairing, but a hand-edited vm.yaml reaches
+		// here directly — refuse rather than silently booting the macOS boot
+		// loader with the kernel: ignored.
+		if cfg.Kernel != "" || cfg.Cmdline != "" || cfg.Initrd != "" {
+			return nil, fmt.Errorf("direct-kernel boot (kernel/cmdline/initrd) is for Linux guests — a macos: guest boots through the macOS boot loader; remove the fields from vm.yaml")
+		}
 		auxPath := cfg.MacOS.AuxiliaryStorage
 		if auxPath != "" && !filepath.IsAbs(auxPath) {
 			return nil, fmt.Errorf("the vz backend requires an absolute auxiliary_storage path (got %q)", auxPath)
@@ -120,11 +127,29 @@ func (m *Manager) buildVZMachine(_ context.Context, cfg *VMConfig) (backend.Mach
 		spec.MachineIdentifier = cfg.MacOS.MachineIdentifier
 		spec.Display = display
 	} else {
-		// Linux guest: EFI boot, headless, console captured to the serial
-		// log. The variable store is created by the helper on first boot.
+		// Linux guest: headless, console captured to the serial log. Boot is
+		// direct-kernel (VZLinuxBootLoader — an external kernel image plus
+		// command line and optional initrd, issue #129) when the config names
+		// a kernel, EFI from the disk image otherwise; the two are mutually
+		// exclusive per guest. The variable store is created by the helper on
+		// first boot.
 		spec.Platform = vzhelper.PlatformLinux
-		spec.EFIVariableStore = vzhelper.EFIVariableStorePath(vmDir)
 		spec.SerialLog = vzhelper.SerialLogPath(vmDir)
+		if cfg.Kernel != "" {
+			for name, p := range map[string]string{"kernel": cfg.Kernel, "initrd": cfg.Initrd} {
+				if p != "" && !filepath.IsAbs(p) {
+					return nil, fmt.Errorf("the vz backend requires an absolute %s path (got %q)", name, p)
+				}
+			}
+			spec.Kernel = cfg.Kernel
+			spec.Cmdline = cfg.Cmdline
+			spec.Initrd = cfg.Initrd
+		} else {
+			if cfg.Cmdline != "" || cfg.Initrd != "" {
+				return nil, fmt.Errorf("cmdline / initrd only apply to a direct-kernel boot — set kernel: in vm.yaml too")
+			}
+			spec.EFIVariableStore = vzhelper.EFIVariableStorePath(vmDir)
+		}
 	}
 
 	if err := spec.Validate(); err != nil {
@@ -173,6 +198,20 @@ func (m *Manager) prepareVZLinuxCreate(ctx context.Context, cfg *VMConfig) error
 	for _, d := range cfg.Disks {
 		if d.Passthrough {
 			return fmt.Errorf("the vz backend does not support raw device passthrough (disk %s) — use the QEMU backend", d.Path)
+		}
+	}
+	// Direct-kernel boot (issue #129): the kernel and initrd are host files
+	// VZLinuxBootLoader reads at every start — verify them here, at create,
+	// where the user sees the error, not at first start.
+	for name, p := range map[string]string{"kernel": cfg.Kernel, "initrd": cfg.Initrd} {
+		if p == "" {
+			continue
+		}
+		if !filepath.IsAbs(p) {
+			return fmt.Errorf("the vz backend requires an absolute %s path (got %q)", name, p)
+		}
+		if _, err := os.Stat(p); err != nil {
+			return fmt.Errorf("%s image: %w", name, err)
 		}
 	}
 

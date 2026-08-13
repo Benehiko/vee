@@ -377,7 +377,7 @@ docs also live in this repo:
 
 - [docs/prerequisites.md](docs/prerequisites.md) — system setup, groups, bridge networking, OVMF
 - [docs/macos.md](docs/macos.md) — macOS on Apple Silicon: HVF host support, the per-guest GPU matrix, and macOS guests on Virtualization.framework
-- [docs/linux-vz.md](docs/linux-vz.md) — Linux guests on Virtualization.framework (`--backend vz`): native vsock on macOS hosts, EFI boot, raw disks
+- [docs/linux-vz.md](docs/linux-vz.md) — Linux guests on Virtualization.framework (`--backend vz`): native vsock on macOS hosts, EFI or direct-kernel boot, raw disks
 - [docs/windows.md](docs/windows.md) — Windows (WHPX) host support, feature matrix, and the nested-virtualization limitation
 - [docs/windows-guests.md](docs/windows-guests.md) — the on-demand Windows guest ISO build pipeline
 - [docs/windows-24h2-install.md](docs/windows-24h2-install.md) — full writeup of the Windows 11 24H2 install debugging
