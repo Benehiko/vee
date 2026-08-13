@@ -44,8 +44,9 @@ and `--backend vz` switches the machine that boots it.
 The guest is hosted by the same `vee-vz-helper` process that hosts macOS
 guests — the machine spec (`vz-machine.json`) carries `"platform": "linux"`
 and the helper builds a `VZGenericPlatformConfiguration` instead of the mac
-platform. The helper ships in the `darwin-arm64` release tarball, or build it
-from a checkout with `make vz-helper`.
+platform. The helper ships in the `darwin-arm64` release tarball; from a
+checkout, `make install` on an Apple Silicon Mac builds and installs it
+alongside `vee` (or run `make vz-helper` for the helper alone).
 
 ## Requirements and limitations
 

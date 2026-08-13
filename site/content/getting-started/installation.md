@@ -69,8 +69,9 @@ for it under `$VEE_VZ_HELPER` first, then beside the running `vee` binary, then
 in `~/.vee/bin`, then on your `PATH`. It is ad-hoc codesigned with the
 `com.apple.security.virtualization` entitlement, which macOS honours without a
 paid Apple Developer account; a browser download arrives quarantined, and vee
-clears that flag itself whenever it resolves the helper. From a source checkout,
-`make vz-helper` builds, signs and installs it — plain `make install` does not.
+clears that flag itself whenever it resolves the helper. From a source checkout
+on an Apple Silicon Mac, `make install` builds, signs and installs it alongside
+`vee` (`make vz-helper` does the helper alone).
 
 See [macOS guests](../macos-guests/) for what that backend supports.
 

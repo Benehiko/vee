@@ -318,8 +318,9 @@ vee create mymac --template macos       # restore + provision, then vee ssh myma
 ```
 
 Requirements: an Apple Silicon host on macOS 13+, the `vee-vz-helper` binary
-(shipped in the `darwin-arm64` release tarball, or `make vz-helper` from a
-checkout), 15-20 GB for the cached IPSW plus the guest disk, and one `sudo`
+(shipped in the `darwin-arm64` release tarball; from a checkout,
+`make install` on an Apple Silicon Mac builds and installs it alongside
+`vee`), 15-20 GB for the cached IPSW plus the guest disk, and one `sudo`
 prompt during creation.
 
 Apple's licence permits virtualized macOS **only on Apple hardware, two

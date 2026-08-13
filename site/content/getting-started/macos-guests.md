@@ -17,7 +17,7 @@ rather start it yourself later with `vee start mymac`.
 ## Requirements
 
 - **Apple Silicon Mac** running macOS 13 or newer. macOS guests are arm64-only, and Virtualization.framework will not restore a guest newer than the host.
-- The **`vee-vz-helper`** binary, which owns each guest VM. It ships in the `darwin-arm64` release tarball next to `vee`; from a source checkout, run `make vz-helper`.
+- The **`vee-vz-helper`** binary, which owns each guest VM. It ships in the `darwin-arm64` release tarball next to `vee`; from a source checkout on an Apple Silicon Mac, `make install` builds and installs it alongside `vee`.
 - Disk space for the restore image (**15-20 GB** IPSW depending on the macOS version — 26.6 is 19.8 GB — cached under `~/.vee/iso/`) plus the guest disk (64 GB by default, sparse).
 - `sudo` once per guest, during creation. vee explains why when it asks: launchd only loads root-owned daemons, and the first-boot provisioning it installs into the guest is a launch daemon.
 

@@ -20,11 +20,21 @@ LDFLAGS     := -s -w \
 CONTAINER_RUNTIME := $(shell command -v nerdctl 2>/dev/null || command -v docker 2>/dev/null)
 HUGO_IMAGE        := hugomods/hugo:go-git-0.147.0
 
-.PHONY: all build build-windows vz-helper install clean e2e site lint fmt test hooks licenses
+# The Virtualization.framework helper (cgo + codesign) is only buildable on
+# Apple Silicon macOS. There it is part of the regular build/install chain so
+# a plain `make install` never leaves a stale vee-vz-helper behind.
+UNAME_S := $(shell uname -s)
+UNAME_M := $(shell uname -m)
+ifeq ($(UNAME_S)/$(UNAME_M),Darwin/arm64)
+BUILD_DEPS   := build-vz-helper
+INSTALL_DEPS := install-vz-helper
+endif
+
+.PHONY: all build build-windows build-vz-helper vz-helper install install-vz-helper clean e2e site lint fmt test hooks licenses
 
 all: build
 
-build:
+build: $(BUILD_DEPS)
 	$(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BINARY) .
 
 # Cross-compile the Windows (WHPX/x86_64) binary. This is a build-only target —
@@ -33,19 +43,25 @@ build:
 build-windows:
 	GOOS=windows GOARCH=amd64 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BINARY).exe .
 
-# Build and ad-hoc sign the Virtualization.framework helper (macOS guests,
-# Apple Silicon hosts only — issue #51). The entitlement is honored under
-# ad-hoc signatures; without it the helper cannot create a VZVirtualMachine.
-# cgo is required (Objective-C bindings), hence the darwin-only target.
-vz-helper:
+# Build and ad-hoc sign the Virtualization.framework helper (macOS/Linux
+# guests, Apple Silicon hosts only — issues #51/#127). The entitlement is
+# honored under ad-hoc signatures; without it the helper cannot create a
+# VZVirtualMachine. cgo is required (Objective-C bindings), hence the
+# darwin-only target. On Apple Silicon this runs as part of `make build`.
+build-vz-helper:
 	CGO_ENABLED=1 $(GO) build $(GOFLAGS) -trimpath \
 	  -ldflags "-s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)" \
 	  -o vee-vz-helper ./cmd/vee-vz-helper
 	codesign --force --sign - --timestamp=none \
 	  --entitlements internal/vzhelper/vz.entitlements vee-vz-helper
+
+install-vz-helper: build-vz-helper
 	install -d $(INSTALL_DIR)
 	install -m 755 vee-vz-helper $(INSTALL_DIR)/vee-vz-helper
 	@echo "Installed to $(INSTALL_DIR)/vee-vz-helper"
+
+# Back-compat alias: `make vz-helper` still builds, signs, and installs.
+vz-helper: install-vz-helper
 
 # Mirror the CI lint job locally: format check (gofumpt + goimports) then lint.
 lint:
@@ -64,7 +80,7 @@ hooks:
 	git config core.hooksPath .githooks
 	@echo "git hooks enabled (core.hooksPath=.githooks)"
 
-install: build
+install: build $(INSTALL_DEPS)
 	mkdir -p $(INSTALL_DIR)
 	install -m 755 $(BINARY) $(INSTALL_DIR)/$(BINARY)
 	@echo "Installed to $(INSTALL_DIR)/$(BINARY)"

@@ -25,7 +25,7 @@ vee stop myvm      # graceful shutdown
 >
 > **macOS as a host (Apple Silicon):** vee runs on Apple Silicon Macs, driving QEMU through Hypervisor.framework (HVF) with aarch64 guests. GPU acceleration is the weak spot — the published QEMU bundle is a plain-HVF build, because the pinned QEMU and the only macOS-patched virglrenderer cannot currently be compiled together. See [docs/macos.md](docs/macos.md) for setup, the per-guest GPU matrix, and limitations.
 >
-> **macOS as a guest (Apple Silicon):** vee can also restore and run a macOS VM — `vee create mymac --template macos` — on Apple's Virtualization.framework. This is a different thing from the note above, and it needs the `vee-vz-helper` binary, which ships beside `vee` in the `darwin-arm64` release tarball or can be built from a checkout with `make vz-helper` (`make install` alone does not build it). Apple's licence permits macOS VMs only on Apple hardware and at most two at a time. See [macOS guests](https://vee.benehiko.com/getting-started/macos-guests/) or [docs/macos.md](docs/macos.md#macos-guests-virtualizationframework).
+> **macOS as a guest (Apple Silicon):** vee can also restore and run a macOS VM — `vee create mymac --template macos` — on Apple's Virtualization.framework. This is a different thing from the note above, and it needs the `vee-vz-helper` binary, which ships beside `vee` in the `darwin-arm64` release tarball; on an Apple Silicon checkout, `make install` builds and installs it alongside `vee`. Apple's licence permits macOS VMs only on Apple hardware and at most two at a time. See [macOS guests](https://vee.benehiko.com/getting-started/macos-guests/) or [docs/macos.md](docs/macos.md#macos-guests-virtualizationframework).
 >
 > **Windows:** vee also runs on Windows (amd64) via the Windows Hypervisor Platform (WHPX) with x86-64 guests. VFIO, virtiofs, vsock, bridge networking, and swtpm are Linux-only and degrade gracefully. See [docs/windows.md](docs/windows.md) for prerequisites and limitations.
 
@@ -306,11 +306,14 @@ make build   # build the vee binary
 make test    # go test -race ./...
 ```
 
-On an Apple Silicon Mac, `make vz-helper` builds `vee-vz-helper` — the binary that
-hosts macOS guests — and installs it beside `vee` in `~/.vee/bin`. It needs cgo
-(the Virtualization.framework bindings are Objective-C) and is ad-hoc codesigned
-with the `com.apple.security.virtualization` entitlement, which macOS honours
-without a paid Apple Developer account. Only `--template macos` needs it.
+On an Apple Silicon Mac, `make build` and `make install` also build
+`vee-vz-helper` — the binary that hosts Virtualization.framework guests — and
+`make install` puts it beside `vee` in `~/.vee/bin` (`make vz-helper` does the
+same on its own). It needs cgo (the Virtualization.framework bindings are
+Objective-C) and is ad-hoc codesigned with the
+`com.apple.security.virtualization` entitlement, which macOS honours without a
+paid Apple Developer account. Only vz-backend guests (`--template macos`,
+`--vz`) need it.
 
 Formatting (`gofumpt` + `goimports`) and linting are enforced by a strict
 `.golangci.yml`. `make lint` runs `golangci-lint fmt --diff` (fails on any
