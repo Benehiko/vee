@@ -103,6 +103,8 @@ jobs:
 
       - name: Package binary
         env:
+          # SOURCE.txt links the release page carrying the source assets.
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
           CONFIGURE_FLAGS: >-
             --target-list=${{ matrix.qemu_target }} --enable-opengl
             --enable-virglrenderer --enable-sdl --enable-gtk --enable-spice
@@ -176,6 +178,7 @@ jobs:
           path: |
             dist/*.tar.gz
             dist/*.sha256
+            dist/*.patch
 
   build-windows:
     name: Build vee-qemu (windows-amd64)
@@ -218,6 +221,8 @@ jobs:
       contents: write
 
     steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
       - name: Set release tag
         id: tag
         run: echo "tag=qemu-${{ inputs.qemu_version }}-${{ inputs.vee_suffix }}" >> "$GITHUB_OUTPUT"
@@ -227,6 +232,45 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+
+      - name: Fetch corresponding QEMU source (GPLv2 §3)
+        run: |
+          # GPLv2 §3: the binaries and their complete corresponding source must
+          # be available from the same place. Every build leg compiles the
+          # exact tarball at this version-pinned URL, so attach that tarball to
+          # the release next to the bundles. The macOS one-line patch arrives
+          # via the darwin artifact as *.patch.
+          mkdir -p dist
+          SRC="qemu-${{ inputs.qemu_version }}.tar.xz"
+          curl -fsSL "https://download.qemu.org/${SRC}" -o "dist/${SRC}"
+          ( cd dist && sha256sum "${SRC}" > "${SRC}.sha256" )
+
+      - name: Snapshot build scripts and config
+        run: |
+          # Attach the exact build recipe (scripts, workflow, signing
+          # entitlements) as a release asset. The repo copies keep evolving, so
+          # a source request years from now must not depend on digging the
+          # matching revision out of git history — the snapshot on the release
+          # page is self-contained.
+          SNAP="$(mktemp -d)/vee-build-scripts"
+          mkdir -p "$SNAP/.github/workflows" "$SNAP/internal/qemubin"
+          cp -R scripts "$SNAP/scripts"
+          cp .github/workflows/qemu-release.yml "$SNAP/.github/workflows/"
+          cp internal/qemubin/qemu-entitlements.plist "$SNAP/internal/qemubin/"
+          cat > "$SNAP/BUILDINFO.txt" <<EOF
+          Build recipe snapshot for vee-qemu release ${{ steps.tag.outputs.tag }}
+
+          QEMU version:  ${{ inputs.qemu_version }}
+          vee suffix:    ${{ inputs.vee_suffix }}
+          vee commit:    ${{ github.sha }}
+          workflow run:  ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          These are the exact build scripts and CI config that produced the
+          bundles in this release. The corresponding QEMU source is the
+          qemu-${{ inputs.qemu_version }}.tar.xz asset published alongside
+          (plus the *.patch asset for the macOS bundle).
+          EOF
+          tar czf dist/vee-build-scripts.tar.gz -C "$(dirname "$SNAP")" vee-build-scripts
 
       - name: Create release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
@@ -247,12 +291,15 @@ jobs:
             QEMU is licensed under the **GNU General Public License, version 2
             (GPLv2-only)**. Each bundle ships the full license text and a
             corresponding-source pointer under `share/licenses/qemu/`
-            (`COPYING` + `SOURCE.txt`). The complete corresponding source is the
-            upstream tarball `https://download.qemu.org/qemu-${{ inputs.qemu_version }}.tar.xz`
-            plus any patches noted in `SOURCE.txt`, reproducible via the build
-            scripts in this repository. **Written offer:** for three years the
-            vee maintainers will, on request (open a GitHub issue), provide the
-            complete corresponding source for the cost of distribution.
+            (`COPYING` + `SOURCE.txt`). The **complete corresponding source is
+            attached to this release**: `qemu-${{ inputs.qemu_version }}.tar.xz`
+            is the exact upstream tarball every bundle was built from, and
+            `qemu-${{ inputs.qemu_version }}-macos-egl-helpers.patch` is the
+            one-line patch additionally applied to the macOS bundle. Configure
+            flags are recorded in each bundle's `SOURCE.txt`, and
+            `vee-build-scripts.tar.gz` snapshots the exact build scripts and CI
+            config that produced these bundles — the release page is
+            self-contained; no repository archaeology needed to rebuild.
 
             After publishing this release, update `internal/qemubin/version.go`:
             ```go
