@@ -88,6 +88,17 @@ func TestWindowsARM64ConfigShape(t *testing.T) {
 	if cfg.Disks[2].Size != "64G" {
 		t.Errorf("os disk size %q, want the provider default 64G", cfg.Disks[2].Size)
 	}
+
+	// SSH must be turnkey: the unattend flow enables sshd + authorized keys,
+	// so the config must carry the forwarded port that makes them reachable.
+	if cfg.SSHPort <= 0 {
+		t.Error("aarch64 config has no forwarded SSH port; the guest would be unreachable on user-mode NAT")
+	}
+	// qemu-ga rides the vioserial driver, which is test-signed on ARM64 and
+	// cannot load — attaching the QGA channel would just be a dead device.
+	if cfg.GuestAgent {
+		t.Error("aarch64 config must not attach a QGA channel (vioserial is test-signed on ARM64)")
+	}
 }
 
 // TestWindowsARM64InterfaceNames pins the interface strings in the arm64

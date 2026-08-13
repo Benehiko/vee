@@ -130,8 +130,41 @@ The `windows` template runs a fully unattended install:
 - Windows 11 hardware checks (TPM, Secure Boot, RAM, CPU) are bypassed via
   `HKLM\SYSTEM\Setup\LabConfig` keys, since the VM presents a real TPM 2.0 but no
   enrolled Secure Boot keys.
-- First-logon runs `setup-guest.ps1` (WinFsp + virtio guest tools) and enables
-  the OpenSSH server for headless access.
+- First-logon runs `setup-guest.ps1` (WinFsp + virtio guest tools), enables the
+  OpenSSH server, and installs the host's SSH public keys (see below).
+
+## SSH access
+
+The `windows` template is reachable over SSH out of the box, the same way the
+Linux templates are:
+
+- **Forwarded port.** The VM gets a host port forwarded to guest port 22
+  (a stable per-name port in 2200–2299, or `--ssh-port` to pick one at create
+  time). The SPICE display and the forward coexist — no `--headless` needed.
+- **Keys.** The first-logon script writes the keys from `--ssh-keys` plus the
+  vee-managed key into `C:\ProgramData\ssh\administrators_authorized_keys`
+  (ACL'd to Administrators + SYSTEM, as sshd requires), so `vee ssh <name>`
+  works with no guest-side setup. Password auth also works with the unattend
+  account (`vee` / `vee`).
+- **Guest agent.** On amd64 the virtio-win guest tools install `qemu-ga` and
+  the template attaches the QGA channel, so `vee ip` and readiness checks have
+  a guest-agent path alongside SSH. (Not on arm64 — the ARM64 vioserial driver
+  is test-signed and cannot load; SSH is the control path there.)
+
+To change the forwarded port after the VM exists:
+
+```sh
+vee config winvm --ssh-port 2260
+```
+
+The port is saved to the VM's config, and if the VM is running on user-mode
+NAT it is applied **live** through QMP (`hostfwd_remove`/`hostfwd_add`) — no
+stop/start required. On a Linux bridge, the daemon's SSH loopback proxy picks
+the new port up the next time the VM starts.
+
+Note the SSH forward only exists on user-mode NAT: bridge-mode guests are
+reached at their LAN address (or through the daemon's loopback proxy), and the
+vz backend resolves the guest IP by MAC instead (`vee ssh` handles both).
 
 ## ARM64 guests
 

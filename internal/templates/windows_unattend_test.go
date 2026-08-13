@@ -58,10 +58,11 @@ func TestAutounattendXMLValid(t *testing.T) {
 }
 
 // TestGuestSetupPS1 checks the first-logon script references the WinFsp MSI and
-// the virtio-win guest tools, and contains no stray Go-raw-string backticks
-// (which would silently truncate the script when embedded).
+// the virtio-win guest tools, authorizes the caller's SSH keys, and contains no
+// stray Go-raw-string backticks (which would silently truncate the script when
+// embedded).
 func TestGuestSetupPS1(t *testing.T) {
-	s := guestSetupPS1("share")
+	s := guestSetupPS1("share", []string{"ssh-ed25519 AAAAtest vee@host"})
 	if !strings.Contains(s, winfspMSI) {
 		t.Errorf("guest setup script does not reference WinFsp MSI %q", winfspMSI)
 	}
@@ -71,6 +72,12 @@ func TestGuestSetupPS1(t *testing.T) {
 	if !strings.Contains(s, "VirtioFsSvc") {
 		t.Error("guest setup script does not configure the VirtioFS service")
 	}
+	if !strings.Contains(s, "administrators_authorized_keys") {
+		t.Error("guest setup script does not install administrators_authorized_keys")
+	}
+	if !strings.Contains(s, "'ssh-ed25519 AAAAtest vee@host'") {
+		t.Error("guest setup script does not embed the SSH public key")
+	}
 	if strings.Contains(s, "`") {
 		t.Error("guest setup script contains a backtick (would break the Go raw string literal)")
 	}
@@ -79,9 +86,10 @@ func TestGuestSetupPS1(t *testing.T) {
 // TestGuestSetupARM64PS1 checks the arm64 first-logon script stays inside what
 // arm64 guests can actually do: no virtio-win guest-tools (no ARM64 installer
 // exists), no VirtioFS service (the ARM64 viofs driver is test-signed), but
-// OpenSSH still enabled — and no backticks that would break the raw string.
+// OpenSSH still enabled with the caller's keys authorized — and no backticks
+// that would break the raw string.
 func TestGuestSetupARM64PS1(t *testing.T) {
-	s := guestSetupARM64PS1()
+	s := guestSetupARM64PS1([]string{"ssh-ed25519 AAAAtest vee@host"})
 	if strings.Contains(s, "virtio-win-guest-tools.exe") {
 		t.Error("arm64 setup script runs the guest-tools installer, which has no ARM64 build")
 	}
@@ -91,8 +99,35 @@ func TestGuestSetupARM64PS1(t *testing.T) {
 	if !strings.Contains(s, "OpenSSH.Server") {
 		t.Error("arm64 setup script does not enable OpenSSH")
 	}
+	if !strings.Contains(s, "administrators_authorized_keys") {
+		t.Error("arm64 setup script does not install administrators_authorized_keys")
+	}
 	if strings.Contains(s, "`") {
 		t.Error("arm64 setup script contains a backtick (would break the Go raw string literal)")
+	}
+}
+
+// TestWindowsAuthorizedKeysPS1 pins the quoting rules: keys render as
+// single-quoted PowerShell strings with embedded quotes doubled, blank/space
+// keys are dropped, and no keys renders nothing at all (the setup script must
+// not ship an empty authorized_keys, which would lock password-only users to
+// key auth failures in the log).
+func TestWindowsAuthorizedKeysPS1(t *testing.T) {
+	if got := windowsAuthorizedKeysPS1(nil); got != "" {
+		t.Errorf("no keys: want empty block, got %q", got)
+	}
+	if got := windowsAuthorizedKeysPS1([]string{"  ", ""}); got != "" {
+		t.Errorf("blank keys: want empty block, got %q", got)
+	}
+	s := windowsAuthorizedKeysPS1([]string{"ssh-rsa AAAA it's-a-key"})
+	if !strings.Contains(s, "'ssh-rsa AAAA it''s-a-key'") {
+		t.Errorf("embedded single quote not doubled: %q", s)
+	}
+	if !strings.Contains(s, "icacls.exe") {
+		t.Error("keys block does not restrict the file ACL (sshd ignores a lax administrators_authorized_keys)")
+	}
+	if strings.Contains(s, "`") {
+		t.Error("keys block contains a backtick (would break the Go raw string literal)")
 	}
 }
 
