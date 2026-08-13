@@ -209,7 +209,7 @@ func NewWindowsConfig(ctx context.Context, p provider.Provider, version images.W
 			// System disk (virtio; driver injected during Setup).
 			{
 				Path:      filepath.Join(vmDir, "storage", "disk-os.qcow2"),
-				Size:      conf.DefaultDiskSize,
+				Size:      windowsOSDiskSize(conf),
 				Format:    "qcow2",
 				Interface: "virtio",
 				Media:     "disk",
@@ -268,6 +268,23 @@ func NewWindowsConfig(ctx context.Context, p provider.Provider, version images.W
 //     Windows 11 requirement.
 //   - No Hyper-V enlightenment CPU flags — they are x86-only; the manager
 //     forces -cpu host on aarch64 and would drop them with a warning.
+//
+// windowsOSDiskSize floors the Windows system disk at 64G — Microsoft's
+// stated Windows 11 minimum. The global default (20G) leaves a fresh install
+// only ~4 GB free, which the first Windows update or a Docker Desktop install
+// exhausts. A larger configured default still wins; a smaller one is raised.
+// qcow2 is thin-provisioned, so the larger virtual size costs the host
+// nothing until the guest actually writes. Undersized guests can be grown
+// later with `vee resize`.
+func windowsOSDiskSize(conf *provider.Config) string {
+	const floor = "64G"
+	relative, bytes, err := vm.ParseDiskSize(conf.DefaultDiskSize)
+	if err == nil && !relative && bytes >= 64<<30 {
+		return conf.DefaultDiskSize
+	}
+	return floor
+}
+
 func windowsARM64Config(conf *provider.Config, name, vmDir, installISOPath, extrasISO string) *vm.VMConfig {
 	return &vm.VMConfig{
 		Name:     name,
@@ -323,7 +340,7 @@ func windowsARM64Config(conf *provider.Config, name, vmDir, installISOPath, extr
 			// System disk (NVMe; inbox stornvme driver).
 			{
 				Path:      filepath.Join(vmDir, "storage", "disk-os.qcow2"),
-				Size:      conf.DefaultDiskSize,
+				Size:      windowsOSDiskSize(conf),
 				Format:    "qcow2",
 				Interface: "nvme",
 				Media:     "disk",

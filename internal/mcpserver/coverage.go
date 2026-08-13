@@ -49,6 +49,7 @@ var CLICoverage = map[string]Coverage{
 		Tools: []string{"vm_autostart"},
 	},
 	"move":   {Tools: []string{"vm_move"}},
+	"resize": {Tools: []string{"vm_resize"}},
 	"delete": {Tools: []string{"vm_delete"}},
 	"daemon": {Exempt: "host systemd service management (requires sudo); the daemon itself is not an agent task"},
 	"dashboard": {

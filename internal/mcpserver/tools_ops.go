@@ -101,6 +101,13 @@ func (s *server) registerOps(srv *mcp.Server) []string {
 	}, s.vmMove)
 
 	addTool(srv, &names, &mcp.Tool{
+		Name: "vm_resize",
+		Description: "Grow a VM's boot disk to an absolute size (\"60G\") or by a relative amount (\"+40G\"). Shrinking is refused. " +
+			"A running VM is stopped first and restarted afterwards unless restart=false. " +
+			"The guest claims the new space itself; the result's guest_hint says how (cloud-init Linux guests do it automatically on the next boot).",
+	}, s.vmResize)
+
+	addTool(srv, &names, &mcp.Tool{
 		Name:        "vm_backup_list",
 		Description: "List past and in-progress backup runs for a VM.",
 		Annotations: readOnly,
@@ -524,6 +531,45 @@ func (s *server) vmMove(ctx context.Context, _ *mcp.CallToolRequest, in vmMoveIn
 	if wasRunning && (in.Restart == nil || *in.Restart) {
 		if err := s.startDetached(ctx, in.Name); err != nil {
 			return nil, out, fmt.Errorf("disk moved, but restart failed: %w", err)
+		}
+		out.Restarted = true
+	}
+	return nil, out, nil
+}
+
+// ---- vm_resize ----
+
+type vmResizeIn struct {
+	Name    string `json:"name" jsonschema:"name of the VM"`
+	Size    string `json:"size" jsonschema:"new boot disk size — absolute (60G) or relative (+40G); grow only"`
+	Restart *bool  `json:"restart,omitempty" jsonschema:"restart the VM afterwards if it was running (default true)"`
+}
+
+type vmResizeOut struct {
+	Name      string `json:"name"`
+	Path      string `json:"path"`
+	OldSize   string `json:"old_size"`
+	NewSize   string `json:"new_size"`
+	GuestHint string `json:"guest_hint"`
+	Restarted bool   `json:"restarted"`
+}
+
+func (s *server) vmResize(ctx context.Context, _ *mcp.CallToolRequest, in vmResizeIn) (*mcp.CallToolResult, vmResizeOut, error) {
+	wasRunning := false
+	if state, err := s.mgr.LoadState(in.Name); err == nil && state.Running {
+		wasRunning = true
+		if err := s.mgr.Stop(ctx, in.Name); err != nil {
+			return nil, vmResizeOut{}, fmt.Errorf("stop VM before resize: %w", err)
+		}
+	}
+	res, err := s.mgr.ResizeBootDisk(ctx, in.Name, in.Size)
+	if err != nil {
+		return nil, vmResizeOut{}, err
+	}
+	out := vmResizeOut{Name: in.Name, Path: res.Path, OldSize: res.OldSize, NewSize: res.NewSize, GuestHint: res.GuestHint}
+	if wasRunning && (in.Restart == nil || *in.Restart) {
+		if err := s.startDetached(ctx, in.Name); err != nil {
+			return nil, out, fmt.Errorf("disk resized, but restart failed: %w", err)
 		}
 		out.Restarted = true
 	}
