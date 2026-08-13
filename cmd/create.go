@@ -62,6 +62,7 @@ var (
 	createNICMAC        string
 	createGPUVendor     string
 	createMedia         []string
+	createDNSAdminUser  string
 	createRunnerURL     string
 	createRunnerLabels  []string
 	createRunnerSSHKey  bool
@@ -99,6 +100,11 @@ Templates apply sane defaults automatically:
   jellyfin        4G / 2 CPUs, Ubuntu cloud image, Jellyfin via official APT repo,
                   Avahi mDNS so http://<name> resolves on the LAN. Attach libraries
                   with repeatable --media flags (NFS/SMB/host-dir/block/USB).
+  dns-sink        512M / 1 CPU, Alpine Linux, AdGuard Home DNS sinkhole blocking ad
+                  and malware domains for the whole LAN. Requires --nic-mode=bridge
+                  so clients can reach the resolver. Admin UI on port 3000
+                  (http://<name>.local:3000 via mDNS); the admin password is
+                  prompted for and stored only as a bcrypt hash.
   github-runner   4G / 4 CPUs, Ubuntu cloud image, self-hosted GitHub Actions runner.
                   Uses outbound HTTPS long-polling; no inbound port forwarding required.
                   Pass --runner-url (repo or org URL) and enter the registration token
@@ -209,6 +215,21 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
 				return fmt.Errorf("collect media secrets: %w", secErr)
 			}
 			opts.JellyfinExtras = &build.JellyfinExtras{Libraries: libs, Secrets: secrets}
+		}
+		if opts.Template == "dns-sink" {
+			// Bridge mode is required: other hosts on the LAN must be able to
+			// reach the VM's resolver, which user-mode NAT cannot provide.
+			if opts.NICMode == "user" {
+				return fmt.Errorf("dns-sink template requires --nic-mode=bridge (LAN clients cannot reach a resolver behind user-mode NAT)")
+			}
+			hash, hashErr := promptDNSAdminPassword()
+			if hashErr != nil {
+				return hashErr
+			}
+			opts.DNSSinkExtras = &build.DNSSinkExtras{
+				AdminUser:    createDNSAdminUser,
+				PasswordHash: hash,
+			}
 		}
 		if opts.Template == "github-runner" {
 			if createRunnerURL == "" {
@@ -603,6 +624,7 @@ func init() {
 	createCmd.Flags().StringVar(&createNICMAC, "nic-mac", "", "Fixed MAC address for the bridge NIC (passthrough template; empty = deterministic)")
 	createCmd.Flags().StringVar(&createGPUVendor, "gpu-vendor", "amd", "Guest GPU vendor for driver selection: amd, nvidia, virtio (gaming-arch/gaming-bazzite templates)")
 	createCmd.Flags().StringArrayVar(&createMedia, "media", nil, "Media source for jellyfin template (repeatable). Forms: hostdir:/host@/guest[:ro], nfs://server/export@/guest[:ro], smb://[user@]server/share@/guest[:ro], block:/dev/disk/by-id/...@/guest[:fstype], usb:VENDOR:PRODUCT@/guest[:fstype]")
+	createCmd.Flags().StringVar(&createDNSAdminUser, "dns-admin-user", "admin", "AdGuard Home web UI username (dns-sink template); the password is prompted for")
 	createCmd.Flags().StringVar(&createRunnerURL, "runner-url", "", "GitHub repo or org URL for runner registration (github-runner template)")
 	createCmd.Flags().StringArrayVar(&createRunnerLabels, "runner-labels", nil, "Runner labels (github-runner template; default: self-hosted,linux,kvm)")
 	createCmd.Flags().BoolVar(&createRunnerSSHKey, "runner-ssh-key", false, "Generate a per-instance GitHub SSH key for this runner instead of the shared global key (github-runner template)")
@@ -621,6 +643,7 @@ func init() {
 			"truenas\tTrueNAS SCALE VM",
 			"docker\tAlpine Linux VM with Docker daemon on tcp://localhost:2375",
 			"jellyfin\tJellyfin media server with NFS/SMB/USB/host-dir libraries + mDNS",
+			"dns-sink\tAlpine + AdGuard Home DNS sinkhole for ad/malware blocking (bridge NIC)",
 			"github-runner\tSelf-hosted GitHub Actions runner (outbound HTTPS, no port forwarding needed)",
 			"macos\tmacOS guest via Virtualization.framework (Apple Silicon hosts)",
 		}, cobra.ShellCompDirectiveNoFileComp

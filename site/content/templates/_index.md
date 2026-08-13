@@ -19,6 +19,7 @@ vee ships with built-in templates that configure QEMU arguments, cloud-init, net
 | [`truenas`]({{< relref "truenas" >}}) | TrueNAS SCALE, AHCI OS disk, bridge NIC, SPICE |
 | [`torrent`]({{< relref "torrent" >}}) | Lightweight qbittorrent-nox, optional VPN kill-switch |
 | [`jellyfin`]({{< relref "jellyfin" >}}) | Jellyfin, NFS/SMB/host-dir/block/USB media, mDNS |
+| [`dns-sink`]({{< relref "dns-sink" >}}) | Alpine + AdGuard Home DNS sinkhole, LAN-wide ad and malware blocking |
 | [`windows`]({{< relref "windows" >}}) | Windows, UEFI; secure boot + TPM 2.0 on x86_64, NVMe + ramfb on arm64 |
 | [`github-runner`]({{< relref "github-runner" >}}) | Self-hosted Actions runner, outbound HTTPS |
 

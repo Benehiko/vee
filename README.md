@@ -46,6 +46,7 @@ Templates apply sane defaults (memory, CPUs, disks, networking, cloud-init) auto
 | `truenas` | TrueNAS SCALE · 6G / 2 CPUs · AHCI OS disk · per-drive iothreads · bridge NIC · SPICE |
 | `torrent` | Lightweight 2G / 1 CPU · qbittorrent-nox via cloud-init · optional VPN kill-switch |
 | `jellyfin` | Jellyfin · NFS/SMB/host-dir/block/USB media · mDNS |
+| `dns-sink` | Alpine Linux · AdGuard Home DNS sinkhole · 512M / 1 CPU · LAN-wide ad and malware blocking · bridge NIC |
 | `windows` | Windows · UEFI · secure boot + TPM 2.0 on x86_64 · arm64 (Apple Silicon) boots NVMe + ramfb with the hardware checks bypassed |
 | `docker` | Alpine Linux · Docker daemon on `tcp://localhost:2375` |
 | `github-runner` | Self-hosted Actions runner · outbound HTTPS long-polling |
