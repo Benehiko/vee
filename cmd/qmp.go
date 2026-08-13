@@ -106,8 +106,9 @@ func qmpExecutor(cmd *cobra.Command, name, socket string) (
 
 	// Try a lightweight command against the daemon to decide the transport up
 	// front, so multi-command (--stdin) invocations don't split across
-	// transports mid-run.
-	if _, reachable, _ := mgr.QMPViaDaemon(cmd.Context(), name, "query-status", nil); reachable {
+	// transports mid-run. A daemon that answers but does not own the VM's QMP
+	// connection leaves the socket free, so that case dials directly too.
+	if _, reachable, probeErr := mgr.QMPViaDaemon(cmd.Context(), name, "query-status", nil); reachable && !vm.IsErrQMPNotOwned(probeErr) {
 		return daemonExec, func() {}, nil
 	}
 

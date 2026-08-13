@@ -77,6 +77,13 @@ func (s *server) registerOps(srv *mcp.Server) []string {
 	}, s.vmDisplay)
 
 	addTool(srv, &names, &mcp.Tool{
+		Name: "vm_screenshot",
+		Description: "Capture a running QEMU-backed VM's display and return it as a PNG image, so what the guest shows on screen can be inspected directly. " +
+			"Works headless (via QMP screendump). Set path to also save the PNG on the host.",
+		Annotations: readOnly,
+	}, s.vmScreenshot)
+
+	addTool(srv, &names, &mcp.Tool{
 		Name:        "vm_config_get",
 		Description: "Return a VM's full persisted configuration (vm.yaml) as JSON.",
 		Annotations: readOnly,
@@ -408,6 +415,43 @@ func hostLANIP(ctx context.Context) string {
 		return addr.IP.String()
 	}
 	return "<host-ip>"
+}
+
+// ---- vm_screenshot ----
+
+type vmScreenshotIn struct {
+	Name string `json:"name" jsonschema:"name of the VM"`
+	Path string `json:"path,omitempty" jsonschema:"host file to also save the PNG to (parent directory must exist)"`
+}
+
+type vmScreenshotOut struct {
+	Width  int    `json:"width"`
+	Height int    `json:"height"`
+	Bytes  int    `json:"bytes"`
+	Path   string `json:"path,omitempty" jsonschema:"host file the PNG was saved to, when path was given"`
+}
+
+func (s *server) vmScreenshot(ctx context.Context, _ *mcp.CallToolRequest, in vmScreenshotIn) (*mcp.CallToolResult, vmScreenshotOut, error) {
+	data, width, height, err := s.mgr.Screenshot(ctx, in.Name)
+	if err != nil {
+		return nil, vmScreenshotOut{}, err
+	}
+	out := vmScreenshotOut{Width: width, Height: height, Bytes: len(data)}
+	if in.Path != "" {
+		if err := os.WriteFile(in.Path, data, 0o600); err != nil {
+			return nil, vmScreenshotOut{}, fmt.Errorf("save PNG: %w", err)
+		}
+		out.Path = in.Path
+	}
+	// Hand the pixels back as image content (the SDK base64-encodes them);
+	// the typed output still lands in structuredContent alongside it.
+	res := &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: fmt.Sprintf("%dx%d PNG, %d bytes", width, height, len(data))},
+			&mcp.ImageContent{Data: data, MIMEType: "image/png"},
+		},
+	}
+	return res, out, nil
 }
 
 // ---- vm_config_get ----

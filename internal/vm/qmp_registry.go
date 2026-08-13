@@ -82,7 +82,9 @@ func (m *Manager) QMPExecute(ctx context.Context, name, execute string, args map
 		return raw, err
 	}
 
-	if raw, reachable, daemonErr := m.QMPViaDaemon(ctx, name, execute, args); reachable {
+	// A reachable daemon that reports it does not own the VM's connection is
+	// not terminal — the QMP socket is then free for a direct dial below.
+	if raw, reachable, daemonErr := m.QMPViaDaemon(ctx, name, execute, args); reachable && !IsErrQMPNotOwned(daemonErr) {
 		return raw, daemonErr
 	}
 
