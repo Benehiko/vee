@@ -107,13 +107,15 @@ Rules are saved with `/etc/init.d/iptables save` and restored on boot.
 
 ## Service supervision
 
-Alpine uses OpenRC rather than systemd, so the template installs a hand-written init script at `/etc/init.d/adguardhome` that runs the binary under `start-stop-daemon`. Manage it the usual OpenRC way:
+Alpine uses OpenRC rather than systemd, so the template installs a hand-written init script at `/etc/init.d/adguardhome` that runs the binary under `start-stop-daemon`. Manage it the usual OpenRC way.
+
+The guest login is the Alpine cloud image's own `alpine` user rather than the `vee` user other templates create — cloud-init assigns new users `/bin/bash`, which the Alpine image does not ship, so creating one would fail and take the SSH key setup down with it. Privilege escalation uses `doas`; the Alpine base has no `sudo`.
 
 ```sh
 vee ssh dns
-sudo rc-service adguardhome status
-sudo rc-service adguardhome restart
-sudo tail -f /var/log/adguardhome.log
+doas rc-service adguardhome status
+doas rc-service adguardhome restart
+doas tail -f /var/log/adguardhome.log
 ```
 
 ## Upgrading AdGuard Home
@@ -122,12 +124,12 @@ The installed version is pinned in the template so VM creation stays reproducibl
 
 ```sh
 vee ssh dns
-sudo rc-service adguardhome stop
+doas rc-service adguardhome stop
 curl -fsSL -o /tmp/agh.tar.gz \
   https://github.com/AdguardTeam/AdGuardHome/releases/download/<version>/AdGuardHome_linux_amd64.tar.gz
 tar -xzf /tmp/agh.tar.gz -C /tmp
-sudo install -m 0755 /tmp/AdGuardHome/AdGuardHome /usr/local/bin/AdGuardHome
-sudo rc-service adguardhome start
+doas install -m 0755 /tmp/AdGuardHome/AdGuardHome /usr/local/bin/AdGuardHome
+doas rc-service adguardhome start
 ```
 
 The in-app updater is disabled (`--no-check-update`) so that the binary under `/usr/local/bin` is never replaced behind vee's back.

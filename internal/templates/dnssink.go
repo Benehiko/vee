@@ -18,7 +18,7 @@ const (
 	DNSSinkUIPort = 3000
 	// DNSSinkAdGuardVersion pins the AdGuard Home release installed in the
 	// guest. Pinning keeps VM creation reproducible; bump deliberately.
-	DNSSinkAdGuardVersion = "v0.107.55"
+	DNSSinkAdGuardVersion = "v0.107.78"
 )
 
 // NewDNSSinkConfig returns a VMConfig for a minimal Alpine Linux VM running
@@ -69,16 +69,28 @@ func NewDNSSinkConfig(
 	adguardYAML := adguardHomeConfig(adminUser, adminPasswordHash)
 
 	runCmds := []string{
+		// cloud-init's runcmd fires as soon as the networking service reports
+		// started, which on Alpine is when dhcpcd has been launched — not when
+		// it holds a lease. On a bridge NIC the DHCP round trip goes out to the
+		// LAN's real DHCP server, which routinely takes longer than that, so
+		// without this gate the apk and curl steps below run while the guest
+		// still only has an IPv4LL (169.254.0.0/16) address and every fetch
+		// fails, leaving the VM with no AdGuard Home at all.
+		"for i in $(seq 1 60); do ip -4 route show default | grep -qv '169.254' && break; sleep 2; done",
+
 		// Alpine's cloud image ships only the main repo enabled; avahi,
 		// qemu-guest-agent and the tooling below live in community.
 		`sed -i 's|^#\(.*/v[0-9.]*/community\)|\1|' /etc/apk/repositories`,
-		"apk update",
-		"apk add --no-cache ca-certificates curl tar iptables ip6tables avahi dbus qemu-guest-agent",
+		// A default route is not proof the upstream mirror is reachable yet,
+		// so both network-dependent steps retry rather than failing the boot.
+		"for i in 1 2 3 4 5; do apk update && break; sleep 5; done",
+		"for i in 1 2 3 4 5; do apk add --no-cache ca-certificates curl tar iptables ip6tables avahi dbus qemu-guest-agent && break; sleep 5; done",
 
 		// AdGuard Home ships as a static binary; no runtime deps to install.
 		fmt.Sprintf(
-			"curl -fsSL -o /tmp/AdGuardHome.tar.gz "+
-				"https://github.com/AdguardTeam/AdGuardHome/releases/download/%s/AdGuardHome_linux_amd64.tar.gz",
+			"for i in 1 2 3 4 5; do curl -fsSL --retry 3 --retry-delay 5 -o /tmp/AdGuardHome.tar.gz "+
+				"https://github.com/AdguardTeam/AdGuardHome/releases/download/%s/AdGuardHome_linux_amd64.tar.gz "+
+				"&& break; sleep 5; done",
 			DNSSinkAdGuardVersion,
 		),
 		"tar -xzf /tmp/AdGuardHome.tar.gz -C /tmp",
@@ -157,8 +169,13 @@ func NewDNSSinkConfig(
 			},
 		},
 		CloudInit: &vm.CloudInitConfig{
-			Hostname:    name,
-			User:        "vee",
+			Hostname: name,
+			// No extra "vee" user: cloud-init emits `shell: /bin/bash` for it,
+			// and the Alpine cloud image ships no bash, so useradd fails and
+			// aborts the users_groups module before any authorized_keys are
+			// written — locking SSH out of the guest entirely. The image's own
+			// default user (alpine) carries the SSH keys instead, matching how
+			// the docker template handles the same Alpine base.
 			DefaultUser: images.DefaultUser(images.DistroAlpine),
 			SSHKeys:     sshKeys,
 			RunCmds:     runCmds,
