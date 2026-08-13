@@ -96,6 +96,84 @@ func TestSpecValidate(t *testing.T) {
 	}
 }
 
+func TestSpecValidateLinux(t *testing.T) {
+	dir := t.TempDir()
+	disk := filepath.Join(dir, "disk.raw")
+	if err := os.WriteFile(disk, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	valid := MachineSpec{
+		Name: "lin", Platform: PlatformLinux, CPUs: 2, MemoryBytes: 1 << 30,
+		MAC:   "52:54:00:00:00:02",
+		Disks: []DiskSpec{{Path: disk}},
+		// The variable store deliberately does not exist: the helper creates
+		// it on first boot, so Validate must not stat it.
+		EFIVariableStore: filepath.Join(dir, EFIVariableStoreName),
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid linux spec rejected: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*MachineSpec)
+	}{
+		{"no efi variable store", func(s *MachineSpec) { s.EFIVariableStore = "" }},
+		{"mac restore artifacts on a linux guest", func(s *MachineSpec) { s.HardwareModel = []byte{1} }},
+		{"aux storage on a linux guest", func(s *MachineSpec) { s.AuxiliaryStorage = disk }},
+		{"unknown platform", func(s *MachineSpec) { s.Platform = "windows" }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := valid
+			tt.mutate(&s)
+			if err := s.Validate(); err == nil {
+				t.Errorf("expected validation error")
+			}
+		})
+	}
+}
+
+func TestLoadSpecLinuxKeepsZeroDisplay(t *testing.T) {
+	dir := t.TempDir()
+	disk := filepath.Join(dir, "disk.raw")
+	if err := os.WriteFile(disk, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	in := &MachineSpec{
+		Name: "lin", Platform: PlatformLinux, CPUs: 2, MemoryBytes: 1 << 30,
+		MAC:              "52:54:00:00:00:03",
+		Disks:            []DiskSpec{{Path: disk}},
+		EFIVariableStore: EFIVariableStorePath(dir),
+		SerialLog:        SerialLogPath(dir),
+	}
+	if err := WriteSpec(dir, in); err != nil {
+		t.Fatalf("WriteSpec: %v", err)
+	}
+	out, err := LoadSpec(dir)
+	if err != nil {
+		t.Fatalf("LoadSpec: %v", err)
+	}
+	// A Linux guest is headless: the macOS display default must not leak in
+	// (the helper would otherwise try to attach a mac graphics device).
+	if out.Display != (DisplaySpec{}) {
+		t.Errorf("Display = %+v, want zero for a linux guest", out.Display)
+	}
+	if out.PlatformName() != PlatformLinux {
+		t.Errorf("PlatformName = %q, want %q", out.PlatformName(), PlatformLinux)
+	}
+	if out.EFIVariableStore != in.EFIVariableStore || out.SerialLog != in.SerialLog {
+		t.Errorf("linux fields did not survive the round-trip: %+v", out)
+	}
+}
+
+func TestPlatformNameDefaultsToMacOS(t *testing.T) {
+	s := MachineSpec{}
+	if s.PlatformName() != PlatformMacOS {
+		t.Errorf("PlatformName() = %q, want %q for the zero value", s.PlatformName(), PlatformMacOS)
+	}
+}
+
 func TestVsockBridgePath(t *testing.T) {
 	path := VsockBridgePath("/vms/mac", 2222)
 	if path != "/vms/mac/vz-vsock-2222.sock" {

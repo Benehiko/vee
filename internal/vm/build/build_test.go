@@ -160,19 +160,55 @@ func TestApplyOverridesExtraDiskPathIsAbsolute(t *testing.T) {
 	}
 }
 
-// vz guests consume Opts.Disk as the raw restore-disk size inside the
+// vz macOS guests consume Opts.Disk as the raw restore-disk size inside the
 // template; the vz backend is raw-only, so a generic qcow2 here breaks start.
-func TestApplyOverridesExtraDiskSkippedForVZ(t *testing.T) {
+func TestApplyOverridesExtraDiskSkippedForVZMacOS(t *testing.T) {
 	storage := "/home/user/.vee/vms"
 	cfg := &vm.VMConfig{
 		Name:    "t8",
 		Backend: string(backend.VZ),
+		MacOS:   &vm.MacOSConfig{},
 		Disks:   []vm.DiskConfig{osDisk(filepath.Join(storage, "t8"))},
 	}
 
 	applyOverrides(cfg, Opts{Name: "t8", Disk: "60G"}, newDiskProvider(storage))
 
 	if len(cfg.Disks) != 1 {
-		t.Errorf("vz guest got %d disks, want the template's 1: %+v", len(cfg.Disks), cfg.Disks)
+		t.Errorf("vz macOS guest got %d disks, want the template's 1: %+v", len(cfg.Disks), cfg.Disks)
+	}
+}
+
+// A vz Linux guest keeps the extra disk: Manager.Create materializes the
+// qcow2 entry as a raw image at create time (issue #127).
+func TestApplyOverridesExtraDiskKeptForVZLinux(t *testing.T) {
+	storage := "/home/user/.vee/vms"
+	cfg := &vm.VMConfig{
+		Name:  "t9",
+		Disks: []vm.DiskConfig{osDisk(filepath.Join(storage, "t9"))},
+	}
+
+	applyOverrides(cfg, Opts{Name: "t9", Backend: string(backend.VZ), Disk: "60G"}, newDiskProvider(storage))
+
+	if len(cfg.Disks) != 2 {
+		t.Fatalf("vz Linux guest got %d disks, want 2: %+v", len(cfg.Disks), cfg.Disks)
+	}
+	if cfg.Disks[1].Size != "60G" {
+		t.Errorf("extra disk Size = %q, want 60G", cfg.Disks[1].Size)
+	}
+}
+
+// The --backend override lands in the config, and its absence keeps the
+// template's backend (empty = QEMU for every non-macos template).
+func TestApplyOverridesBackend(t *testing.T) {
+	cfg := &vm.VMConfig{Name: "t10", Disks: []vm.DiskConfig{osDisk("/home/user/.vee/vms/t10")}}
+	applyOverrides(cfg, Opts{Name: "t10", Backend: string(backend.VZ)}, nil)
+	if cfg.BackendName() != backend.VZ {
+		t.Errorf("BackendName = %q, want %q", cfg.BackendName(), backend.VZ)
+	}
+
+	cfg = &vm.VMConfig{Name: "t11", Disks: []vm.DiskConfig{osDisk("/home/user/.vee/vms/t11")}}
+	applyOverrides(cfg, Opts{Name: "t11"}, nil)
+	if cfg.BackendName() != backend.QEMU {
+		t.Errorf("BackendName = %q, want the QEMU default", cfg.BackendName())
 	}
 }

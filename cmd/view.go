@@ -42,7 +42,13 @@ var viewCmd = &cobra.Command{
 		// macOS guests have no SPICE server: the screen is reached through the
 		// guest's own Screen Sharing service, which the guest must have
 		// enabled (vee's first-boot provisioning does that when available).
+		// Linux guests on the vz backend are headless and have no screen at
+		// all — say so rather than probing VNC ports that cannot exist.
 		if state.BackendName() == backend.VZ {
+			if cfg.MacOS == nil {
+				return fmt.Errorf("VM %q is a headless Linux guest on the vz backend — it has no display; use `vee ssh %s` (boot console: %s)",
+					name, name, filepath.Join(prov.Config().StoragePath, name, "serial.log"))
+			}
 			return viewVZ(cmd, cfg, name)
 		}
 

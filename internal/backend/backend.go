@@ -23,8 +23,9 @@ const (
 	// default: configs written before the backend field existed carry an
 	// empty value and resolve to QEMU.
 	QEMU Name = "qemu"
-	// VZ drives macOS guests through Apple's Virtualization.framework via a
-	// helper process (Apple Silicon hosts only). See issue #51.
+	// VZ drives guests through Apple's Virtualization.framework via a helper
+	// process (Apple Silicon hosts only): macOS guests (issue #51) and Linux
+	// guests (issue #127).
 	VZ Name = "vz"
 )
 

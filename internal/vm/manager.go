@@ -150,17 +150,22 @@ func (m *Manager) Create(ctx context.Context, cfg *VMConfig) error {
 		return fmt.Errorf("unknown backend %q (valid: %q, %q)", cfg.Backend, backend.QEMU, backend.VZ)
 	}
 
+	// A macos: section carries Virtualization.framework restore artifacts;
+	// only the vz backend can consume them.
+	if cfg.MacOS != nil && cfg.BackendName() != backend.VZ {
+		return fmt.Errorf("a macos: section requires the vz backend (backend: %q) — QEMU cannot run these guests", backend.VZ)
+	}
+
 	// Nested virtualization is wired only for arm64 QEMU guests (the aarch64
 	// "virt" board's virtualization=on property). Refuse everything else here —
 	// before the VM directory or any prompt, like the backend check above —
-	// rather than at first start. macOS guests can never nest: neither
-	// Virtualization.framework nor Hypervisor.framework works inside a VM.
-	// x86_64 KVM guests need no machine property — they inherit the host's
-	// nested setting (the kvm_intel/kvm_amd "nested" module parameter) through
-	// the host CPU model.
+	// rather than at first start. vz guests can never nest: Virtualization.
+	// framework does not expose EL2 to its guests. x86_64 KVM guests need no
+	// machine property — they inherit the host's nested setting (the
+	// kvm_intel/kvm_amd "nested" module parameter) through the host CPU model.
 	if cfg.Nested {
 		if cfg.BackendName() != backend.QEMU {
-			return fmt.Errorf("nested virtualization is not available for macOS guests: Apple's virtualization frameworks do not work inside a VM")
+			return fmt.Errorf("the vz backend does not support nested virtualization: Virtualization.framework does not expose EL2 to its guests")
 		}
 		if platform.DefaultGuestArch() != "aarch64" {
 			return fmt.Errorf("nested virtualization control is wired only for arm64 (aarch64) guests; "+
@@ -192,6 +197,15 @@ func (m *Manager) Create(ctx context.Context, cfg *VMConfig) error {
 		}
 	}
 
+	// vz-backed Linux guests (issue #127): refuse QEMU-only devices, drop the
+	// harmless ones, and materialize raw boot disks — Virtualization.framework
+	// reads no qcow2, so the template's cloud-image overlay is flattened here.
+	if cfg.BackendName() == backend.VZ && cfg.MacOS == nil {
+		if err := m.prepareVZLinuxCreate(ctx, cfg); err != nil {
+			return err
+		}
+	}
+
 	// The aarch64 "virt" board has no legacy BIOS/CSM, so UEFI is mandatory —
 	// auto-enable it regardless of the template default. QEMU-only: other
 	// backends bring their own boot loader (vz uses VZMacOSBootLoader / EFI
@@ -219,8 +233,10 @@ func (m *Manager) Create(ctx context.Context, cfg *VMConfig) error {
 		cfg.UEFI.VarsPath = dst
 	}
 
-	// Generate cloud-init cidata ISO if requested.
-	if cfg.BackendName() == backend.QEMU && cfg.CloudInit != nil {
+	// Generate cloud-init cidata ISO if requested. QEMU guests and vz Linux
+	// guests both consume it; macOS guests (vz with a macos: section) are
+	// provisioned offline at restore time instead.
+	if cfg.CloudInit != nil && (cfg.BackendName() == backend.QEMU || cfg.MacOS == nil) {
 		writeFiles := make([]cloudinit.WriteFile, len(cfg.CloudInit.WriteFiles))
 		for i, wf := range cfg.CloudInit.WriteFiles {
 			writeFiles[i] = cloudinit.WriteFile{

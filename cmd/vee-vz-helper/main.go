@@ -1,5 +1,5 @@
-// Command vee-vz-helper hosts a single macOS guest VM on Apple's
-// Virtualization.framework on behalf of vee (issue #51).
+// Command vee-vz-helper hosts a single guest VM — macOS (issue #51) or Linux
+// (issue #127) — on Apple's Virtualization.framework on behalf of vee.
 //
 // A VZVirtualMachine lives inside the process that creates it, so vee spawns
 // one detached helper per VM (the analog of a qemu-system process). The

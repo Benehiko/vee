@@ -1,9 +1,18 @@
 package vm
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+
+	"go.uber.org/zap/zapcore"
+
+	"github.com/Benehiko/vee/internal/platform"
+	"github.com/Benehiko/vee/internal/vzhelper"
+	"github.com/Benehiko/vee/provider"
 )
 
 func TestVZShutdownArgs(t *testing.T) {
@@ -33,6 +42,213 @@ func TestVZShutdownArgs(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Errorf("missing %q in %v", want, args)
 		}
+	}
+}
+
+func TestVZRawDiskPath(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"/vms/a/storage/disk-os.qcow2", "/vms/a/storage/disk-os.raw"},
+		{"/vms/a/storage/disk-os.img", "/vms/a/storage/disk-os.raw"},
+		{"/vms/a/storage/disk-os.raw", "/vms/a/storage/disk-os.raw"},
+		// A bare directory is qemu.Disk's "generate the name" form.
+		{"/mnt/nvme", "/mnt/nvme/disk-os.raw"},
+	}
+	for _, tt := range tests {
+		if got := vzRawDiskPath(tt.in); got != tt.want {
+			t.Errorf("vzRawDiskPath(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+// newVZTestManager builds a Manager whose provider only carries a logger and
+// a temp storage path — all the vz create/spec helpers need.
+func newVZTestManager(t *testing.T) *Manager {
+	t.Helper()
+	entries := &[]zapcore.Entry{}
+	return &Manager{provider: grantProvider{
+		cfg:     &provider.Config{StoragePath: t.TempDir()},
+		entries: entries,
+	}}
+}
+
+func TestVZDiskSpecs(t *testing.T) {
+	m := newVZTestManager(t)
+	dir := t.TempDir()
+	raw := filepath.Join(dir, "disk-os.raw")
+	cidata := filepath.Join(dir, "cidata.iso")
+	for _, p := range []string{raw, cidata} {
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("cdrom attaches read-only, missing cdrom is skipped", func(t *testing.T) {
+		cfg := &VMConfig{Name: "lin", Disks: []DiskConfig{
+			{Path: raw, Format: "raw", Media: "disk"},
+			{Path: cidata, Media: "cdrom"},
+			// The install-state machine strips a consumed seed from the
+			// config, but a stale config can still name a deleted one.
+			{Path: filepath.Join(dir, "gone.iso"), Media: "cdrom"},
+		}}
+		specs, err := m.vzDiskSpecs(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(specs) != 2 {
+			t.Fatalf("got %d disk specs, want 2 (missing cdrom skipped): %+v", len(specs), specs)
+		}
+		if specs[0].ReadOnly {
+			t.Error("boot disk must not be read-only")
+		}
+		if !specs[1].ReadOnly {
+			t.Error("cdrom seed must attach read-only")
+		}
+	})
+
+	rejected := []struct {
+		name string
+		disk DiskConfig
+	}{
+		{"qcow2 format", DiskConfig{Path: raw, Format: "qcow2", Media: "disk"}},
+		{"relative path", DiskConfig{Path: "storage/disk-os.raw", Format: "raw", Media: "disk"}},
+		{"passthrough device", DiskConfig{Path: "/dev/disk4", Format: "raw", Media: "disk", Passthrough: true}},
+	}
+	for _, tt := range rejected {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &VMConfig{Name: "lin", Disks: []DiskConfig{tt.disk}}
+			if _, err := m.vzDiskSpecs(cfg); err == nil {
+				t.Error("expected an error")
+			}
+		})
+	}
+}
+
+// The create-time guards refuse QEMU-only devices with actionable errors and
+// drop the harmless template defaults (SPICE, ssh_port, OVMF UEFI) that have
+// vz-native replacements.
+func TestPrepareVZLinuxCreate(t *testing.T) {
+	if !platform.IsMacOS() || platform.HostArch() != "arm64" {
+		t.Skip("prepareVZLinuxCreate requires an Apple Silicon macOS host")
+	}
+	m := newVZTestManager(t)
+	ctx := context.Background()
+
+	rejected := []struct {
+		name   string
+		mutate func(*VMConfig)
+	}{
+		{"virtio gpu", func(c *VMConfig) { c.GPU.Mode = GPUVirtio }},
+		{"tpm", func(c *VMConfig) { c.TPM = &TPMConfig{Enabled: true} }},
+		{"virtiofs share", func(c *VMConfig) {
+			c.VirtiofsMounts = []VirtiofsMount{{SharedDir: "/tmp", Tag: "share"}}
+		}},
+		{"bridge nic", func(c *VMConfig) { c.NIC.Mode = "bridge" }},
+		{"passthrough disk", func(c *VMConfig) {
+			c.Disks = []DiskConfig{{Path: "/dev/disk4", Media: "disk", Passthrough: true}}
+		}},
+	}
+	for _, tt := range rejected {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &VMConfig{Name: "lin", Backend: "vz", NIC: NICConfig{Mode: "user"}}
+			tt.mutate(cfg)
+			if err := m.prepareVZLinuxCreate(ctx, cfg); err == nil {
+				t.Error("expected an error")
+			}
+		})
+	}
+
+	t.Run("drops SPICE, spice services and ssh_port; clears UEFI", func(t *testing.T) {
+		cfg := &VMConfig{
+			Name: "lin", Backend: "vz",
+			NIC:     NICConfig{Mode: "user"},
+			SPICE:   &SPICEConfig{Port: 5900},
+			SSHPort: 2201,
+			UEFI:    UEFIConfig{Enabled: true},
+			Services: []ServiceEntry{
+				{Name: "display", Port: 5900, Protocol: ServiceSPICE},
+				{Name: "web", Port: 8080, Protocol: ServiceHTTP},
+			},
+		}
+		if err := m.prepareVZLinuxCreate(ctx, cfg); err != nil {
+			t.Fatal(err)
+		}
+		if cfg.SPICE != nil {
+			t.Error("SPICE was not dropped")
+		}
+		if cfg.SSHPort != 0 {
+			t.Error("ssh_port was not dropped")
+		}
+		if cfg.UEFI.Enabled {
+			t.Error("OVMF UEFI was not cleared (vz carries its own EFI variable store)")
+		}
+		if len(cfg.Services) != 1 || cfg.Services[0].Protocol != ServiceHTTP {
+			t.Errorf("services = %+v, want only the non-SPICE entry", cfg.Services)
+		}
+	})
+}
+
+// The Linux branch of buildVZMachine writes a spec the helper can consume:
+// linux platform, EFI variable store and serial log inside the VM directory,
+// no macOS restore artifacts.
+func TestBuildVZMachineLinuxSpec(t *testing.T) {
+	if !platform.IsMacOS() || platform.HostArch() != "arm64" {
+		t.Skip("buildVZMachine requires an Apple Silicon macOS host")
+	}
+	if _, err := vzhelper.FindHelper(); err != nil {
+		t.Skip("vee-vz-helper is not installed on this host")
+	}
+	m := newVZTestManager(t)
+
+	vmDir := m.vmDir("lin")
+	if err := os.MkdirAll(filepath.Join(vmDir, "storage"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	raw := filepath.Join(vmDir, "storage", "disk-os.raw")
+	if err := os.WriteFile(raw, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &VMConfig{
+		Name: "lin", Backend: "vz", Memory: "2G", CPUs: 2,
+		NIC:   NICConfig{Mode: "user"},
+		Disks: []DiskConfig{{Path: raw, Format: "raw", Media: "disk"}},
+		Vsock: true,
+	}
+	if _, err := m.buildVZMachine(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	spec, err := vzhelper.LoadSpec(vmDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.PlatformName() != vzhelper.PlatformLinux {
+		t.Errorf("platform = %q, want %q", spec.PlatformName(), vzhelper.PlatformLinux)
+	}
+	if spec.EFIVariableStore != vzhelper.EFIVariableStorePath(vmDir) {
+		t.Errorf("EFI variable store = %q, want it inside the VM directory", spec.EFIVariableStore)
+	}
+	if spec.SerialLog != vzhelper.SerialLogPath(vmDir) {
+		t.Errorf("serial log = %q, want it inside the VM directory", spec.SerialLog)
+	}
+	if !spec.Vsock {
+		t.Error("vsock did not reach the spec")
+	}
+	if len(spec.HardwareModel) != 0 || spec.AuxiliaryStorage != "" {
+		t.Error("linux spec carries macOS restore artifacts")
+	}
+	if cfg.NIC.MAC == "" {
+		t.Error("no deterministic MAC was assigned")
+	}
+}
+
+// A macos: section only means something to the vz backend; pairing it with
+// QEMU must fail at create, not at first start.
+func TestCreateRefusesMacOSSectionOnQEMU(t *testing.T) {
+	m := newVZTestManager(t)
+	cfg := &VMConfig{Name: "mac", Backend: "qemu", MacOS: &MacOSConfig{}}
+	if err := m.Create(context.Background(), cfg); err == nil || !strings.Contains(err.Error(), "vz") {
+		t.Errorf("Create = %v, want a macos-requires-vz error", err)
 	}
 }
 

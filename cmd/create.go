@@ -70,6 +70,7 @@ var (
 	createBootDisk      string
 	createBootDiskPath  string
 	createNested        bool
+	createBackend       string
 )
 
 var createCmd = &cobra.Command{
@@ -458,6 +459,9 @@ func optsFromFlags(cmd *cobra.Command, name string) build.Opts {
 	if cmd.Flags().Changed("template") {
 		opts.Template = createTemplate
 	}
+	if cmd.Flags().Changed("backend") {
+		opts.Backend = createBackend
+	}
 	if cmd.Flags().Changed("memory") {
 		opts.Memory = createMemory
 	}
@@ -586,6 +590,7 @@ func init() {
 	createCmd.Flags().BoolVar(&createNoAutoInstall, "no-auto-install", false, "Skip the auto-install pass; boot directly from the primary disk (use when the disk already has an OS)")
 	createCmd.Flags().BoolVar(&createReinstall, "reinstall", false, "Delete the existing VM (disk + config) and reinstall from scratch; stops the VM first if running")
 	createCmd.Flags().StringVar(&createTemplate, "template", "ubuntu-server", "VM template: ubuntu-server, gaming, torrent, devbox, server, windows")
+	createCmd.Flags().StringVar(&createBackend, "backend", "", "Virtualization backend: qemu (default) or vz — Apple's Virtualization.framework. On an Apple Silicon host, vz runs Linux cloud-image guests with native virtio + vsock (headless, NAT-only)")
 	createCmd.Flags().StringVar(&createMemory, "memory", "2G", "Memory size (overrides template default)")
 	createCmd.Flags().IntVar(&createCPUs, "cpus", 2, "Number of vCPUs (overrides template default)")
 	createCmd.Flags().StringVar(&createDisk, "disk", "", "Attach an additional blank disk of this size, alongside the OS disk (e.g. 50G)")
@@ -661,6 +666,12 @@ func init() {
 	})
 	_ = createCmd.RegisterFlagCompletionFunc("gpu-vendor", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 		return []string{"amd", "nvidia", "virtio"}, cobra.ShellCompDirectiveNoFileComp
+	})
+	_ = createCmd.RegisterFlagCompletionFunc("backend", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+		return []string{
+			"qemu\tdetached qemu-system process (default)",
+			"vz\tApple Virtualization.framework (Apple Silicon; native vsock for Linux guests)",
+		}, cobra.ShellCompDirectiveNoFileComp
 	})
 	_ = createCmd.RegisterFlagCompletionFunc("gpu-pci", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 		gpus := gpu.ListGPUAddresses()
