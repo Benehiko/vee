@@ -93,5 +93,6 @@ the QEMU backend remains the default there.
   qcow2 that was never materialized (e.g. a hand-edited `vm.yaml`). Recreate
   the VM, or convert the image yourself with
   `qemu-img convert -O raw disk.qcow2 disk.raw` and point the config at it.
-- **The guest must be EFI-bootable.** All of vee's aarch64 cloud images
-  (Ubuntu, Fedora, Arch) are. A BIOS-only x86 image cannot boot here.
+- **The guest must be EFI-bootable.** vee's aarch64 cloud images (Ubuntu and
+  Fedora — the distros with wired-up arm64 images) both are. A BIOS-only x86
+  image cannot boot here.
