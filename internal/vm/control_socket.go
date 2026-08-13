@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -36,6 +37,10 @@ type controlRequest struct {
 type controlResponse struct {
 	Return json.RawMessage `json:"return,omitempty"`
 	Error  string          `json:"error,omitempty"`
+	// NotOwned marks the daemon answering "I don't own this VM's QMP
+	// connection" — the socket may be free, so callers can dial it directly
+	// instead of failing.
+	NotOwned bool `json:"not_owned,omitempty"`
 }
 
 // serveControlSocket listens on the daemon control socket and serves requests
@@ -119,7 +124,10 @@ func (m *Manager) dispatchControl(_ context.Context, req controlRequest) control
 		raw, err := m.ExecuteQMP(req.VM, req.Execute, req.Arguments)
 		if err != nil {
 			if IsErrQMPNotOwned(err) {
-				return controlResponse{Error: fmt.Sprintf("daemon does not own a QMP connection for VM %q", req.VM)}
+				return controlResponse{
+					Error:    fmt.Sprintf("daemon does not own a QMP connection for VM %q", req.VM),
+					NotOwned: true,
+				}
 			}
 			return controlResponse{Error: err.Error()}
 		}
@@ -180,6 +188,13 @@ func (m *Manager) QMPViaDaemon(ctx context.Context, vmName, execute string, args
 	var resp controlResponse
 	if err := json.Unmarshal(scanner.Bytes(), &resp); err != nil {
 		return nil, true, fmt.Errorf("parse control response: %w", err)
+	}
+	// Surface not-owned as the sentinel so callers fall back to a direct
+	// dial: the daemon answered, but the VM's QMP socket is not held by it.
+	// The string match covers daemons from before the not_owned field that
+	// are still running with the old error-only reply.
+	if resp.NotOwned || strings.Contains(resp.Error, "does not own a QMP connection") {
+		return nil, true, errQMPNotOwned
 	}
 	if resp.Error != "" {
 		return nil, true, fmt.Errorf("%s", resp.Error)

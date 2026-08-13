@@ -1,4 +1,4 @@
-# QMP command tooling (`vee qmp`)
+# QMP command tooling (`vee qmp`, `vee screenshot`)
 
 `vee qmp` sends [QMP](https://qemu.readthedocs.io/en/latest/interop/qmp-spec.html)
 (QEMU Machine Protocol) commands to a running VM and prints the JSON `return`
@@ -33,6 +33,35 @@ vee qmp myvm --raw query-status | jq .status
 With `--stdin` you can run several commands in one invocation; each object must
 have an `execute` field and may have an `arguments` object, mirroring the
 on-the-wire QMP request shape.
+
+## Screenshots (`vee screenshot`)
+
+`vee screenshot` captures a running VM's display to a PNG file, using QMP's
+`screendump` command under the hood. It works headless — nothing needs to be
+attached to the VM's display, so it is handy for checking what an installer or
+desktop session is showing without opening a SPICE/VNC client.
+
+```sh
+# Timestamped PNG in the current directory (path printed on stdout)
+vee screenshot myvm
+
+# Explicit destination
+vee screenshot myvm /tmp/desktop.png
+
+# Scriptable: stdout carries only the written file's absolute path
+open "$(vee screenshot myvm)"
+```
+
+QEMU's `screendump` emits a PPM image; vee converts it to PNG internally, so
+no external tooling (`sips`, ImageMagick) is needed. The command uses the same
+daemon-aware transport as `vee qmp` (see below).
+
+Only QEMU-backed VMs can be captured — vz-backed VMs have no QMP socket. For
+a macOS guest, connect to its Screen Sharing with `vee view` instead.
+
+The MCP server exposes the same capture as the `vm_screenshot` tool, which
+returns the PNG inline as image content so an agent can look at the guest's
+screen directly.
 
 ## How it reaches QEMU
 

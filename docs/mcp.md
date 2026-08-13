@@ -77,6 +77,7 @@ switch, each link guarded by a test.
 | `vm_stats` | read-only | One CPU/memory/disk/network sample via QMP |
 | `vm_qmp` | mutating | Raw QMP command passthrough (daemon-routed when applicable) |
 | `vm_display` | read-only | How to connect to the VM's display (VNC/SPICE/Moonlight) with reachability probe |
+| `vm_screenshot` | read-only | Capture the VM's display and return it inline as a PNG image (optionally saved to a host path) |
 
 ### Host services & assets
 

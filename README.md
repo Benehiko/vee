@@ -240,6 +240,7 @@ See [docs/gpu-passthrough-gaming.md](docs/gpu-passthrough-gaming.md) for Sunshin
 | `vee logs <name>` | Stream QEMU output, or the helper log for a macOS guest |
 | `vee monitor <name>` | Real-time CPU / memory / disk / network stats |
 | `vee qmp <name> <command>` | Send a QMP (QEMU Machine Protocol) command to a running VM |
+| `vee screenshot <name> [file.png]` | Capture a running VM's display to a PNG file (works headless; QEMU backend) |
 | `vee view <name>` | Open or connect to a VM's display (SPICE, GPU, or Screen Sharing for a macOS guest) |
 | `vee config <name>` | Edit a VM's configuration in an interactive TUI (`--ssh-port` changes the forwarded SSH port directly, live on a running VM) |
 | `vee check <name>` | Run health checks on an installed VM |
@@ -384,7 +385,7 @@ docs also live in this repo:
 - [docs/windows.md](docs/windows.md) — Windows (WHPX) host support, feature matrix, and the nested-virtualization limitation
 - [docs/windows-guests.md](docs/windows-guests.md) — the on-demand Windows guest ISO build pipeline
 - [docs/windows-24h2-install.md](docs/windows-24h2-install.md) — full writeup of the Windows 11 24H2 install debugging
-- [docs/qmp.md](docs/qmp.md) — `vee qmp` and the daemon-routed QMP transport
+- [docs/qmp.md](docs/qmp.md) — `vee qmp`, `vee screenshot`, and the daemon-routed QMP transport
 - [docs/mcp.md](docs/mcp.md) — the MCP server: tool reference and agent registration
 - [docs/gpu-passthrough-gaming.md](docs/gpu-passthrough-gaming.md) — Sunshine + Moonlight streaming over GPU passthrough
 - [docs/media-sources.md](docs/media-sources.md) — attaching NFS/SMB/host-dir/block/USB media to VMs
