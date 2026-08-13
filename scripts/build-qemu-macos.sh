@@ -121,6 +121,11 @@ cd "qemu-${QEMU_VERSION}"
 # defines it as int on macOS, which Xcode 15+ clang rejects outright
 # (-Wint-conversion is an error). Cast through uintptr_t — valid for both
 # header families, a no-op wherever upstream compiles today.
+#
+# Keep a pristine copy: the exact change is published as a patch-file release
+# asset next to the upstream tarball, so the two together are the complete
+# corresponding source for this bundle (GPLv2 §3).
+cp ui/egl-helpers.c ui/egl-helpers.c.orig
 perl -pi -e \
   's/eglGetPlatformDisplayEXT\(platform, native, NULL\)/eglGetPlatformDisplayEXT(platform, (void *)(uintptr_t)native, NULL)/' \
   ui/egl-helpers.c
@@ -128,6 +133,14 @@ if ! grep -q '(void \*)(uintptr_t)native' ui/egl-helpers.c; then
   echo "error: egl-helpers.c ANGLE cast patch did not apply — upstream changed the call site; update the perl expression" >&2
   exit 1
 fi
+mkdir -p "$OUT"
+PATCH_FILE="$OUT/qemu-${QEMU_VERSION}-macos-egl-helpers.patch"
+diff -u -L a/ui/egl-helpers.c -L b/ui/egl-helpers.c \
+  ui/egl-helpers.c.orig ui/egl-helpers.c > "$PATCH_FILE" && rc=0 || rc=$?
+# diff exits 1 when the files differ — anything else means no diff (0) or
+# trouble (2), both of which would publish a wrong/empty patch asset.
+[[ $rc -eq 1 ]] || { echo "error: egl-helpers.c patch diff failed (diff rc=$rc)" >&2; exit 1; }
+rm ui/egl-helpers.c.orig
 
 echo "==> Configuring QEMU (cocoa + opengl + virglrenderer + hvf, aarch64-softmmu)"
 # ANGLE ships no pkg-config file, and the patched libepoxy's headers #include
@@ -221,8 +234,10 @@ echo "==> Writing GPLv2 compliance files (COPYING + SOURCE.txt)"
 # the license text and a corresponding-source pointer. This build links QEMU's
 # GL stack against the startergo tap's virglrenderer 1.x + ANGLE (Metal), and
 # carries exactly one source modification (the egl-helpers.c cast above) —
-# recorded in QEMU_PATCHES so SOURCE.txt discloses it.
-QEMU_PATCHES="one-line cast in ui/egl-helpers.c (EGLNativeDisplayType -> void* through uintptr_t, for ANGLE's int-typed native display on macOS); links against virglrenderer 1.x + ANGLE (GLES->Metal) from the startergo Homebrew taps for accelerated virtio-gpu on macOS" \
+# recorded in QEMU_PATCHES so SOURCE.txt discloses it, and published as a
+# patch-file asset (see PATCH_FILE above) on the release page.
+QEMU_PATCHES="one-line cast in ui/egl-helpers.c (EGLNativeDisplayType -> void* through uintptr_t, for ANGLE's int-typed native display on macOS), published as qemu-${QEMU_VERSION}-macos-egl-helpers.patch on the release page; links against virglrenderer 1.x + ANGLE (GLES->Metal) from the startergo Homebrew taps for accelerated virtio-gpu on macOS" \
+RELEASE_TAG="qemu-${QEMU_VERSION}-${VEE_SUFFIX}" \
   bash "$SCRIPT_DIR/qemu-bundle-license.sh" "$BUNDLE" "$WORK/qemu-${QEMU_VERSION}" "$QEMU_VERSION" \
     --target-list=aarch64-softmmu --enable-cocoa --enable-opengl --enable-virglrenderer \
     --enable-hvf --enable-slirp --enable-curl --disable-docs --disable-debug-info

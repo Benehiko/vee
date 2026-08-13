@@ -152,7 +152,8 @@ echo "    bundled DLLs:"; ls -1 "$BUNDLE/bin/"*.dll 2>/dev/null || echo "    (no
 
 echo "==> Writing GPLv2 compliance files (COPYING + SOURCE.txt)"
 # Unmodified upstream QEMU (no patches) — omit QEMU_PATCHES.
-bash "$SCRIPT_DIR/qemu-bundle-license.sh" "$BUNDLE" "$WORK/qemu-${QEMU_VERSION}" "$QEMU_VERSION" \
+RELEASE_TAG="qemu-${QEMU_VERSION}-${VEE_SUFFIX}" \
+  bash "$SCRIPT_DIR/qemu-bundle-license.sh" "$BUNDLE" "$WORK/qemu-${QEMU_VERSION}" "$QEMU_VERSION" \
   --cross-prefix="${CROSS}-" --target-list=x86_64-softmmu --enable-whpx --enable-slirp \
   --disable-docs --disable-debug-info
 # Also ship the MinGW runtime license note alongside (LGPL/GPL-with-exception).
