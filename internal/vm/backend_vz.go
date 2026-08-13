@@ -30,17 +30,15 @@ const vzHelperBinary = vzhelper.HelperBinary
 const vzStartTimeout = 10 * time.Second
 
 // buildVZMachine validates a vz-backend config, writes the machine spec into
-// the VM directory and returns a Machine that spawns the helper. Manual
-// prerequisite until the restore flow lands (#51 V5): a restored macOS
-// bundle (raw disk image, auxiliary storage, hardware-model and
-// machine-identifier blobs) referenced from the config's macos: section.
+// the VM directory and returns a Machine that spawns the helper. A config
+// with a macos: section runs a macOS guest (restored bundle: raw disk image,
+// auxiliary storage, hardware-model and machine-identifier blobs — issue
+// #51); without one it runs a Linux guest booted via EFI from a whole-disk
+// raw image (issue #127).
 func (m *Manager) buildVZMachine(_ context.Context, cfg *VMConfig) (backend.Machine, error) {
 	if !platform.IsMacOS() || platform.HostArch() != "arm64" {
 		return nil, fmt.Errorf("the vz backend requires an Apple Silicon macOS host (got %s/%s)",
 			platform.HostOS(), platform.HostArch())
-	}
-	if cfg.MacOS == nil {
-		return nil, fmt.Errorf("the vz backend requires a macos: section in vm.yaml (auxiliary_storage, hardware_model, machine_identifier — produced by a macOS restore, importable from a macosvm bundle); see https://github.com/Benehiko/vee/issues/51")
 	}
 	if cfg.SSHPort > 0 {
 		return nil, fmt.Errorf("the vz backend does not support ssh_port: NAT has no host port-forwarding — remove ssh_port and use `vee ssh` (resolves the guest IP by MAC)")
@@ -49,7 +47,7 @@ func (m *Manager) buildVZMachine(_ context.Context, cfg *VMConfig) (backend.Mach
 	// directly (vee start, daemon autostart) — refuse like ssh_port above
 	// rather than silently starting a guest that can never nest.
 	if cfg.Nested {
-		return nil, fmt.Errorf("the vz backend does not support nested virtualization: macOS guests cannot host VMs (Apple's frameworks do not work inside a VM) — remove nested from vm.yaml")
+		return nil, fmt.Errorf("the vz backend does not support nested virtualization: Virtualization.framework does not expose EL2 to its guests — remove nested from vm.yaml")
 	}
 
 	// The NAT guest's IP is discovered by MAC, so the MAC must be stable.
@@ -64,33 +62,24 @@ func (m *Manager) buildVZMachine(_ context.Context, cfg *VMConfig) (backend.Mach
 	if cfg.CPUs <= 0 {
 		return nil, fmt.Errorf("the vz backend requires cpus > 0")
 	}
-	// Enforce the restored image's recorded minimums at start too — configs
-	// can be hand-edited below them, and a guest under the minimums will
-	// not boot.
 	cpus := uint64(cfg.CPUs) //nolint:gosec // guarded > 0 above
-	if cfg.MacOS.MinCPUs > 0 && cpus < cfg.MacOS.MinCPUs {
-		cpus = cfg.MacOS.MinCPUs
-	}
-	if cfg.MacOS.MinMemoryBytes > 0 && memBytes < cfg.MacOS.MinMemoryBytes {
-		memBytes = cfg.MacOS.MinMemoryBytes
+	if cfg.MacOS != nil {
+		// Enforce the restored image's recorded minimums at start too —
+		// configs can be hand-edited below them, and a guest under the
+		// minimums will not boot.
+		if cfg.MacOS.MinCPUs > 0 && cpus < cfg.MacOS.MinCPUs {
+			cpus = cfg.MacOS.MinCPUs
+		}
+		if cfg.MacOS.MinMemoryBytes > 0 && memBytes < cfg.MacOS.MinMemoryBytes {
+			memBytes = cfg.MacOS.MinMemoryBytes
+		}
 	}
 
-	// Paths must be absolute: vee's other disk consumers (data-presence
-	// checks, boot-disk moves) resolve relative paths against the process
-	// CWD, so accepting them here would give one field two meanings.
-	disks := make([]vzhelper.DiskSpec, 0, len(cfg.Disks))
-	for _, d := range cfg.Disks {
-		if d.Format != "" && d.Format != "raw" {
-			return nil, fmt.Errorf("the vz backend supports raw disk images only (disk %s has format %q)", d.Path, d.Format)
-		}
-		if !filepath.IsAbs(d.Path) {
-			return nil, fmt.Errorf("the vz backend requires absolute disk paths (got %q)", d.Path)
-		}
-		disks = append(disks, vzhelper.DiskSpec{Path: d.Path, ReadOnly: d.Readonly})
-	}
-	auxPath := cfg.MacOS.AuxiliaryStorage
-	if auxPath != "" && !filepath.IsAbs(auxPath) {
-		return nil, fmt.Errorf("the vz backend requires an absolute auxiliary_storage path (got %q)", auxPath)
+	vmDir := m.vmDir(cfg.Name)
+
+	disks, err := m.vzDiskSpecs(cfg)
+	if err != nil {
+		return nil, err
 	}
 
 	// ResolveHelper also heals a quarantined helper; a failure there is fatal
@@ -100,32 +89,44 @@ func (m *Manager) buildVZMachine(_ context.Context, cfg *VMConfig) (backend.Mach
 		return nil, err
 	}
 
-	vmDir := m.vmDir(cfg.Name)
-
-	display := vzhelper.DefaultDisplay
-	if cfg.MacOS.DisplayWidthPx > 0 && cfg.MacOS.DisplayHeightPx > 0 {
-		display = vzhelper.DisplaySpec{
-			WidthPx:  cfg.MacOS.DisplayWidthPx,
-			HeightPx: cfg.MacOS.DisplayHeightPx,
-			PPI:      cfg.MacOS.DisplayPPI,
-		}
-		if display.PPI <= 0 {
-			display.PPI = vzhelper.DefaultDisplay.PPI
-		}
-	}
-
 	spec := &vzhelper.MachineSpec{
-		Name:              cfg.Name,
-		CPUs:              uint(cpus), //nolint:gosec // VM CPU counts are tiny
-		MemoryBytes:       memBytes,
-		MAC:               cfg.NIC.MAC,
-		Disks:             disks,
-		AuxiliaryStorage:  auxPath,
-		HardwareModel:     cfg.MacOS.HardwareModel,
-		MachineIdentifier: cfg.MacOS.MachineIdentifier,
-		Display:           display,
-		Vsock:             cfg.Vsock,
+		Name:        cfg.Name,
+		CPUs:        uint(cpus), //nolint:gosec // VM CPU counts are tiny
+		MemoryBytes: memBytes,
+		MAC:         cfg.NIC.MAC,
+		Disks:       disks,
+		Vsock:       cfg.Vsock,
 	}
+
+	if cfg.MacOS != nil {
+		auxPath := cfg.MacOS.AuxiliaryStorage
+		if auxPath != "" && !filepath.IsAbs(auxPath) {
+			return nil, fmt.Errorf("the vz backend requires an absolute auxiliary_storage path (got %q)", auxPath)
+		}
+		display := vzhelper.DefaultDisplay
+		if cfg.MacOS.DisplayWidthPx > 0 && cfg.MacOS.DisplayHeightPx > 0 {
+			display = vzhelper.DisplaySpec{
+				WidthPx:  cfg.MacOS.DisplayWidthPx,
+				HeightPx: cfg.MacOS.DisplayHeightPx,
+				PPI:      cfg.MacOS.DisplayPPI,
+			}
+			if display.PPI <= 0 {
+				display.PPI = vzhelper.DefaultDisplay.PPI
+			}
+		}
+		spec.Platform = vzhelper.PlatformMacOS
+		spec.AuxiliaryStorage = auxPath
+		spec.HardwareModel = cfg.MacOS.HardwareModel
+		spec.MachineIdentifier = cfg.MacOS.MachineIdentifier
+		spec.Display = display
+	} else {
+		// Linux guest: EFI boot, headless, console captured to the serial
+		// log. The variable store is created by the helper on first boot.
+		spec.Platform = vzhelper.PlatformLinux
+		spec.EFIVariableStore = vzhelper.EFIVariableStorePath(vmDir)
+		spec.SerialLog = vzhelper.SerialLogPath(vmDir)
+	}
+
 	if err := spec.Validate(); err != nil {
 		return nil, err
 	}
@@ -143,6 +144,212 @@ func (m *Manager) buildVZMachine(_ context.Context, cfg *VMConfig) (backend.Mach
 		diskPath: disks[0].Path,
 		cfg:      cfg,
 	}, nil
+}
+
+// prepareVZLinuxCreate normalizes a template-produced config for a Linux
+// guest on the vz backend (issue #127) and materializes its disks. Templates
+// are written against QEMU's device model, so the differences are resolved
+// here — at create, where the user sees them — rather than failing at first
+// start: QEMU-only devices are refused (or dropped when losing them is
+// harmless), and qcow2 boot disks become raw images, the only format
+// Virtualization.framework reads.
+func (m *Manager) prepareVZLinuxCreate(ctx context.Context, cfg *VMConfig) error {
+	if !platform.IsMacOS() || platform.HostArch() != "arm64" {
+		return fmt.Errorf("the vz backend requires an Apple Silicon macOS host (got %s/%s)",
+			platform.HostOS(), platform.HostArch())
+	}
+	if cfg.GPU.Mode != "" && cfg.GPU.Mode != GPUNone {
+		return fmt.Errorf("the vz backend has no GPU support: Linux guests run headless (gpu mode %q) — use the QEMU backend for graphical guests", cfg.GPU.Mode)
+	}
+	if cfg.TPM != nil && cfg.TPM.Enabled {
+		return fmt.Errorf("the vz backend does not support a TPM device — use the QEMU backend")
+	}
+	if len(cfg.VirtiofsMounts) > 0 {
+		return fmt.Errorf("the vz backend does not support virtiofs shares for Linux guests yet — use the QEMU backend, or drop the share")
+	}
+	if cfg.NIC.Mode == "bridge" {
+		return fmt.Errorf("the vz backend attaches guests to NAT only — bridge networking is not supported; use --nic-mode=user or the QEMU backend")
+	}
+	for _, d := range cfg.Disks {
+		if d.Passthrough {
+			return fmt.Errorf("the vz backend does not support raw device passthrough (disk %s) — use the QEMU backend", d.Path)
+		}
+	}
+
+	log := m.provider.Logger()
+	// Dropped rather than refused: the guest works without them, they are
+	// template defaults the user did not necessarily ask for, and each has a
+	// vz-native replacement.
+	if cfg.SPICE != nil {
+		log.Info("vz: dropping the SPICE display — Linux guests on Virtualization.framework are headless (use `vee ssh`)",
+			zap.String("vm", cfg.Name))
+		cfg.SPICE = nil
+		services := cfg.Services[:0]
+		for _, s := range cfg.Services {
+			if s.Protocol != ServiceSPICE {
+				services = append(services, s)
+			}
+		}
+		cfg.Services = services
+	}
+	if cfg.SSHPort > 0 {
+		log.Info("vz: dropping ssh_port — vz NAT has no host port-forwarding; `vee ssh` resolves the guest IP by MAC",
+			zap.String("vm", cfg.Name), zap.Int("ssh_port", cfg.SSHPort))
+		cfg.SSHPort = 0
+	}
+	// The vz backend carries its own EFI variable store; OVMF pflash is a
+	// QEMU concept and must not be copied into the VM directory.
+	cfg.UEFI = UEFIConfig{}
+
+	return m.materializeVZLinuxDisks(ctx, cfg)
+}
+
+// materializeVZLinuxDisks turns every writable disk of a vz Linux guest into
+// a raw image on disk: qcow2 overlays over a cloud image are flattened with
+// qemu-img convert (then grown to the configured size), and blank disks are
+// created raw. cdrom entries (the cidata seed) are left alone. Idempotent —
+// an already-materialized disk is kept, mirroring qemu.Disk.Create.
+func (m *Manager) materializeVZLinuxDisks(ctx context.Context, cfg *VMConfig) error {
+	for i := range cfg.Disks {
+		d := &cfg.Disks[i]
+		if d.Media == "cdrom" {
+			continue
+		}
+		switch d.Format {
+		case "", "raw", "qcow2":
+			if err := m.materializeVZDisk(ctx, cfg.Name, d); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("the vz backend cannot use disk %s (format %q)", d.Path, d.Format)
+		}
+	}
+	return nil
+}
+
+// materializeVZDisk creates one raw disk image for d and repoints the config
+// entry at it: converted from its qcow2 backing file when it has one, blank
+// otherwise.
+func (m *Manager) materializeVZDisk(ctx context.Context, vmName string, d *DiskConfig) error {
+	target := vzRawDiskPath(d.Path)
+	log := m.provider.Logger()
+
+	if _, err := os.Stat(target); err == nil {
+		log.Info("vz: skipping disk creation", zap.String("reason", "disk already exists"),
+			zap.String("vm", vmName), zap.String("path", target))
+		vzRepointDisk(d, target)
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
+		return err
+	}
+
+	qemuImg, err := vzQemuImgPath()
+	if err != nil {
+		return err
+	}
+
+	if d.BackingFile != "" {
+		// Flatten the cloud image into a standalone raw disk. qemu-img writes
+		// the output sparse, so the file only occupies what the image holds.
+		//nolint:gosec // qemu-img resolved from vee-managed locations; args are vee-derived disk paths
+		if out, err := exec.CommandContext(ctx, qemuImg, "convert", "-O", "raw", d.BackingFile, target).CombinedOutput(); err != nil {
+			_ = os.Remove(target)
+			return fmt.Errorf("convert %s to raw: %w: %s", d.BackingFile, err, strings.TrimSpace(string(out)))
+		}
+		if d.Size != "" {
+			//nolint:gosec // qemu-img resolved from vee-managed locations; args are vee-derived disk paths
+			if out, err := exec.CommandContext(ctx, qemuImg, "resize", "-f", "raw", target, d.Size).CombinedOutput(); err != nil {
+				_ = os.Remove(target)
+				return fmt.Errorf("resize %s to %s: %w: %s", target, d.Size, err, strings.TrimSpace(string(out)))
+			}
+		}
+		log.Info("vz: converted cloud image to raw boot disk",
+			zap.String("vm", vmName), zap.String("backing", d.BackingFile), zap.String("path", target))
+	} else {
+		//nolint:gosec // qemu-img resolved from vee-managed locations; args are vee-derived disk paths
+		if out, err := exec.CommandContext(ctx, qemuImg, "create", "-f", "raw", target, d.Size).CombinedOutput(); err != nil {
+			_ = os.Remove(target)
+			return fmt.Errorf("create raw disk %s: %w: %s", target, err, strings.TrimSpace(string(out)))
+		}
+		log.Info("vz: created raw disk", zap.String("vm", vmName), zap.String("path", target))
+	}
+	vzRepointDisk(d, target)
+	return nil
+}
+
+// vzRepointDisk rewrites a config disk entry to its materialized raw image.
+// The backing file reference is cleared — the raw image is standalone — and
+// the QEMU-only cache hint is dropped.
+func vzRepointDisk(d *DiskConfig, target string) {
+	d.Path = target
+	d.Format = "raw"
+	d.BackingFile = ""
+	d.Cache = ""
+}
+
+// vzRawDiskPath derives the raw image path for a configured disk: a known
+// image suffix is replaced with .raw, and a bare directory (qemu.Disk's
+// "generate the name" form) gets a fixed file name joined on.
+func vzRawDiskPath(path string) string {
+	for _, suffix := range []string{".qcow2", ".qcow", ".img", ".vmdk", ".vdi", ".vhd"} {
+		if strings.HasSuffix(path, suffix) {
+			return strings.TrimSuffix(path, suffix) + ".raw"
+		}
+	}
+	if strings.HasSuffix(path, ".raw") {
+		return path
+	}
+	return filepath.Join(path, "disk-os.raw")
+}
+
+// vzQemuImgPath locates qemu-img for the one-shot raw conversion at create
+// time: the vee-managed bin dir (the bundled QEMU ships it), then PATH.
+func vzQemuImgPath() (string, error) {
+	if home, err := os.UserHomeDir(); err == nil {
+		p := filepath.Join(home, ".vee", "bin", "qemu-img")
+		if _, err := os.Stat(p); err == nil {
+			return p, nil
+		}
+	}
+	if p, err := exec.LookPath("qemu-img"); err == nil {
+		return p, nil
+	}
+	return "", fmt.Errorf("qemu-img not found (looked in ~/.vee/bin and $PATH) — it is needed once, to prepare the guest's raw boot disk; install it with `brew install qemu`")
+}
+
+// vzDiskSpecs translates the config's disks into helper disk attachments.
+// Paths must be absolute: vee's other disk consumers (data-presence checks,
+// boot-disk moves) resolve relative paths against the process CWD, so
+// accepting them here would give one field two meanings. cdrom-media disks
+// (the cloud-init cidata seed) attach read-only, and one whose backing file
+// is gone is skipped like the QEMU backend skips it — the install-state
+// machine strips such disks once provisioning completes, but a stale config
+// can still reach a start.
+func (m *Manager) vzDiskSpecs(cfg *VMConfig) ([]vzhelper.DiskSpec, error) {
+	disks := make([]vzhelper.DiskSpec, 0, len(cfg.Disks))
+	for _, d := range cfg.Disks {
+		if d.Passthrough {
+			return nil, fmt.Errorf("the vz backend does not support raw device passthrough (disk %s)", d.Path)
+		}
+		if d.Format != "" && d.Format != "raw" {
+			return nil, fmt.Errorf("the vz backend supports raw disk images only (disk %s has format %q)", d.Path, d.Format)
+		}
+		if !filepath.IsAbs(d.Path) {
+			return nil, fmt.Errorf("the vz backend requires absolute disk paths (got %q)", d.Path)
+		}
+		if d.Media == "cdrom" {
+			if _, err := os.Stat(d.Path); os.IsNotExist(err) {
+				m.provider.Logger().Warn("skipping cdrom disk: backing file is missing",
+					zap.String("vm", cfg.Name), zap.String("path", d.Path))
+				continue
+			}
+			disks = append(disks, vzhelper.DiskSpec{Path: d.Path, ReadOnly: true})
+			continue
+		}
+		disks = append(disks, vzhelper.DiskSpec{Path: d.Path, ReadOnly: d.Readonly})
+	}
+	return disks, nil
 }
 
 // vzMachine implements backend.Machine by spawning a detached vee-vz-helper
@@ -402,6 +609,14 @@ func vzVsockOpError(msg string) error {
 // the MAC must ADVANCE past the baseline taken before the VM started (every
 // DHCP grant/renewal rewrites it). A fresh macOS guest has no SSH enabled
 // yet, so the lease is the strongest "the guest is up" signal available.
+//
+// Newer macOS hosts no longer maintain /var/db/dhcpd_leases for vmnet
+// guests at all (observed on macOS 26: live NAT guests appear in the ARP
+// table but never in the lease file), so a lease that never advances falls
+// back to dialling the guest's SSH port at its ARP-resolved address — vee's
+// guests all serve SSH (cloud-init templates run sshd; macOS provisioning
+// enables Remote Login), and an answer on the MAC-bound IP can only come
+// from this guest.
 func (m *Manager) waitReadyVZ(ctx context.Context, name string, state *VMState, timeout time.Duration) error {
 	exitedErr := func() error {
 		return fmt.Errorf("VM %q process (PID %d) exited — check %s", name, state.PID, vzhelper.LogPath(m.vmDir(name)))
@@ -424,7 +639,10 @@ func (m *Manager) waitReadyVZ(ctx context.Context, name string, state *VMState, 
 	baseline := state.LeaseBaseline
 	probe := func() bool {
 		exp := dhcpLeaseExpiry(mac)
-		return exp > 0 && exp > baseline
+		if exp > 0 && exp > baseline {
+			return true
+		}
+		return vzGuestSSHReachable(ctx, mac)
 	}
 
 	deadline := time.Now().Add(timeout)
@@ -446,6 +664,24 @@ func (m *Manager) waitReadyVZ(ctx context.Context, name string, state *VMState, 
 			}
 		}
 	}
+}
+
+// vzGuestSSHReachable reports whether something answers on the SSH port of
+// the guest's MAC-resolved IP — the readiness fallback for hosts whose bootpd
+// no longer records vmnet leases. The dial is short: the guest is on a local
+// NAT bridge, so anything longer than a moment means "not up yet".
+func vzGuestSSHReachable(ctx context.Context, mac string) bool {
+	ip, err := ResolveIPFromMAC(mac)
+	if err != nil {
+		return false
+	}
+	d := net.Dialer{Timeout: 2 * time.Second}
+	conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort(ip, "22"))
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
 }
 
 // watchVZShutdown blocks on the helper's wait-shutdown op and records a
@@ -484,17 +720,18 @@ func (m *Manager) watchVZShutdown(ctx context.Context, name, sockPath string) {
 // a guest that cannot be reached will not answer at all.
 const vzShutdownTimeout = 10 * time.Second
 
-// vzShutdownOverSSH asks a macOS guest to power itself off. macOS ignores
+// vzShutdownOverSSH asks a vz guest to power itself off. macOS ignores
 // VZVirtualMachine.requestStop — the ACPI-powerdown analog — so without this
 // every `vee stop` waits out its grace period and then SIGKILLs the VM, which
-// leaves the guest filesystem unclean. Provisioning installs a sudoers rule
-// granting exactly /sbin/shutdown, so no password is needed.
+// leaves the guest filesystem unclean. No password is needed: macOS
+// provisioning installs a sudoers rule granting exactly /sbin/shutdown, and
+// Linux cloud-init users carry passwordless sudo.
 func (m *Manager) vzShutdownOverSSH(ctx context.Context, name string) error {
 	cfg, err := m.loadConfig(name)
 	if err != nil {
 		return err
 	}
-	if cfg.SSHUser == "" {
+	if cfg.SSHUsername() == "" {
 		return fmt.Errorf("no ssh user recorded for %q", name)
 	}
 	if cfg.NIC.MAC == "" {
@@ -516,7 +753,7 @@ func (m *Manager) vzShutdownOverSSH(ctx context.Context, name string) error {
 	shutdownCtx, cancel := context.WithTimeout(ctx, vzShutdownTimeout)
 	defer cancel()
 	//nolint:gosec // ssh from LookPath; arguments are vee-derived
-	out, err := exec.CommandContext(shutdownCtx, sshBin, vzShutdownArgs(cfg.SSHUser, ip, home)...).CombinedOutput()
+	out, err := exec.CommandContext(shutdownCtx, sshBin, vzShutdownArgs(cfg.SSHUsername(), ip, home)...).CombinedOutput()
 	if err != nil {
 		// Losing the connection is the expected outcome of a successful
 		// shutdown, so only a refusal is worth reporting.

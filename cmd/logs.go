@@ -29,8 +29,10 @@ var logsCmd = &cobra.Command{
 	Long: `Stream logs for a VM.
 
 By default, shows the VM process log — QEMU's qemu.log, or vz-helper.log for a
-macOS guest on Virtualization.framework. Use --journal to stream
+guest on Virtualization.framework. Use --journal to stream
 the guest's systemd journal forwarded by systemd-journal-upload.
+(vz Linux guests also write their boot console to serial.log in the VM
+directory.)
 
 Examples:
   vee logs myvm                   — QEMU process log

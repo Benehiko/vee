@@ -40,6 +40,12 @@ type Opts struct {
 	Name     string
 	Template string
 
+	// Backend overrides the virtualization backend: "qemu" or "vz". Empty
+	// keeps the template's choice (QEMU everywhere except the macos
+	// template). Selecting vz for a Linux template runs the guest on Apple's
+	// Virtualization.framework (Apple Silicon hosts; issue #127).
+	Backend string
+
 	// Common defaults — empty string / 0 means "use template default".
 	Memory string
 	CPUs   int
@@ -438,6 +444,11 @@ func configFromTemplate(ctx context.Context, prov provider.Provider, opts Opts, 
 // Mirrors the cobra `Flags().Changed(...)` checks of the original cmd/create.go
 // so the CLI and TUI produce identical configs.
 func applyOverrides(cfg *vm.VMConfig, opts Opts, prov provider.Provider) {
+	// Backend first: later overrides (extra disks) branch on the effective
+	// backend.
+	if opts.Backend != "" {
+		cfg.Backend = opts.Backend
+	}
 	if opts.Memory != "" {
 		cfg.Memory = opts.Memory
 	}
@@ -505,10 +516,11 @@ func applyOverrides(cfg *vm.VMConfig, opts Opts, prov provider.Provider) {
 			Tag:       tag,
 		})
 	}
-	// vz (macOS) guests already consumed opts.Disk as the raw restore-disk
+	// vz macOS guests already consumed opts.Disk as the raw restore-disk
 	// size inside the template; adding a generic qcow2 disk here would make
-	// every start fail (the vz backend is raw-only).
-	if opts.Disk != "" && cfg.BackendName() != backend.VZ {
+	// every start fail (the vz backend is raw-only). vz Linux guests take the
+	// qcow2 entry — Manager.Create materializes it as a raw image (#127).
+	if opts.Disk != "" && (cfg.BackendName() != backend.VZ || cfg.MacOS == nil) {
 		// Append, never prepend: the template's cloud-image disk must keep
 		// slot 0 or the firmware boots the empty extra disk and halts. Path
 		// is absolute under the VM's storage directory — a bare relative

@@ -43,6 +43,23 @@ const (
 	// LogFileName receives the helper's stdout/stderr (the vz analog of
 	// qemu.log).
 	LogFileName = "vz-helper.log"
+	// EFIVariableStoreName is the per-VM EFI variable store (NVRAM) backing a
+	// Linux guest's VZEFIBootLoader. The helper creates it on first boot.
+	EFIVariableStoreName = "efi-vars.fd"
+	// SerialLogName receives a Linux guest's virtio console output — the same
+	// name the QEMU backend uses, so tooling finds it in either case.
+	SerialLogName = "serial.log"
+)
+
+// Guest platforms a machine spec can describe. The zero value resolves to
+// PlatformMacOS so spec files written before the field existed keep working.
+const (
+	// PlatformMacOS runs a macOS guest (VZMacPlatformConfiguration + macOS
+	// boot loader) — requires the restore artifacts below.
+	PlatformMacOS = "macos"
+	// PlatformLinux runs a Linux guest (VZGenericPlatformConfiguration +
+	// VZEFIBootLoader) from an EFI-bootable raw disk image (issue #127).
+	PlatformLinux = "linux"
 )
 
 // ProtocolVersion identifies the control protocol this package defines,
@@ -151,7 +168,10 @@ type DiskSpec struct {
 // MachineSpec fully describes the VM the helper must run. []byte fields
 // marshal as base64 — the same encoding macosvm.json uses for its blobs.
 type MachineSpec struct {
-	Name        string `json:"name"`
+	Name string `json:"name"`
+	// Platform selects the guest platform: PlatformMacOS or PlatformLinux.
+	// Empty resolves to PlatformMacOS (specs written before Linux support).
+	Platform    string `json:"platform,omitempty"`
 	CPUs        uint   `json:"cpus"`
 	MemoryBytes uint64 `json:"memory_bytes"`
 	// MAC is the NIC hardware address (NAT attachment). Required: guest IP
@@ -159,18 +179,36 @@ type MachineSpec struct {
 	MAC   string     `json:"mac"`
 	Disks []DiskSpec `json:"disks"`
 	// AuxiliaryStorage is the absolute path to the VZMacAuxiliaryStorage
-	// (NVRAM analog) created at restore time.
-	AuxiliaryStorage string `json:"auxiliary_storage"`
+	// (NVRAM analog) created at restore time. macOS guests only.
+	AuxiliaryStorage string `json:"auxiliary_storage,omitempty"`
 	// HardwareModel and MachineIdentifier are the opaque
-	// Virtualization.framework blobs bound to the installed guest.
-	HardwareModel     []byte      `json:"hardware_model"`
-	MachineIdentifier []byte      `json:"machine_identifier"`
+	// Virtualization.framework blobs bound to the installed guest. macOS
+	// guests only.
+	HardwareModel     []byte      `json:"hardware_model,omitempty"`
+	MachineIdentifier []byte      `json:"machine_identifier,omitempty"`
 	Display           DisplaySpec `json:"display"`
+	// EFIVariableStore is the absolute path of the NVRAM file backing a Linux
+	// guest's EFI boot loader. The helper creates the file when it does not
+	// exist yet, so it must not be required to pre-exist. Linux guests only.
+	EFIVariableStore string `json:"efi_variable_store,omitempty"`
+	// SerialLog, when set, attaches a virtio console whose output is written
+	// to this file (truncated per boot) — the Linux-guest analog of QEMU's
+	// serial.log. macOS guests have no console device and leave it empty.
+	SerialLog string `json:"serial_log,omitempty"`
 	// Vsock attaches a virtio-vsock (VZVirtioSocketDevice) so the host and
 	// guest share a private channel that needs no NAT networking; the
 	// OpVsockConnect / OpVsockListen control ops drive it. Optional — the
 	// QEMU-backend analog is the vhost-vsock device.
 	Vsock bool `json:"vsock,omitempty"`
+}
+
+// PlatformName resolves the spec's guest platform, defaulting to macOS for
+// specs written before the Platform field existed.
+func (s *MachineSpec) PlatformName() string {
+	if s.Platform == "" {
+		return PlatformMacOS
+	}
+	return s.Platform
 }
 
 // DefaultDisplay matches macosvm's default screen so imported guests keep
@@ -193,17 +231,31 @@ func (s *MachineSpec) Validate() error {
 			return fmt.Errorf("vz machine spec: disk image: %w", err)
 		}
 	}
-	if s.AuxiliaryStorage == "" {
-		return fmt.Errorf("vz machine spec: auxiliary_storage is required")
-	}
-	if _, err := os.Stat(s.AuxiliaryStorage); err != nil {
-		return fmt.Errorf("vz machine spec: auxiliary storage: %w", err)
-	}
-	if len(s.HardwareModel) == 0 || len(s.MachineIdentifier) == 0 {
-		return fmt.Errorf("vz machine spec: hardware_model and machine_identifier blobs are required (produced by the macOS restore, or importable from a macosvm.json)")
-	}
 	if s.MAC == "" {
 		return fmt.Errorf("vz machine spec: mac is required")
+	}
+	switch s.PlatformName() {
+	case PlatformMacOS:
+		if s.AuxiliaryStorage == "" {
+			return fmt.Errorf("vz machine spec: auxiliary_storage is required")
+		}
+		if _, err := os.Stat(s.AuxiliaryStorage); err != nil {
+			return fmt.Errorf("vz machine spec: auxiliary storage: %w", err)
+		}
+		if len(s.HardwareModel) == 0 || len(s.MachineIdentifier) == 0 {
+			return fmt.Errorf("vz machine spec: hardware_model and machine_identifier blobs are required (produced by the macOS restore, or importable from a macosvm.json)")
+		}
+	case PlatformLinux:
+		// The variable store must be named but need not exist: the helper
+		// creates it on the guest's first boot.
+		if s.EFIVariableStore == "" {
+			return fmt.Errorf("vz machine spec: efi_variable_store is required for a linux guest")
+		}
+		if len(s.HardwareModel) != 0 || len(s.MachineIdentifier) != 0 || s.AuxiliaryStorage != "" {
+			return fmt.Errorf("vz machine spec: hardware_model / machine_identifier / auxiliary_storage are macOS restore artifacts — a linux guest must not carry them")
+		}
+	default:
+		return fmt.Errorf("vz machine spec: unknown platform %q (valid: %q, %q)", s.Platform, PlatformMacOS, PlatformLinux)
 	}
 	return nil
 }
@@ -231,6 +283,14 @@ func ResultPath(vmDir string) string { return filepath.Join(vmDir, ResultFileNam
 // LogPath returns the helper-log path inside a VM directory.
 func LogPath(vmDir string) string { return filepath.Join(vmDir, LogFileName) }
 
+// EFIVariableStorePath returns the Linux-guest EFI variable store path inside
+// a VM directory.
+func EFIVariableStorePath(vmDir string) string { return filepath.Join(vmDir, EFIVariableStoreName) }
+
+// SerialLogPath returns the Linux-guest console log path inside a VM
+// directory.
+func SerialLogPath(vmDir string) string { return filepath.Join(vmDir, SerialLogName) }
+
 // WriteSpec atomically persists the machine spec into the VM directory.
 func WriteSpec(vmDir string, spec *MachineSpec) error {
 	data, err := json.MarshalIndent(spec, "", "  ")
@@ -254,7 +314,10 @@ func LoadSpec(vmDir string) (*MachineSpec, error) {
 	if err := json.Unmarshal(data, &spec); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", SpecFileName, err)
 	}
-	if spec.Display == (DisplaySpec{}) {
+	// Only a macOS guest needs the display defaulted: it must always carry a
+	// graphics device or it hangs in the boot loader. Linux guests run
+	// headless (their console goes to SerialLog).
+	if spec.PlatformName() == PlatformMacOS && spec.Display == (DisplaySpec{}) {
 		spec.Display = DefaultDisplay
 	}
 	if err := spec.Validate(); err != nil {

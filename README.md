@@ -2,7 +2,7 @@
 
 A command-line VM manager built on QEMU/KVM, and on Apple's Virtualization.framework for macOS guests. Create, start, SSH into, and monitor virtual machines from a single lightweight tool — with GPU passthrough, virtiofs sharing, SPICE display, and SSH tunnelling wired in.
 
-The backend is a per-VM choice, independent of the guest OS. Every guest runs on QEMU except macOS guests, which run on Virtualization.framework because QEMU's experimental macOS machine does not work on current macOS hosts.
+The backend is a per-VM choice, independent of the guest OS. Every guest runs on QEMU by default, with two exceptions on Apple Silicon hosts: macOS guests always run on Virtualization.framework (QEMU's experimental macOS machine does not work on current macOS hosts), and Linux guests can opt into it with `--backend vz` — which is the only way to give a Linux guest a host↔guest vsock device on a macOS host (see [docs/linux-vz.md](docs/linux-vz.md)).
 
 ```sh
 vee create myvm    # create an Ubuntu 24.04 server VM
@@ -377,6 +377,7 @@ docs also live in this repo:
 
 - [docs/prerequisites.md](docs/prerequisites.md) — system setup, groups, bridge networking, OVMF
 - [docs/macos.md](docs/macos.md) — macOS on Apple Silicon: HVF host support, the per-guest GPU matrix, and macOS guests on Virtualization.framework
+- [docs/linux-vz.md](docs/linux-vz.md) — Linux guests on Virtualization.framework (`--backend vz`): native vsock on macOS hosts, EFI boot, raw disks
 - [docs/windows.md](docs/windows.md) — Windows (WHPX) host support, feature matrix, and the nested-virtualization limitation
 - [docs/windows-guests.md](docs/windows-guests.md) — the on-demand Windows guest ISO build pipeline
 - [docs/windows-24h2-install.md](docs/windows-24h2-install.md) — full writeup of the Windows 11 24H2 install debugging

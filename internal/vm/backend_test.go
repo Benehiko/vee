@@ -48,12 +48,13 @@ func TestBuildBackendMachineDispatch(t *testing.T) {
 	// a zero Manager is enough here.
 	m := &Manager{}
 
-	// On a non-mac host this hits the host guard; on Apple Silicon it hits
-	// the missing macos: section guard. Both are "the vz backend requires"
-	// errors.
+	// On a non-mac host this hits the host guard ("the vz backend requires an
+	// Apple Silicon macOS host"); on Apple Silicon a config without a macos:
+	// section is a Linux guest, which the empty config fails further in
+	// (memory validation). Either way the dispatch reached the vz path.
 	_, _, err := m.buildBackendMachine(context.Background(), &VMConfig{Backend: "vz"})
-	if err == nil || !strings.Contains(err.Error(), "vz backend requires") {
-		t.Errorf("vz backend without prerequisites: got err %v, want vz-requirements error", err)
+	if err == nil {
+		t.Error("empty vz config: want an error from the vz build path")
 	}
 
 	_, _, err = m.buildBackendMachine(context.Background(), &VMConfig{Backend: "bhyve"})

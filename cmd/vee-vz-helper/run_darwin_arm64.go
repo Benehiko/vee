@@ -206,8 +206,20 @@ func startWithLockRetry(machine *vz.VirtualMachine) error {
 }
 
 // buildConfig translates the machine spec into a Virtualization.framework
-// configuration for a macOS guest.
+// configuration, dispatching on the guest platform.
 func buildConfig(spec *vzhelper.MachineSpec) (*vz.VirtualMachineConfiguration, error) {
+	switch spec.PlatformName() {
+	case vzhelper.PlatformLinux:
+		return buildLinuxConfig(spec)
+	default:
+		// LoadSpec validated the platform; anything not linux is macOS.
+		return buildMacConfig(spec)
+	}
+}
+
+// buildMacConfig assembles a macOS guest: mac boot loader, the restored
+// platform artifacts, and the mandatory graphics + input devices.
+func buildMacConfig(spec *vzhelper.MachineSpec) (*vz.VirtualMachineConfiguration, error) {
 	bootLoader, err := vz.NewMacOSBootLoader()
 	if err != nil {
 		return nil, fmt.Errorf("boot loader: %w", err)
@@ -257,47 +269,8 @@ func buildConfig(spec *vzhelper.MachineSpec) (*vz.VirtualMachineConfiguration, e
 	graphics.SetDisplays(display)
 	config.SetGraphicsDevicesVirtualMachineConfiguration([]vz.GraphicsDeviceConfiguration{graphics})
 
-	storage := make([]vz.StorageDeviceConfiguration, 0, len(spec.Disks))
-	for _, d := range spec.Disks {
-		attachment, err := vz.NewDiskImageStorageDeviceAttachment(d.Path, d.ReadOnly)
-		if err != nil {
-			return nil, fmt.Errorf("disk %s: %w", d.Path, err)
-		}
-		blk, err := vz.NewVirtioBlockDeviceConfiguration(attachment)
-		if err != nil {
-			return nil, fmt.Errorf("disk %s: %w", d.Path, err)
-		}
-		storage = append(storage, blk)
-	}
-	config.SetStorageDevicesVirtualMachineConfiguration(storage)
-
-	nat, err := vz.NewNATNetworkDeviceAttachment()
-	if err != nil {
-		return nil, fmt.Errorf("NAT attachment: %w", err)
-	}
-	nic, err := vz.NewVirtioNetworkDeviceConfiguration(nat)
-	if err != nil {
-		return nil, fmt.Errorf("network device: %w", err)
-	}
-	hwAddr, err := net.ParseMAC(spec.MAC)
-	if err != nil {
-		return nil, fmt.Errorf("parse mac %q: %w", spec.MAC, err)
-	}
-	mac, err := vz.NewMACAddress(hwAddr)
-	if err != nil {
-		return nil, fmt.Errorf("mac address: %w", err)
-	}
-	nic.SetMACAddress(mac)
-	config.SetNetworkDevicesVirtualMachineConfiguration([]*vz.VirtioNetworkDeviceConfiguration{nic})
-
-	// Optional virtio-vsock device: a private host↔guest channel that needs
-	// no NAT networking, driven via the vsock control ops (issue #119).
-	if spec.Vsock {
-		vsockDev, err := vz.NewVirtioSocketDeviceConfiguration()
-		if err != nil {
-			return nil, fmt.Errorf("vsock device: %w", err)
-		}
-		config.SetSocketDevicesVirtualMachineConfiguration([]vz.SocketDeviceConfiguration{vsockDev})
+	if err := attachCommonDevices(config, spec); err != nil {
+		return nil, err
 	}
 
 	// Input devices so a future GUI/Screen Sharing session is usable.
@@ -313,6 +286,116 @@ func buildConfig(spec *vzhelper.MachineSpec) (*vz.VirtualMachineConfiguration, e
 	config.SetPointingDevicesVirtualMachineConfiguration([]vz.PointingDeviceConfiguration{pointing})
 
 	return config, nil
+}
+
+// buildLinuxConfig assembles a Linux guest (issue #127): EFI boot from a
+// whole-disk image on a generic platform, headless, with a virtio console
+// captured to the spec's serial log and a virtio entropy device. The disks,
+// NIC and optional vsock device are the same attachments macOS guests get.
+func buildLinuxConfig(spec *vzhelper.MachineSpec) (*vz.VirtualMachineConfiguration, error) {
+	// The variable store (NVRAM) persists the guest's EFI boot entries across
+	// boots. It is created on the guest's first boot and reused after that.
+	var store *vz.EFIVariableStore
+	var err error
+	if _, statErr := os.Stat(spec.EFIVariableStore); statErr == nil {
+		store, err = vz.NewEFIVariableStore(spec.EFIVariableStore)
+	} else {
+		store, err = vz.NewEFIVariableStore(spec.EFIVariableStore, vz.WithCreatingEFIVariableStore())
+	}
+	if err != nil {
+		return nil, fmt.Errorf("EFI variable store %s: %w", spec.EFIVariableStore, err)
+	}
+	bootLoader, err := vz.NewEFIBootLoader(vz.WithEFIVariableStore(store))
+	if err != nil {
+		return nil, fmt.Errorf("EFI boot loader: %w", err)
+	}
+	config, err := vz.NewVirtualMachineConfiguration(bootLoader, spec.CPUs, spec.MemoryBytes)
+	if err != nil {
+		return nil, fmt.Errorf("machine configuration: %w", err)
+	}
+
+	platformConfig, err := vz.NewGenericPlatformConfiguration()
+	if err != nil {
+		return nil, fmt.Errorf("platform configuration: %w", err)
+	}
+	config.SetPlatformVirtualMachineConfiguration(platformConfig)
+
+	if err := attachCommonDevices(config, spec); err != nil {
+		return nil, err
+	}
+
+	// virtio-rng: without an entropy source a Linux guest blocks early boot
+	// on the kernel's entropy pool.
+	entropy, err := vz.NewVirtioEntropyDeviceConfiguration()
+	if err != nil {
+		return nil, fmt.Errorf("entropy device: %w", err)
+	}
+	config.SetEntropyDevicesVirtualMachineConfiguration([]*vz.VirtioEntropyDeviceConfiguration{entropy})
+
+	// The guest console is the only boot diagnostic a headless Linux guest
+	// has; capture it to the serial log (truncated per boot, like QEMU's).
+	if spec.SerialLog != "" {
+		serial, err := vz.NewFileSerialPortAttachment(spec.SerialLog, false)
+		if err != nil {
+			return nil, fmt.Errorf("serial log %s: %w", spec.SerialLog, err)
+		}
+		console, err := vz.NewVirtioConsoleDeviceSerialPortConfiguration(serial)
+		if err != nil {
+			return nil, fmt.Errorf("console device: %w", err)
+		}
+		config.SetSerialPortsVirtualMachineConfiguration([]*vz.VirtioConsoleDeviceSerialPortConfiguration{console})
+	}
+
+	return config, nil
+}
+
+// attachCommonDevices wires the platform-independent devices: virtio-blk
+// disks, the NAT virtio-net NIC with the spec's MAC, and the optional
+// virtio-vsock socket device.
+func attachCommonDevices(config *vz.VirtualMachineConfiguration, spec *vzhelper.MachineSpec) error {
+	storage := make([]vz.StorageDeviceConfiguration, 0, len(spec.Disks))
+	for _, d := range spec.Disks {
+		attachment, err := vz.NewDiskImageStorageDeviceAttachment(d.Path, d.ReadOnly)
+		if err != nil {
+			return fmt.Errorf("disk %s: %w", d.Path, err)
+		}
+		blk, err := vz.NewVirtioBlockDeviceConfiguration(attachment)
+		if err != nil {
+			return fmt.Errorf("disk %s: %w", d.Path, err)
+		}
+		storage = append(storage, blk)
+	}
+	config.SetStorageDevicesVirtualMachineConfiguration(storage)
+
+	nat, err := vz.NewNATNetworkDeviceAttachment()
+	if err != nil {
+		return fmt.Errorf("NAT attachment: %w", err)
+	}
+	nic, err := vz.NewVirtioNetworkDeviceConfiguration(nat)
+	if err != nil {
+		return fmt.Errorf("network device: %w", err)
+	}
+	hwAddr, err := net.ParseMAC(spec.MAC)
+	if err != nil {
+		return fmt.Errorf("parse mac %q: %w", spec.MAC, err)
+	}
+	mac, err := vz.NewMACAddress(hwAddr)
+	if err != nil {
+		return fmt.Errorf("mac address: %w", err)
+	}
+	nic.SetMACAddress(mac)
+	config.SetNetworkDevicesVirtualMachineConfiguration([]*vz.VirtioNetworkDeviceConfiguration{nic})
+
+	// Optional virtio-vsock device: a private host↔guest channel that needs
+	// no NAT networking, driven via the vsock control ops (issue #119).
+	if spec.Vsock {
+		vsockDev, err := vz.NewVirtioSocketDeviceConfiguration()
+		if err != nil {
+			return fmt.Errorf("vsock device: %w", err)
+		}
+		config.SetSocketDevicesVirtualMachineConfiguration([]vz.SocketDeviceConfiguration{vsockDev})
+	}
+	return nil
 }
 
 // controlState bundles everything control connections act on: the machine,

@@ -16,7 +16,9 @@ other:
 > work but are not actively tested. VFIO GPU passthrough, virtiofs, vhost-vsock,
 > swtpm, and bridge networking are Linux-host features and are unavailable on
 > macOS — vee degrades gracefully (warns and falls back) rather than emitting
-> QEMU arguments that cannot work.
+> QEMU arguments that cannot work. One escape hatch: a **Linux guest** created
+> with `--backend vz` runs on Virtualization.framework instead of QEMU and gets
+> a native host↔guest vsock device — see [docs/linux-vz.md](linux-vz.md).
 
 ## Host prerequisites
 
