@@ -120,6 +120,7 @@ type Opts struct {
 	// calling Build; Build itself does no prompting.
 	TorrentExtras  *TorrentExtras
 	JellyfinExtras *JellyfinExtras
+	DNSSinkExtras  *DNSSinkExtras
 	RunnerExtras   *RunnerExtras
 
 	// MacOSExtras selects the macOS guest's image source (vz backend).
@@ -153,6 +154,14 @@ type TorrentExtras struct {
 type JellyfinExtras struct {
 	Libraries []media.Source
 	Secrets   map[string]string
+}
+
+// DNSSinkExtras carries the AdGuard Home admin credentials collected before
+// invoking the dns-sink template. PasswordHash is a bcrypt hash — the plaintext
+// password never reaches the VM config or the cloud-init seed in clear form.
+type DNSSinkExtras struct {
+	AdminUser    string
+	PasswordHash string
 }
 
 // RunnerExtras carries the GitHub Actions runner registration data collected
@@ -279,6 +288,7 @@ var KnownTemplates = []string{
 	"passthrough",
 	"torrent",
 	"jellyfin",
+	"dns-sink",
 	"github-runner",
 	"windows",
 	"truenas",
@@ -396,6 +406,13 @@ func configFromTemplate(ctx context.Context, prov provider.Provider, opts Opts, 
 			secrets = opts.JellyfinExtras.Secrets
 		}
 		return templates.NewJellyfinConfig(ctx, prov, opts.Name, sshKeys, libs, opts.NICBridge, secrets)
+	case "dns-sink":
+		var adminUser, passwordHash string
+		if opts.DNSSinkExtras != nil {
+			adminUser = opts.DNSSinkExtras.AdminUser
+			passwordHash = opts.DNSSinkExtras.PasswordHash
+		}
+		return templates.NewDNSSinkConfig(ctx, prov, opts.Name, sshKeys, opts.NICBridge, adminUser, passwordHash)
 	case "ubuntu-server":
 		version := images.UbuntuVersion(opts.DistroVersion)
 		if opts.DistroVersion == "" || opts.DistroVersion == "latest" {

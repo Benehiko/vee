@@ -247,6 +247,7 @@ var templateCatalog = []templateInfo{
 	{Name: "macos", Description: "macOS guest on Virtualization.framework (Apple Silicon hosts only; ~14 GB IPSW download on first create)", Params: "ipsw (latest|url|path), macosvm_dir, skip_first_boot"},
 	{Name: "torrent", Description: "qbittorrent-nox with optional VPN kill-switch", Params: "share_mounts, and nordvpn_token/nordvpn_country or wireguard_conf for the kill-switch"},
 	{Name: "jellyfin", Description: "Jellyfin media server with NFS/SMB/host-dir media mounts; requires nic_mode=bridge", Params: "media (spec strings), media_secrets"},
+	{Name: "dns-sink", Description: "Alpine + AdGuard Home DNS sinkhole blocking ad and malware domains LAN-wide; requires nic_mode=bridge", Params: "dns_admin_user, dns_admin_password_hash (bcrypt)"},
 	{Name: "github-runner", Description: "Self-hosted GitHub Actions runner", Params: "requires runner_url; runner_token unless a credential snapshot exists; runner_labels, runner_ssh_key"},
 }
 
@@ -340,6 +341,10 @@ type vmCreateIn struct {
 	// jellyfin template.
 	Media        []string          `json:"media,omitempty" jsonschema:"media sources, same syntax as the CLI --media flag: hostdir:/path@/guest, nfs://server/export@/guest, smb://user@server/share@/guest, block:/dev/...@/guest, usb:VENDOR:PRODUCT@/guest"`
 	MediaSecrets map[string]string `json:"media_secrets,omitempty" jsonschema:"secrets for media sources (e.g. SMB passwords), keyed by the prompt keys reported in a previous error"`
+
+	// dns-sink template.
+	DNSAdminUser         string `json:"dns_admin_user,omitempty" jsonschema:"AdGuard Home web UI username (default admin)"`
+	DNSAdminPasswordHash string `json:"dns_admin_password_hash,omitempty" jsonschema:"bcrypt hash of the AdGuard Home web UI password; empty leaves the UI without a login (LAN-restricted by the guest firewall)"`
 }
 
 type vmCreateOut struct {
@@ -434,6 +439,22 @@ func (s *server) templateExtras(in vmCreateIn, opts *build.Opts) (runnerPubKey s
 			return "", fmt.Errorf("media sources need secrets; retry with media_secrets providing: %s", strings.Join(missing, ", "))
 		}
 		opts.JellyfinExtras = &build.JellyfinExtras{Libraries: libs, Secrets: secrets}
+
+	case "dns-sink":
+		// LAN clients must be able to reach the resolver, which user-mode NAT
+		// cannot provide.
+		if in.NICMode != "bridge" {
+			return "", fmt.Errorf("the dns-sink template requires nic_mode=bridge (LAN clients cannot reach a resolver behind user-mode NAT)")
+		}
+		// Only a bcrypt hash is accepted: the MCP surface is non-interactive,
+		// and a plaintext password would be logged in the tool-call transcript.
+		if hash := in.DNSAdminPasswordHash; hash != "" && !strings.HasPrefix(hash, "$2") {
+			return "", fmt.Errorf("dns_admin_password_hash must be a bcrypt hash (starting with $2a$/$2b$/$2y$), not a plaintext password")
+		}
+		opts.DNSSinkExtras = &build.DNSSinkExtras{
+			AdminUser:    in.DNSAdminUser,
+			PasswordHash: in.DNSAdminPasswordHash,
+		}
 
 	case "github-runner":
 		prepared, prepErr := runnersetup.Prepare(in.Name, in.RunnerURL, in.RunnerLabels, in.RunnerSSHKey, func() (string, error) {
