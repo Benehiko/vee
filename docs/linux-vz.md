@@ -32,7 +32,7 @@ and `--backend vz` switches the machine that boots it.
 
 | Aspect | Behavior |
 |---|---|
-| Boot | EFI (`VZEFIBootLoader`) from a whole-disk **raw** image; the per-VM NVRAM lives in `efi-vars.fd` inside the VM directory |
+| Boot | EFI (`VZEFIBootLoader`) from a whole-disk **raw** image; the per-VM NVRAM lives in `efi-vars.fd` inside the VM directory. Alternatively, [direct-kernel boot](#direct-kernel-boot) from an external kernel image (`VZLinuxBootLoader`) |
 | Boot disk | The template's qcow2 cloud-image overlay is flattened to a raw image once, at create time, with `qemu-img convert` (then grown to the configured size — cloud-init's growpart claims the space on first boot) |
 | Provisioning | The normal cloud-init `cidata.iso` seed, attached as a read-only virtio-blk device |
 | Networking | NAT (`VZNATNetworkDeviceAttachment`) with vee's deterministic MAC. `vee ssh` / `vee ip` resolve the guest IP from the host DHCP leases by MAC, exactly like macOS guests |
@@ -65,6 +65,43 @@ from a checkout with `make vz-helper`.
 - **Nested virtualization is unavailable** — the framework does not expose
   EL2 to guests. Use the QEMU backend (`--nested`) for that.
 
+## Direct-kernel boot
+
+Some minimal or appliance Linux images ship no EFI bootloader at all — they
+are distributed as a kernel image plus a kernel command line, with the disk
+carrying only the rootfs or data. `VZEFIBootLoader` cannot start those.
+For such images the vz backend supports **direct-kernel boot** via
+`VZLinuxBootLoader` (issue #129) — the Virtualization.framework analog of
+QEMU's `-kernel` / `-append` / `-initrd`.
+
+Set the three fields in the VM's `vm.yaml` (only `kernel` is required):
+
+```yaml
+# ~/.vee/vms/<name>/vm.yaml
+backend: vz
+kernel: /path/to/vmlinux          # uncompressed arm64 kernel image (absolute path)
+cmdline: "console=hvc0 root=/dev/vda"
+initrd: /path/to/initrd.img       # optional initial ramdisk (absolute path)
+```
+
+Notes:
+
+- **Mutually exclusive with EFI boot.** When `kernel` is set the guest boots
+  from it directly and no `efi-vars.fd` variable store is created; without it
+  the EFI path from issue #128 is used, unchanged. `cmdline` and `initrd` are
+  only valid together with `kernel`.
+- **Paths are host paths** and must be absolute. The kernel (and initrd, if
+  set) are read at every start, so they must exist — vee verifies them at
+  create and at start, and the helper's spec validation checks them again.
+- **Everything else stays the same**: virtio-blk disks (the first disk is
+  still the rootfs/data disk the command line's `root=` points at), the NAT
+  NIC with a deterministic MAC, the serial console captured to `serial.log`,
+  and the optional vsock device.
+- Use `console=hvc0` in the command line to see kernel output in
+  `serial.log` — the guest console is a virtio console.
+- Direct-kernel boot is a vz-backend feature; on the QEMU backend the fields
+  are refused at create.
+
 ## vsock quick tour
 
 ```sh
@@ -93,6 +130,7 @@ the QEMU backend remains the default there.
   qcow2 that was never materialized (e.g. a hand-edited `vm.yaml`). Recreate
   the VM, or convert the image yourself with
   `qemu-img convert -O raw disk.qcow2 disk.raw` and point the config at it.
-- **The guest must be EFI-bootable.** vee's aarch64 cloud images (Ubuntu and
-  Fedora — the distros with wired-up arm64 images) both are. A BIOS-only x86
-  image cannot boot here.
+- **The guest must be EFI-bootable** (unless it uses
+  [direct-kernel boot](#direct-kernel-boot)). vee's aarch64 cloud images
+  (Ubuntu and Fedora — the distros with wired-up arm64 images) both are. A
+  BIOS-only x86 image cannot boot here.

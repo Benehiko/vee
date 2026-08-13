@@ -288,26 +288,15 @@ func buildMacConfig(spec *vzhelper.MachineSpec) (*vz.VirtualMachineConfiguration
 	return config, nil
 }
 
-// buildLinuxConfig assembles a Linux guest (issue #127): EFI boot from a
-// whole-disk image on a generic platform, headless, with a virtio console
-// captured to the spec's serial log and a virtio entropy device. The disks,
-// NIC and optional vsock device are the same attachments macOS guests get.
+// buildLinuxConfig assembles a Linux guest (issue #127): booted either
+// directly from an external kernel image or via EFI from a whole-disk image,
+// on a generic platform, headless, with a virtio console captured to the
+// spec's serial log and a virtio entropy device. The disks, NIC and optional
+// vsock device are the same attachments macOS guests get.
 func buildLinuxConfig(spec *vzhelper.MachineSpec) (*vz.VirtualMachineConfiguration, error) {
-	// The variable store (NVRAM) persists the guest's EFI boot entries across
-	// boots. It is created on the guest's first boot and reused after that.
-	var store *vz.EFIVariableStore
-	var err error
-	if _, statErr := os.Stat(spec.EFIVariableStore); statErr == nil {
-		store, err = vz.NewEFIVariableStore(spec.EFIVariableStore)
-	} else {
-		store, err = vz.NewEFIVariableStore(spec.EFIVariableStore, vz.WithCreatingEFIVariableStore())
-	}
+	bootLoader, err := linuxBootLoader(spec)
 	if err != nil {
-		return nil, fmt.Errorf("EFI variable store %s: %w", spec.EFIVariableStore, err)
-	}
-	bootLoader, err := vz.NewEFIBootLoader(vz.WithEFIVariableStore(store))
-	if err != nil {
-		return nil, fmt.Errorf("EFI boot loader: %w", err)
+		return nil, err
 	}
 	config, err := vz.NewVirtualMachineConfiguration(bootLoader, spec.CPUs, spec.MemoryBytes)
 	if err != nil {
@@ -347,6 +336,46 @@ func buildLinuxConfig(spec *vzhelper.MachineSpec) (*vz.VirtualMachineConfigurati
 	}
 
 	return config, nil
+}
+
+// linuxBootLoader selects a Linux guest's boot method (issue #129): direct
+// kernel boot via VZLinuxBootLoader when the spec names a kernel image (with
+// its command line and optional initrd — the -kernel/-append/-initrd analog),
+// otherwise EFI boot from the disk's own bootloader. LoadSpec validated the
+// two as mutually exclusive.
+func linuxBootLoader(spec *vzhelper.MachineSpec) (vz.BootLoader, error) {
+	if spec.Kernel != "" {
+		var opts []vz.LinuxBootLoaderOption
+		if spec.Cmdline != "" {
+			opts = append(opts, vz.WithCommandLine(spec.Cmdline))
+		}
+		if spec.Initrd != "" {
+			opts = append(opts, vz.WithInitrd(spec.Initrd))
+		}
+		bootLoader, err := vz.NewLinuxBootLoader(spec.Kernel, opts...)
+		if err != nil {
+			return nil, fmt.Errorf("linux boot loader (kernel %s): %w", spec.Kernel, err)
+		}
+		return bootLoader, nil
+	}
+
+	// The variable store (NVRAM) persists the guest's EFI boot entries across
+	// boots. It is created on the guest's first boot and reused after that.
+	var store *vz.EFIVariableStore
+	var err error
+	if _, statErr := os.Stat(spec.EFIVariableStore); statErr == nil {
+		store, err = vz.NewEFIVariableStore(spec.EFIVariableStore)
+	} else {
+		store, err = vz.NewEFIVariableStore(spec.EFIVariableStore, vz.WithCreatingEFIVariableStore())
+	}
+	if err != nil {
+		return nil, fmt.Errorf("EFI variable store %s: %w", spec.EFIVariableStore, err)
+	}
+	bootLoader, err := vz.NewEFIBootLoader(vz.WithEFIVariableStore(store))
+	if err != nil {
+		return nil, fmt.Errorf("EFI boot loader: %w", err)
+	}
+	return bootLoader, nil
 }
 
 // attachCommonDevices wires the platform-independent devices: virtio-blk

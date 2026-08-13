@@ -156,6 +156,22 @@ func (m *Manager) Create(ctx context.Context, cfg *VMConfig) error {
 		return fmt.Errorf("a macos: section requires the vz backend (backend: %q) — QEMU cannot run these guests", backend.VZ)
 	}
 
+	// Direct-kernel boot (issue #129) is wired only for vz Linux guests, where
+	// VZLinuxBootLoader boots an external kernel image directly. Refuse other
+	// pairings here, before the VM directory exists, rather than silently
+	// ignoring the fields.
+	if cfg.Kernel == "" && (cfg.Cmdline != "" || cfg.Initrd != "") {
+		return fmt.Errorf("cmdline / initrd only apply to a direct-kernel boot — set kernel: too")
+	}
+	if cfg.Kernel != "" {
+		if cfg.BackendName() != backend.VZ {
+			return fmt.Errorf("direct-kernel boot (kernel:) requires the vz backend (backend: %q) — the QEMU backend boots guests from their disk or install media", backend.VZ)
+		}
+		if cfg.MacOS != nil {
+			return fmt.Errorf("direct-kernel boot is for Linux guests — a macos: guest boots through the macOS boot loader")
+		}
+	}
+
 	// Nested virtualization is wired only for arm64 QEMU guests (the aarch64
 	// "virt" board's virtualization=on property). Refuse everything else here —
 	// before the VM directory or any prompt, like the backend check above —
@@ -1448,6 +1464,12 @@ func effectiveBridge(cfg *VMConfig) bool {
 }
 
 func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMachine, []int, error) {
+	// Create() refuses the pairing, but a hand-edited vm.yaml reaches here
+	// directly — refuse rather than booting from disk with the fields
+	// silently ignored (issue #129 wires them for the vz backend only).
+	if cfg.Kernel != "" || cfg.Cmdline != "" || cfg.Initrd != "" {
+		return nil, nil, fmt.Errorf("direct-kernel boot (kernel/cmdline/initrd) is wired only for the vz backend — remove the fields from vm.yaml or set backend: vz")
+	}
 	machine, err := qemu.NewEmptyMachine(m.provider)
 	if err != nil {
 		return nil, nil, err

@@ -189,8 +189,21 @@ type MachineSpec struct {
 	Display           DisplaySpec `json:"display"`
 	// EFIVariableStore is the absolute path of the NVRAM file backing a Linux
 	// guest's EFI boot loader. The helper creates the file when it does not
-	// exist yet, so it must not be required to pre-exist. Linux guests only.
+	// exist yet, so it must not be required to pre-exist. Linux guests only,
+	// EFI boot only — mutually exclusive with Kernel.
 	EFIVariableStore string `json:"efi_variable_store,omitempty"`
+	// Kernel, when set, boots the guest directly from this external kernel
+	// image via VZLinuxBootLoader instead of an EFI bootloader on the disk
+	// (issue #129) — the vz analog of QEMU's -kernel, for appliance images
+	// that ship no bootloader. Absolute path; mutually exclusive with
+	// EFIVariableStore. Linux guests only.
+	Kernel string `json:"kernel,omitempty"`
+	// Cmdline is the kernel command line for a direct-kernel boot (the QEMU
+	// -append analog, e.g. "console=hvc0 root=/dev/vda"). Requires Kernel.
+	Cmdline string `json:"cmdline,omitempty"`
+	// Initrd is the optional initial ramdisk for a direct-kernel boot (the
+	// QEMU -initrd analog). Absolute path; requires Kernel.
+	Initrd string `json:"initrd,omitempty"`
 	// SerialLog, when set, attaches a virtio console whose output is written
 	// to this file (truncated per boot) — the Linux-guest analog of QEMU's
 	// serial.log. macOS guests have no console device and leave it empty.
@@ -245,11 +258,31 @@ func (s *MachineSpec) Validate() error {
 		if len(s.HardwareModel) == 0 || len(s.MachineIdentifier) == 0 {
 			return fmt.Errorf("vz machine spec: hardware_model and machine_identifier blobs are required (produced by the macOS restore, or importable from a macosvm.json)")
 		}
+		if s.Kernel != "" || s.Cmdline != "" || s.Initrd != "" {
+			return fmt.Errorf("vz machine spec: kernel / cmdline / initrd are for direct-kernel Linux boot — a macOS guest boots through the macOS boot loader")
+		}
 	case PlatformLinux:
-		// The variable store must be named but need not exist: the helper
-		// creates it on the guest's first boot.
-		if s.EFIVariableStore == "" {
-			return fmt.Errorf("vz machine spec: efi_variable_store is required for a linux guest")
+		switch {
+		case s.Kernel != "":
+			// Direct-kernel boot: the kernel (and initrd, if any) must exist
+			// up front — VZLinuxBootLoader reads them from the host.
+			if s.EFIVariableStore != "" {
+				return fmt.Errorf("vz machine spec: kernel and efi_variable_store are mutually exclusive — a guest boots either directly from a kernel image or through EFI")
+			}
+			if _, err := os.Stat(s.Kernel); err != nil {
+				return fmt.Errorf("vz machine spec: kernel image: %w", err)
+			}
+			if s.Initrd != "" {
+				if _, err := os.Stat(s.Initrd); err != nil {
+					return fmt.Errorf("vz machine spec: initrd: %w", err)
+				}
+			}
+		case s.Cmdline != "" || s.Initrd != "":
+			return fmt.Errorf("vz machine spec: cmdline / initrd only apply to a direct-kernel boot — set kernel too")
+		case s.EFIVariableStore == "":
+			// EFI boot: the variable store must be named but need not exist —
+			// the helper creates it on the guest's first boot.
+			return fmt.Errorf("vz machine spec: a linux guest needs a boot method — kernel (direct-kernel boot) or efi_variable_store (EFI boot)")
 		}
 		if len(s.HardwareModel) != 0 || len(s.MachineIdentifier) != 0 || s.AuxiliaryStorage != "" {
 			return fmt.Errorf("vz machine spec: hardware_model / machine_identifier / auxiliary_storage are macOS restore artifacts — a linux guest must not carry them")

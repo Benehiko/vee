@@ -242,6 +242,71 @@ func TestBuildVZMachineLinuxSpec(t *testing.T) {
 	}
 }
 
+// The direct-kernel branch of buildVZMachine (issue #129) writes a spec that
+// boots via VZLinuxBootLoader: kernel/cmdline/initrd from the config, no EFI
+// variable store — the two boot methods are mutually exclusive.
+func TestBuildVZMachineLinuxSpecDirectKernel(t *testing.T) {
+	if !platform.IsMacOS() || platform.HostArch() != "arm64" {
+		t.Skip("buildVZMachine requires an Apple Silicon macOS host")
+	}
+	if _, err := vzhelper.FindHelper(); err != nil {
+		t.Skip("vee-vz-helper is not installed on this host")
+	}
+	m := newVZTestManager(t)
+
+	vmDir := m.vmDir("lin")
+	if err := os.MkdirAll(filepath.Join(vmDir, "storage"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	raw := filepath.Join(vmDir, "storage", "disk-os.raw")
+	kernel := filepath.Join(vmDir, "vmlinux")
+	initrd := filepath.Join(vmDir, "initrd.img")
+	for _, p := range []string{raw, kernel, initrd} {
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cfg := &VMConfig{
+		Name: "lin", Backend: "vz", Memory: "2G", CPUs: 2,
+		NIC:     NICConfig{Mode: "user"},
+		Disks:   []DiskConfig{{Path: raw, Format: "raw", Media: "disk"}},
+		Kernel:  kernel,
+		Cmdline: "console=hvc0 root=/dev/vda",
+		Initrd:  initrd,
+	}
+	if _, err := m.buildVZMachine(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	spec, err := vzhelper.LoadSpec(vmDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Kernel != kernel || spec.Cmdline != cfg.Cmdline || spec.Initrd != initrd {
+		t.Errorf("direct-kernel fields did not reach the spec: %+v", spec)
+	}
+	if spec.EFIVariableStore != "" {
+		t.Errorf("EFI variable store = %q, want empty for a direct-kernel boot", spec.EFIVariableStore)
+	}
+
+	t.Run("relative kernel path refused", func(t *testing.T) {
+		bad := *cfg
+		bad.Kernel = "vmlinux"
+		if _, err := m.buildVZMachine(context.Background(), &bad); err == nil {
+			t.Error("expected an error for a relative kernel path")
+		}
+	})
+	t.Run("cmdline without kernel refused", func(t *testing.T) {
+		bad := *cfg
+		bad.Kernel = ""
+		bad.Initrd = ""
+		if _, err := m.buildVZMachine(context.Background(), &bad); err == nil {
+			t.Error("expected an error for cmdline without kernel")
+		}
+	})
+}
+
 // A macos: section only means something to the vz backend; pairing it with
 // QEMU must fail at create, not at first start.
 func TestCreateRefusesMacOSSectionOnQEMU(t *testing.T) {
@@ -249,6 +314,30 @@ func TestCreateRefusesMacOSSectionOnQEMU(t *testing.T) {
 	cfg := &VMConfig{Name: "mac", Backend: "qemu", MacOS: &MacOSConfig{}}
 	if err := m.Create(context.Background(), cfg); err == nil || !strings.Contains(err.Error(), "vz") {
 		t.Errorf("Create = %v, want a macos-requires-vz error", err)
+	}
+}
+
+// Direct-kernel boot is wired only for vz Linux guests; other pairings must
+// fail at create, not at first start (issue #129).
+func TestCreateRefusesDirectKernelPairings(t *testing.T) {
+	m := newVZTestManager(t)
+	ctx := context.Background()
+
+	tests := []struct {
+		name string
+		cfg  *VMConfig
+	}{
+		{"kernel on qemu", &VMConfig{Name: "k", Backend: "qemu", Kernel: "/boot/vmlinux"}},
+		{"kernel on a macos guest", &VMConfig{Name: "k", Backend: "vz", Kernel: "/boot/vmlinux", MacOS: &MacOSConfig{}}},
+		{"cmdline without kernel", &VMConfig{Name: "k", Backend: "vz", Cmdline: "console=hvc0"}},
+		{"initrd without kernel", &VMConfig{Name: "k", Backend: "vz", Initrd: "/boot/initrd.img"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := m.Create(ctx, tt.cfg); err == nil {
+				t.Error("expected an error")
+			}
+		})
 	}
 }
 

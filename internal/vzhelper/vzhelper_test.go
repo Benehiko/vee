@@ -84,6 +84,8 @@ func TestSpecValidate(t *testing.T) {
 		{"no hardware model", func(s *MachineSpec) { s.HardwareModel = nil }},
 		{"no machine identifier", func(s *MachineSpec) { s.MachineIdentifier = nil }},
 		{"no mac", func(s *MachineSpec) { s.MAC = "" }},
+		{"kernel on a macos guest", func(s *MachineSpec) { s.Kernel = disk }},
+		{"cmdline on a macos guest", func(s *MachineSpec) { s.Cmdline = "console=hvc0" }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -122,6 +124,8 @@ func TestSpecValidateLinux(t *testing.T) {
 		{"mac restore artifacts on a linux guest", func(s *MachineSpec) { s.HardwareModel = []byte{1} }},
 		{"aux storage on a linux guest", func(s *MachineSpec) { s.AuxiliaryStorage = disk }},
 		{"unknown platform", func(s *MachineSpec) { s.Platform = "windows" }},
+		{"cmdline without kernel", func(s *MachineSpec) { s.Cmdline = "console=hvc0" }},
+		{"initrd without kernel", func(s *MachineSpec) { s.Initrd = disk }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -131,6 +135,92 @@ func TestSpecValidateLinux(t *testing.T) {
 				t.Errorf("expected validation error")
 			}
 		})
+	}
+}
+
+// Direct-kernel boot (issue #129): a Linux guest may boot from an external
+// kernel image instead of an EFI disk — the two are mutually exclusive, and
+// the kernel/initrd must exist up front (VZLinuxBootLoader reads them from
+// the host; there is no first-boot creation like the EFI variable store).
+func TestSpecValidateLinuxDirectKernel(t *testing.T) {
+	dir := t.TempDir()
+	disk := filepath.Join(dir, "disk.raw")
+	kernel := filepath.Join(dir, "vmlinux")
+	initrd := filepath.Join(dir, "initrd.img")
+	for _, p := range []string{disk, kernel, initrd} {
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	valid := MachineSpec{
+		Name: "lin", Platform: PlatformLinux, CPUs: 2, MemoryBytes: 1 << 30,
+		MAC:     "52:54:00:00:00:04",
+		Disks:   []DiskSpec{{Path: disk}},
+		Kernel:  kernel,
+		Cmdline: "console=hvc0 root=/dev/vda",
+		Initrd:  initrd,
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid direct-kernel spec rejected: %v", err)
+	}
+
+	t.Run("kernel without cmdline or initrd", func(t *testing.T) {
+		s := valid
+		s.Cmdline = ""
+		s.Initrd = ""
+		if err := s.Validate(); err != nil {
+			t.Errorf("bare kernel spec rejected: %v", err)
+		}
+	})
+
+	tests := []struct {
+		name   string
+		mutate func(*MachineSpec)
+	}{
+		{"kernel and efi variable store", func(s *MachineSpec) { s.EFIVariableStore = EFIVariableStorePath(dir) }},
+		{"missing kernel file", func(s *MachineSpec) { s.Kernel = filepath.Join(dir, "nope-vmlinux") }},
+		{"missing initrd file", func(s *MachineSpec) { s.Initrd = filepath.Join(dir, "nope-initrd") }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := valid
+			tt.mutate(&s)
+			if err := s.Validate(); err == nil {
+				t.Errorf("expected validation error")
+			}
+		})
+	}
+}
+
+// The direct-kernel fields must survive the spec file round-trip — the helper
+// reads them back from vz-machine.json.
+func TestSpecRoundTripDirectKernel(t *testing.T) {
+	dir := t.TempDir()
+	disk := filepath.Join(dir, "disk.raw")
+	kernel := filepath.Join(dir, "vmlinux")
+	initrd := filepath.Join(dir, "initrd.img")
+	for _, p := range []string{disk, kernel, initrd} {
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	in := &MachineSpec{
+		Name: "lin", Platform: PlatformLinux, CPUs: 2, MemoryBytes: 1 << 30,
+		MAC:     "52:54:00:00:00:05",
+		Disks:   []DiskSpec{{Path: disk}},
+		Kernel:  kernel,
+		Cmdline: "console=hvc0 root=/dev/vda",
+		Initrd:  initrd,
+	}
+	if err := WriteSpec(dir, in); err != nil {
+		t.Fatalf("WriteSpec: %v", err)
+	}
+	out, err := LoadSpec(dir)
+	if err != nil {
+		t.Fatalf("LoadSpec: %v", err)
+	}
+	if out.Kernel != in.Kernel || out.Cmdline != in.Cmdline || out.Initrd != in.Initrd {
+		t.Errorf("direct-kernel fields did not survive the round-trip: %+v", out)
 	}
 }
 
