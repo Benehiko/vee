@@ -401,7 +401,7 @@ func configFromTemplate(ctx context.Context, prov provider.Provider, opts Opts, 
 		if opts.SPICEPort != nil {
 			spicePort = *opts.SPICEPort
 		}
-		return templates.NewWindowsConfig(ctx, prov, winVersion, opts.Name, virtiofsTag, spicePort)
+		return templates.NewWindowsConfig(ctx, prov, winVersion, opts.Name, virtiofsTag, spicePort, sshKeys)
 	case "docker":
 		return templates.NewDockerConfig(ctx, prov, opts.Name, sshKeys, opts.DistroVersion)
 	case "jellyfin":

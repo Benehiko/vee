@@ -132,6 +132,22 @@ func (c *QMPClient) Capabilities() error {
 	return err
 }
 
+// HumanMonitorCommand runs an HMP command through QMP's human-monitor-command
+// passthrough and returns the command's textual output. HMP reports failures
+// as output text rather than QMP errors, so callers must treat non-empty
+// output from mutating commands (hostfwd_add etc.) as the error message.
+func (c *QMPClient) HumanMonitorCommand(cmdLine string) (string, error) {
+	raw, err := c.execute("human-monitor-command", map[string]any{"command-line": cmdLine})
+	if err != nil {
+		return "", err
+	}
+	var out string
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return "", fmt.Errorf("QMP human-monitor-command: decode output: %w", err)
+	}
+	return out, nil
+}
+
 func (c *QMPClient) SystemPowerdown() error {
 	_, err := c.execute("system_powerdown", nil)
 	return err

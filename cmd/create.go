@@ -611,7 +611,7 @@ func init() {
 	createCmd.Flags().BoolVar(&createSSHShare, "ssh-share", false, "Enable SSH agent sharing into VM via AF_VSOCK")
 	createCmd.Flags().BoolVar(&createVsock, "vsock", false, "Attach a virtio-vsock device for a private host<->guest channel")
 	createCmd.Flags().BoolVar(&createHeadless, "headless", false, "Run VM headless (no display window); SSH-only access")
-	createCmd.Flags().IntVar(&createSSHPort, "ssh-port", 0, "Host port forwarded to VM port 22 (headless VMs only)")
+	createCmd.Flags().IntVar(&createSSHPort, "ssh-port", 0, "Host port forwarded to VM port 22 (user-mode NAT; most templates default to a stable per-name port). Change later with `vee config <name> --ssh-port`")
 	createCmd.Flags().StringVar(&createDistro, "distro", "ubuntu", "Base OS distro for devbox/server templates: ubuntu, arch, fedora")
 	createCmd.Flags().StringVar(&createDistroVersion, "distro-version", "latest", "ISO version for the selected distro (e.g. 24.04, 2025.05.01, 42) or 'latest'")
 	createCmd.Flags().StringVar(&createIPSW, "ipsw", "", "macos template: restore image — 'latest', an https URL, or a local .ipsw path")

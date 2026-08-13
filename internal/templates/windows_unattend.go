@@ -359,16 +359,51 @@ var winProductKey = map[images.WindowsVersion]string{
 	images.WindowsServer2022: "VDYBN-27WPP-V4HQT-9VMD4-VMK7H",
 }
 
+// windowsAuthorizedKeysPS1 renders the PowerShell block that installs the
+// caller's SSH public keys (always including the vee-managed key) into
+// administrators_authorized_keys — the key file Windows' sshd consults for
+// members of the Administrators group, which the unattend-created admin is.
+// The file must be ACL'd to Administrators+SYSTEM only or sshd ignores it.
+// Keys are inlined into the script as single-quoted PowerShell strings
+// (embedded quotes doubled per PS quoting rules). Empty keys render nothing.
+func windowsAuthorizedKeysPS1(sshKeys []string) string {
+	var quoted []string
+	for _, k := range sshKeys {
+		k = strings.TrimSpace(k)
+		if k == "" {
+			continue
+		}
+		quoted = append(quoted, "'"+strings.ReplaceAll(k, "'", "''")+"'")
+	}
+	if len(quoted) == 0 {
+		return ""
+	}
+	return `
+# Authorize SSH public keys so 'vee ssh' works without touching the guest.
+try {
+  $sshDir = Join-Path $env:ProgramData 'ssh'
+  New-Item -ItemType Directory -Force -Path $sshDir | Out-Null
+  $ak = Join-Path $sshDir 'administrators_authorized_keys'
+  Set-Content -Path $ak -Encoding ascii -Value @(
+    ` + strings.Join(quoted, ",\n    ") + `
+  )
+  icacls.exe $ak /inheritance:r /grant 'Administrators:F' /grant 'SYSTEM:F' | Out-Null
+  Log "installed administrators_authorized_keys (` + fmt.Sprintf("%d", len(quoted)) + ` key(s))"
+} catch { Log "authorized_keys install failed: $_" }
+`
+}
+
 // guestSetupPS1 renders the first-logon PowerShell script for amd64 guests.
 // It installs WinFsp silently, then runs the virtio-win guest-tools installer
 // (which installs the viofs driver and starts the VirtioFS service). tag is
 // the virtiofs mount tag the share was created with; the script logs it for
 // the operator (virtiofs on Windows exposes the share as a drive letter once
-// the service starts, not by tag, so tag is informational here).
+// the service starts, not by tag, so tag is informational here). sshKeys are
+// the public keys authorized for SSH (see windowsAuthorizedKeysPS1).
 //
 // arm64 guests get guestSetupARM64PS1 instead — the virtiofs chain is not
 // installable there yet.
-func guestSetupPS1(tag string) string {
+func guestSetupPS1(tag string, sshKeys []string) string {
 	const tmpl = `$ErrorActionPreference = 'Continue'
 $log = "$env:SystemDrive\vee-guest-setup.log"
 function Log($m) { "$([DateTime]::Now.ToString('s')) $m" | Tee-Object -FilePath $log -Append }
@@ -421,6 +456,7 @@ try {
   Log "OpenSSH server enabled"
 } catch { Log "OpenSSH enable skipped: $_" }
 
+{{SSHKEYS}}
 Log "vee guest setup complete; rebooting to mount virtiofs share"
 Start-Sleep -Seconds 3
 Restart-Computer -Force
@@ -429,6 +465,7 @@ Restart-Computer -Force
 		"{{TAG}}", tag,
 		"{{VOLID}}", winUnattendVolID,
 		"{{WINFSP}}", winfspMSI,
+		"{{SSHKEYS}}", windowsAuthorizedKeysPS1(sshKeys),
 	)
 	return r.Replace(tmpl)
 }
@@ -440,9 +477,9 @@ Restart-Computer -Force
 // testsigning + the Red Hat CA. The storage (viostor) and network (NetKVM)
 // drivers need nothing here — the answer file's offlineServicing pass injects
 // their attestation-signed ARM64 builds into the applied image. That leaves
-// OpenSSH as the one first-logon job.
-func guestSetupARM64PS1() string {
-	return `$ErrorActionPreference = 'Continue'
+// OpenSSH (plus authorized-keys install) as the one first-logon job.
+func guestSetupARM64PS1(sshKeys []string) string {
+	const tmpl = `$ErrorActionPreference = 'Continue'
 $log = "$env:SystemDrive\vee-guest-setup.log"
 function Log($m) { "$([DateTime]::Now.ToString('s')) $m" | Tee-Object -FilePath $log -Append }
 
@@ -458,8 +495,10 @@ try {
   Log "OpenSSH server enabled"
 } catch { Log "OpenSSH enable skipped: $_" }
 
+{{SSHKEYS}}
 Log "vee guest setup complete"
 `
+	return strings.NewReplacer("{{SSHKEYS}}", windowsAuthorizedKeysPS1(sshKeys)).Replace(tmpl)
 }
 
 // buildExtrasISO builds the single "extras" ISO that carries everything Setup

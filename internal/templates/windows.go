@@ -25,11 +25,14 @@ import (
 // virtiofsTag is the mount tag of the virtiofs share the caller wired via
 // --virtiofs-dir (empty if none); it is only used to log guidance in the guest
 // setup script. spicePort is the SPICE port (0 = auto-assign) so the install
-// can be watched via `vee view` / `vee tunnel`.
+// can be watched via `vee view` / `vee tunnel`. sshKeys are the public keys
+// (--ssh-keys plus the vee-managed key) the first-logon script authorizes in
+// administrators_authorized_keys, so `vee ssh` works out of the box over the
+// forwarded SSH port.
 //
 // The OVMF secboot firmware path must be set in provider config or overridden
 // in vm.yaml.
-func NewWindowsConfig(ctx context.Context, p provider.Provider, version images.WindowsVersion, name, virtiofsTag string, spicePort int) (*vm.VMConfig, error) {
+func NewWindowsConfig(ctx context.Context, p provider.Provider, version images.WindowsVersion, name, virtiofsTag string, spicePort int, sshKeys []string) (*vm.VMConfig, error) {
 	conf := p.Config()
 
 	// The media arch follows the host: UUP dump publishes amd64 and arm64
@@ -77,9 +80,9 @@ func NewWindowsConfig(ctx context.Context, p provider.Provider, version images.W
 		driverDir = "w11"
 	}
 	autounattend := autounattendXML(version, arch, driverDir, virtiofsTag)
-	setupScript := guestSetupPS1(virtiofsTag)
+	setupScript := guestSetupPS1(virtiofsTag, sshKeys)
 	if arch == "arm64" {
-		setupScript = guestSetupARM64PS1()
+		setupScript = guestSetupARM64PS1(sshKeys)
 	}
 
 	// The install media must not show "Press any key to boot from CD" — that
@@ -147,7 +150,16 @@ func NewWindowsConfig(ctx context.Context, p provider.Provider, version images.W
 			Mode:  "user",
 			Model: "virtio-net-pci",
 		},
-		GPU: vm.GPUConfig{Mode: vm.GPUNone},
+		// Forwarded SSH port, like every other user-mode NAT template — the
+		// unattend flow enables sshd and authorizes the vee key, so the guest
+		// is reachable via `vee ssh` without any manual setup (headless has
+		// nothing to do with it; the SPICE display coexists with the forward).
+		SSHPort: deterministicSSHPort(name),
+		// virtio-win guest tools install qemu-ga (and the vioserial driver it
+		// rides on), so attach the QGA channel: `vee ip` and readiness get a
+		// guest-agent path alongside SSH.
+		GuestAgent: true,
+		GPU:        vm.GPUConfig{Mode: vm.GPUNone},
 		UEFI: vm.UEFIConfig{
 			Enabled:  true,
 			CodePath: secbootCode,
@@ -270,7 +282,12 @@ func windowsARM64Config(conf *provider.Config, name, vmDir, installISOPath, extr
 			Mode:  "user",
 			Model: "virtio-net-pci",
 		},
-		GPU: vm.GPUConfig{Mode: vm.GPUNone},
+		// Forwarded SSH port (sshd + authorized keys come from the unattend
+		// first-logon script). No GuestAgent: qemu-ga rides the vioserial
+		// driver, and virtio-win's ARM64 vioserial is test-signed only, so
+		// the QGA channel could never come up — SSH is the control path here.
+		SSHPort: deterministicSSHPort(name),
+		GPU:     vm.GPUConfig{Mode: vm.GPUNone},
 		UEFI: vm.UEFIConfig{
 			Enabled: true,
 		},
