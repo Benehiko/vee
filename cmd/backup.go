@@ -161,10 +161,7 @@ func veeIdentityPath() string {
 }
 
 func buildSSHConn(cfg *vm.VMConfig, state *vm.VMState) (backup.SSHConn, error) {
-	user := cfg.SSHUser
-	if user == "" && cfg.CloudInit != nil && cfg.CloudInit.User != "" {
-		user = cfg.CloudInit.User
-	}
+	user := cfg.SSHUsername()
 
 	identity := veeIdentityPath()
 

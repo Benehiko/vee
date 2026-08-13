@@ -206,10 +206,7 @@ func sshRunQuiet(ctx context.Context, cfg *vm.VMConfig, state *vm.VMState, comma
 	home, _ := os.UserHomeDir()
 	identity := home + "/.vee/ssh/id_ed25519"
 
-	user := cfg.SSHUser
-	if user == "" && cfg.CloudInit != nil {
-		user = cfg.CloudInit.DefaultUser
-	}
+	user := cfg.SSHUsername()
 	if user == "" {
 		user = "root"
 	}

@@ -96,6 +96,49 @@ func TestScratchDiskPath(t *testing.T) {
 // TrueNAS config carried a media=cdrom installer disk with no install_iso flag.
 // The data-check must skip it (a cdrom is never a data disk) rather than trying
 // to stat/inspect a possibly-missing ISO path.
+func TestSSHUsername(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  VMConfig
+		want string
+	}{
+		{
+			name: "explicit ssh_user wins",
+			cfg: VMConfig{
+				SSHUser:   "admin",
+				CloudInit: &CloudInitConfig{User: "vee", DefaultUser: "ubuntu"},
+			},
+			want: "admin",
+		},
+		{
+			name: "cloud-init user before distro default",
+			cfg: VMConfig{
+				CloudInit: &CloudInitConfig{User: "vee", DefaultUser: "ubuntu"},
+			},
+			want: "vee",
+		},
+		{
+			name: "distro default user when no user was created (docker, dns-sink)",
+			cfg: VMConfig{
+				CloudInit: &CloudInitConfig{DefaultUser: "alpine"},
+			},
+			want: "alpine",
+		},
+		{
+			name: "no cloud-init at all",
+			cfg:  VMConfig{},
+			want: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.cfg.SSHUsername(); got != tt.want {
+				t.Errorf("SSHUsername() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCheckDisksForDataSkipsLegacyCdrom(t *testing.T) {
 	cfg := &VMConfig{
 		Disks: []DiskConfig{

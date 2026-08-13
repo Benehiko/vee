@@ -63,6 +63,20 @@ Otherwise vee resolves the VM's LAN address:
 1. **ARP / neighbour table** — matches the VM's MAC address to an IP in the host's neighbour table. IPv4 is preferred over IPv6 link-local.
 2. **Guest agent** — if `guest_agent: true` and `qemu-guest-agent` is installed, reads the IP directly from the guest without ARP.
 
+## Username
+
+The login account is resolved in order:
+
+1. `--user` / `-u` / `-l` on the command line
+2. `ssh_user` in `vm.yaml`
+3. The cloud-init user created at build time (`cloud_init.user`)
+4. The distro image's default user (`cloud_init.default_user`) — templates
+   that don't create a user (`docker`, `desktop`, `dns-sink`) inject the SSH
+   keys into this account instead, e.g. `alpine` on Alpine-based templates
+
+Only if all four are empty does ssh fall back to its own default, the local
+host username.
+
 ## SSH key
 
 vee generates an Ed25519 keypair at `~/.vee/ssh/id_ed25519` on first use and injects the public key via cloud-init. For bridge VMs without cloud-init, set `ssh_user` in `vm.yaml` and ensure the key is pre-installed in the guest.

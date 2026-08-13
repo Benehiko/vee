@@ -49,10 +49,7 @@ var runnerSnapshotCmd = &cobra.Command{
 			return fmt.Errorf("runner %q must be running with an SSH port to snapshot", name)
 		}
 
-		user := cfg.SSHUser
-		if user == "" && cfg.CloudInit != nil {
-			user = cfg.CloudInit.User
-		}
+		user := cfg.SSHUsername()
 
 		id, err := runnercreds.LoadOrCreateIdentity()
 		if err != nil {
