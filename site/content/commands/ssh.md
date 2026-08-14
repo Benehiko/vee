@@ -80,6 +80,12 @@ vee ssh winvm -- cmd /c "dir & ver"
 vee ssh winvm -- powershell -Command "Get-Process | Select-Object -First 3"
 ```
 
+One caveat on the second form: `powershell -Command` re-parses its whole
+command line by PowerShell's own rules (its only quote escape is `\"`), so a
+`-Command` one-liner with *embedded* double quotes may not survive verbatim.
+That is PowerShell behavior, not the transport — arguments to `-File` scripts
+arrive exactly as typed, and `-EncodedCommand` sidesteps quoting entirely.
+
 ## IP resolution
 
 vee first checks whether something is actually listening on the VM's recorded loopback SSH port — QEMU's user-mode NAT port-forward, or the [daemon's loopback proxy]({{< relref "daemon" >}}#ssh-loopback-proxies) for bridge-mode VMs — and connects to `127.0.0.1` if so. A recorded port that nothing serves (for example, the daemon is stopped) is skipped rather than trusted.
