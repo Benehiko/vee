@@ -54,6 +54,32 @@ Without that quoting, ssh would join the arguments with spaces and let the
 remote shell re-split them, which silently mangles or drops multi-word
 arguments.
 
+### Windows guests
+
+What re-splits the command inside the guest is cmd.exe (the shell Windows'
+sshd hands exec requests to), not a POSIX shell, so for Windows guests vee
+quotes for cmd.exe instead: arguments pass bare where possible — backslash
+paths like `C:\Users\vee\run.bat` included — and are double-quoted by Windows
+argv rules where not. Single quotes are never emitted; cmd.exe treats `'` as a
+literal character.
+
+```sh
+vee ssh winvm -- cmdkey /list
+vee ssh winvm -- powershell -NoProfile -File 'C:\scripts\setup.ps1'
+```
+
+(The single quotes in the second example are consumed by the local shell; the
+guest receives the bare path.)
+
+Two cmd.exe quirks no quoting can hide: `%NAME%` expands even inside double
+quotes, and shell operators arrive as literal argument text — to use `&`, `|`
+or redirection, invoke a shell explicitly, just as on Linux:
+
+```sh
+vee ssh winvm -- cmd /c "dir & ver"
+vee ssh winvm -- powershell -Command "Get-Process | Select-Object -First 3"
+```
+
 ## IP resolution
 
 vee first checks whether something is actually listening on the VM's recorded loopback SSH port — QEMU's user-mode NAT port-forward, or the [daemon's loopback proxy]({{< relref "daemon" >}}#ssh-loopback-proxies) for bridge-mode VMs — and connects to `127.0.0.1` if so. A recorded port that nothing serves (for example, the daemon is stopped) is skipped rather than trusted.

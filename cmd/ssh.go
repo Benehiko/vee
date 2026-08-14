@@ -53,8 +53,9 @@ create one (docker, desktop, dns-sink). Override with --user (or ssh's -l).
 
 ssh(1) flags are accepted directly, before the VM name — -L, -R, -D, -J, -A,
 -o and the rest of the ssh flag surface are passed through untouched. Anything
-after -- is the remote command; it is shell-quoted so the argv the guest sees
-is exactly the argv given here.
+after -- is the remote command; it is quoted for the guest's shell so the argv
+the guest sees is exactly the argv given here — POSIX quoting for Linux/macOS
+guests, cmd.exe/Windows-argv quoting for Windows guests.
 
 Note that vee's own global flags (--verbose, --config, --mirror) must come
 before the ssh subcommand, since -v after it belongs to ssh.
@@ -65,6 +66,7 @@ Examples:
   vee ssh myvm --identity ~/.ssh/id_ed25519
   vee ssh -L 8080:localhost:8080 myvm
   vee ssh myvm -- sh -c 'echo "x  y"; echo done'
+  vee ssh winvm -- cmdkey /list
   vee -v ssh myvm`,
 	// ssh's flag surface overlaps vee's (-v most notably, which cobra would
 	// refuse to redefine), and clustered forms like -vvv are not something
@@ -165,7 +167,7 @@ Examples:
 			scrubKnownHost(veeKnownHosts, host, port)
 		}
 
-		sshArgs := buildSSHArgs(user, host, port, sshIdentity, veeKnownHosts, remoteCmd, sshExtraFlags)
+		sshArgs := buildSSHArgs(user, host, port, sshIdentity, veeKnownHosts, remoteCmd, sshExtraFlags, cfg.WindowsGuest())
 
 		sshBin, err := exec.LookPath("ssh")
 		if err != nil {
@@ -235,7 +237,7 @@ func knownToMacOSTerminfo(term string) bool {
 	return false
 }
 
-func buildSSHArgs(user, host string, port int, identity, knownHosts string, remoteCmd, extra []string) []string {
+func buildSSHArgs(user, host string, port int, identity, knownHosts string, remoteCmd, extra []string, windowsGuest bool) []string {
 	var args []string
 	if port != 22 {
 		args = append(args, "-p", fmt.Sprintf("%d", port))
@@ -263,12 +265,19 @@ func buildSSHArgs(user, host string, port int, identity, knownHosts string, remo
 	// remoteCmd holds the remote command argv — after host. ssh joins its
 	// remote-command arguments with single spaces and hands the result to the
 	// remote shell, which re-splits and re-evaluates it, so every argument has
-	// to be shell-quoted to survive the round trip and reach the guest as the
-	// same argv the caller typed.
+	// to be quoted to survive the round trip and reach the guest as the same
+	// argv the caller typed. Which quoting depends on what re-splits it: a
+	// POSIX shell on Linux/macOS guests, cmd.exe on Windows guests — sending
+	// POSIX single quotes to cmd.exe turns `cmdkey /list` into a program
+	// named 'cmdkey.
 	if len(remoteCmd) > 0 {
+		quote := shellQuote
+		if windowsGuest {
+			quote = cmdQuote
+		}
 		quoted := make([]string, len(remoteCmd))
 		for i, a := range remoteCmd {
-			quoted[i] = shellQuote(a)
+			quoted[i] = quote(a)
 		}
 		args = append(args, strings.Join(quoted, " "))
 	}
@@ -293,6 +302,67 @@ func shellQuote(s string) string {
 		return s
 	}
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// cmdQuote renders s as a single argument for a Windows guest. Windows sshd
+// hands the exec-channel string to cmd.exe (vee's Windows template leaves
+// OpenSSH's DefaultShell registry value unset), and Windows programs then
+// split their own command line by the C runtime's argv rules — so the
+// encoding has to satisfy both parsers at once:
+//
+//   - the argument is double-quoted (single quotes mean nothing on Windows),
+//     with a run of backslashes before a double quote doubled and a trailing
+//     run doubled before the closing quote, per the CRT rules;
+//   - an embedded double quote becomes "" rather than \" — both are CRT
+//     escapes, but cmd.exe itself only tracks bare quote characters when it
+//     scans for its metacharacters (& | < > ^), and "" flips its quote state
+//     off and straight back on, so no part of the argument is ever exposed
+//     to cmd.exe's operators the way the text after a \" would be.
+//
+// One cmd.exe quirk is not fixable by any quoting: %NAME% expands even inside
+// double quotes, so an argument containing a percent-wrapped name reaches the
+// guest expanded when the variable is set. That is a property of the guest
+// shell, not of this encoding.
+func cmdQuote(s string) string {
+	if s == "" {
+		return `""`
+	}
+	// Bare is safe for characters neither cmd.exe nor the CRT argv splitter
+	// assigns meaning to. The set matches shellQuote's plus the backslash:
+	// plain Windows paths (C:\Users\vee\run.bat) must pass through untouched.
+	if strings.IndexFunc(s, func(r rune) bool {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			return false
+		}
+		return !strings.ContainsRune(`@%_-+=:,./\`, r)
+	}) < 0 {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) + 2)
+	b.WriteByte('"')
+	slashes := 0
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch c {
+		default:
+			slashes = 0
+		case '\\':
+			slashes++
+		case '"':
+			for ; slashes > 0; slashes-- {
+				b.WriteByte('\\')
+			}
+			b.WriteByte('"')
+		}
+		b.WriteByte(c)
+	}
+	for ; slashes > 0; slashes-- {
+		b.WriteByte('\\')
+	}
+	b.WriteByte('"')
+	return b.String()
 }
 
 func init() {
