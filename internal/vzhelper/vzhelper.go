@@ -62,11 +62,22 @@ const (
 	PlatformLinux = "linux"
 )
 
-// ProtocolVersion identifies the control protocol this package defines,
-// bumped only on incompatible changes (issue #61). Helpers that predate
-// versioning (status/stop/wait-shutdown only) answer OpVersion with an
-// "unknown op" error and are effectively version 0.
-const ProtocolVersion = 1
+// ProtocolVersion identifies the vee ↔ helper contract this package defines —
+// the control ops AND the machine-spec fields the helper honours — bumped
+// whenever vee must be able to tell old and new helpers apart (issue #61).
+// Helpers that predate versioning (status/stop/wait-shutdown only) answer
+// OpVersion with an "unknown op" error and are effectively version 0.
+//
+// Version history:
+//   - 1: vsock control ops (issue #61)
+//   - 2: MachineSpec.Recovery and the --print-protocol flag (issue #134)
+const ProtocolVersion = 2
+
+// ProtocolRecovery is the minimum protocol version whose helper honours
+// MachineSpec.Recovery. An older helper would ignore the unknown JSON field
+// and silently boot the guest normally, so vee refuses a recovery start
+// against one.
+const ProtocolRecovery = 2
 
 // Control protocol ops.
 const (
@@ -213,6 +224,12 @@ type MachineSpec struct {
 	// OpVsockConnect / OpVsockListen control ops drive it. Optional — the
 	// QEMU-backend analog is the vhost-vsock device.
 	Vsock bool `json:"vsock,omitempty"`
+	// Recovery starts a macOS guest in recoveryOS
+	// (VZMacOSVirtualMachineStartOptions.startUpFromMacOSRecovery, issue
+	// #134). One boot only: the manager rewrites the spec on every start, so
+	// the flag never outlives the start that asked for it. macOS guests only —
+	// a Linux guest boots rescue via its kernel command line instead.
+	Recovery bool `json:"recovery,omitempty"`
 }
 
 // PlatformName resolves the spec's guest platform, defaulting to macOS for
@@ -283,6 +300,9 @@ func (s *MachineSpec) Validate() error {
 			// EFI boot: the variable store must be named but need not exist —
 			// the helper creates it on the guest's first boot.
 			return fmt.Errorf("vz machine spec: a linux guest needs a boot method — kernel (direct-kernel boot) or efi_variable_store (EFI boot)")
+		}
+		if s.Recovery {
+			return fmt.Errorf("vz machine spec: recovery is a macOS start option — a linux guest boots rescue via its kernel cmdline (systemd.unit=rescue.target)")
 		}
 		if len(s.HardwareModel) != 0 || len(s.MachineIdentifier) != 0 || s.AuxiliaryStorage != "" {
 			return fmt.Errorf("vz machine spec: hardware_model / machine_identifier / auxiliary_storage are macOS restore artifacts — a linux guest must not carry them")
@@ -475,6 +495,25 @@ func FindHelper() (string, error) {
 		return p, nil
 	}
 	return "", fmt.Errorf("%s not found (looked in $VEE_VZ_HELPER, next to the vee binary, ~/.vee/bin, $PATH) — install it from the darwin-arm64 release tarball or build it with `make vz-helper`", HelperBinary)
+}
+
+// HelperProtocol asks a helper binary which vee ↔ helper contract version it
+// implements (--print-protocol). Helpers that predate the flag fail to parse
+// it and are reported as version 1 — new enough for everything that shipped
+// before versioned spec fields, too old for anything gated on a later
+// version. The probe runs the binary (it exits immediately) rather than the
+// control socket because callers need the answer BEFORE a VM is started.
+func HelperProtocol(ctx context.Context, helperPath string) int {
+	//nolint:gosec // helperPath comes from ResolveHelper / operator override
+	out, err := exec.CommandContext(ctx, helperPath, "--print-protocol").Output()
+	if err != nil {
+		return 1
+	}
+	v, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		return 1
+	}
+	return v
 }
 
 // LatestRestoreImageURL asks the helper for the newest macOS restore-image

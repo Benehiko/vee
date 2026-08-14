@@ -56,7 +56,7 @@ switch, each link guarded by a test.
 | `vm_status` | read-only | Detailed status: boot phase, install state, ports, uptime, persisted health checks |
 | `template_list` | read-only | All templates with defaults and per-template `vm_create` parameters |
 | `vm_create` | mutating | Create a VM from any template — full CLI flag parity (disks, GPU, NIC, virtiofs, SSH, per-template extras); `reinstall=true` wipes and recreates |
-| `vm_start` | mutating | Boot detached; waits for readiness by default; reports first-boot install passes |
+| `vm_start` | mutating | Boot detached; waits for readiness by default; reports first-boot install passes; `recovery` boots into recoveryOS / the Linux rescue target where the backend supports it |
 | `vm_stop` | mutating | Graceful powerdown; `force=true` kills the process |
 | `vm_delete` | destructive | Delete one or more stopped VMs and their disks (`name` for one, `names` for several) |
 | `vm_move` | mutating | Move the boot disk to another directory, stopping/restarting as needed |

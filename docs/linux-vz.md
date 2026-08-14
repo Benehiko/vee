@@ -103,6 +103,30 @@ Notes:
 - Direct-kernel boot is a vz-backend feature; on the QEMU backend the fields
   are refused at create.
 
+## Rescue boot (`--recovery`)
+
+`vee start <name> --recovery` boots a **direct-kernel** guest into the
+systemd rescue target by appending `systemd.unit=rescue.target` to the kernel
+command line for that start only — nothing is persisted, and the next
+`vee start` boots normally. Rescue mode is a single-user maintenance shell:
+no networking, no SSH, so vee skips the usual readiness wait and points you
+at the guest console instead:
+
+```sh
+vee start mylinux --recovery --foreground   # stream the console live
+# or, detached:
+vee start mylinux --recovery
+vee logs mylinux                             # console is in serial.log
+```
+
+The injection only works where vee controls the kernel command line — i.e.
+direct-kernel boots. For an **EFI/whole-disk guest** the disk's own
+bootloader (GRUB) decides the command line, so `--recovery` cannot be
+expressed at launch: vee warns and boots normally. Reach rescue mode there
+the way you would on hardware — through the bootloader menu, or by setting a
+one-shot target from inside the guest (`sudo systemctl reboot --boot-loader-entry=…`
+or `systemd.unit=rescue.target` added in GRUB's edit prompt).
+
 ## vsock quick tour
 
 ```sh

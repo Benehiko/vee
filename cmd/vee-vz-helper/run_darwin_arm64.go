@@ -94,10 +94,22 @@ func runVM(vmDir string) error {
 	// missed (the channel is buffered by the bindings).
 	stateCh := machine.StateChangedNotify()
 
-	if err := startWithLockRetry(machine); err != nil {
+	// Recovery (issue #134): boot a macOS guest into recoveryOS. A start
+	// option, not a config field — it applies to this start only. LoadSpec
+	// validated it as macOS-only.
+	var startOpts []vz.VirtualMachineStartOption
+	if spec.Recovery {
+		startOpts = append(startOpts, vz.WithStartUpFromMacOSRecovery(true))
+	}
+
+	if err := startWithLockRetry(machine, startOpts); err != nil {
 		return err
 	}
-	fmt.Printf("vee-vz-helper: %s started (%d cpus, %d bytes memory)\n", spec.Name, spec.CPUs, spec.MemoryBytes)
+	mode := ""
+	if spec.Recovery {
+		mode = ", recoveryOS"
+	}
+	fmt.Printf("vee-vz-helper: %s started (%d cpus, %d bytes memory%s)\n", spec.Name, spec.CPUs, spec.MemoryBytes, mode)
 
 	// The control socket is bound only AFTER a successful Start: its
 	// appearance is vee's start-confirmation gate, so it must never exist
@@ -180,18 +192,19 @@ type vzSocketDevice struct {
 func (d *vzSocketDevice) Connect(port uint32) (net.Conn, error)    { return d.dev.Connect(port) }
 func (d *vzSocketDevice) Listen(port uint32) (net.Listener, error) { return d.dev.Listen(port) }
 
-// startWithLockRetry starts the VM, retrying while the auxiliary storage is
-// still locked. Virtualization.framework releases that lock asynchronously
-// when a previous VM object is torn down, so the first start after a restore
-// routinely arrives a moment too early and fails with EAGAIN.
-func startWithLockRetry(machine *vz.VirtualMachine) error {
+// startWithLockRetry starts the VM (with the given start options, e.g.
+// recoveryOS), retrying while the auxiliary storage is still locked.
+// Virtualization.framework releases that lock asynchronously when a previous
+// VM object is torn down, so the first start after a restore routinely
+// arrives a moment too early and fails with EAGAIN.
+func startWithLockRetry(machine *vz.VirtualMachine, opts []vz.VirtualMachineStartOption) error {
 	const (
 		attempts = 6
 		backoff  = 2 * time.Second
 	)
 	var err error
 	for attempt := range attempts {
-		if err = machine.Start(); err == nil {
+		if err = machine.Start(opts...); err == nil {
 			return nil
 		}
 		if !strings.Contains(err.Error(), "lock auxiliary storage") {

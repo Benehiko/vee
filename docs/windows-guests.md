@@ -195,6 +195,25 @@ Note the SSH forward only exists on user-mode NAT: bridge-mode guests are
 reached at their LAN address (or through the daemon's loopback proxy), and the
 vz backend resolves the guest IP by MAC instead (`vee ssh` handles both).
 
+## Recovery (WinRE)
+
+Unlike macOS (a hypervisor start option) and direct-kernel Linux (a kernel
+command line), Windows recovery **cannot be requested at launch** — WinRE is
+armed from inside the running guest. `vee start <name> --recovery` therefore
+warns and boots normally, telling you the real path:
+
+```sh
+vee ssh winvm
+# inside the guest, in an elevated shell:
+reagentc /boottore    # arm a one-shot boot into WinRE
+shutdown /r /t 0
+```
+
+The next boot lands in the WinRE "Choose an option" menu (on the SPICE
+display — WinRE runs no sshd). The flag after that boot is consumed;
+subsequent boots are normal. `bcdedit /set {default} advancedoptions true`
+is the alternative for the F8-style startup-settings menu on every boot.
+
 ## ARM64 guests
 
 On arm64 hosts (Apple Silicon under HVF, arm64 Linux under KVM) the pipeline

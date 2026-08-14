@@ -29,14 +29,20 @@ const vzHelperBinary = vzhelper.HelperBinary
 // control socket to appear (the QMP-socket-appears analog).
 const vzStartTimeout = 10 * time.Second
 
+// helperProtocol is a seam over vzhelper.HelperProtocol so the recovery
+// version gate can be tested without a helper binary on disk.
+var helperProtocol = vzhelper.HelperProtocol
+
 // buildVZMachine validates a vz-backend config, writes the machine spec into
 // the VM directory and returns a Machine that spawns the helper. A config
 // with a macos: section runs a macOS guest (restored bundle: raw disk image,
 // auxiliary storage, hardware-model and machine-identifier blobs — issue
 // #51); without one it runs a Linux guest booted via EFI from a whole-disk
 // raw image (issue #127) or directly from an external kernel image when the
-// config names one (issue #129).
-func (m *Manager) buildVZMachine(_ context.Context, cfg *VMConfig) (backend.Machine, error) {
+// config names one (issue #129). recovery boots the guest into recoveryOS /
+// the systemd rescue target for this start only (issue #134); the caller
+// resolved it against RecoveryPlan, so here it is always expressible.
+func (m *Manager) buildVZMachine(ctx context.Context, cfg *VMConfig, recovery bool) (backend.Machine, error) {
 	if !platform.IsMacOS() || platform.HostArch() != "arm64" {
 		return nil, fmt.Errorf("the vz backend requires an Apple Silicon macOS host (got %s/%s)",
 			platform.HostOS(), platform.HostArch())
@@ -126,6 +132,15 @@ func (m *Manager) buildVZMachine(_ context.Context, cfg *VMConfig) (backend.Mach
 		spec.HardwareModel = cfg.MacOS.HardwareModel
 		spec.MachineIdentifier = cfg.MacOS.MachineIdentifier
 		spec.Display = display
+		if recovery {
+			// A helper that predates the field would ignore it and silently
+			// boot the guest normally — refuse up front rather than report a
+			// recovery boot that did not happen (issue #134).
+			if proto := helperProtocol(ctx, helperPath); proto < vzhelper.ProtocolRecovery {
+				return nil, fmt.Errorf("the installed %s (protocol v%d) predates --recovery (needs v%d) — update it (re-extract the release tarball or `make vz-helper`) and retry", vzHelperBinary, proto, vzhelper.ProtocolRecovery)
+			}
+			spec.Recovery = true
+		}
 	} else {
 		// Linux guest: headless, console captured to the serial log. Boot is
 		// direct-kernel (VZLinuxBootLoader — an external kernel image plus
@@ -144,6 +159,12 @@ func (m *Manager) buildVZMachine(_ context.Context, cfg *VMConfig) (backend.Mach
 			spec.Kernel = cfg.Kernel
 			spec.Cmdline = cfg.Cmdline
 			spec.Initrd = cfg.Initrd
+			if recovery {
+				// Rescue is requested on the spec's cmdline, never cfg's —
+				// the spec is rewritten from the config on every start, so
+				// the injection dies with this boot (issue #134).
+				spec.Cmdline = strings.TrimSpace(spec.Cmdline + " " + linuxRescueCmdline)
+			}
 		} else {
 			if cfg.Cmdline != "" || cfg.Initrd != "" {
 				return nil, fmt.Errorf("cmdline / initrd only apply to a direct-kernel boot — set kernel: in vm.yaml too")

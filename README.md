@@ -228,7 +228,7 @@ See [docs/gpu-passthrough-gaming.md](docs/gpu-passthrough-gaming.md) for Sunshin
 |---------|-------------|
 | `vee create <name>` | Provision a new VM |
 | `vee pull <distro> [version]` | Download or build a base image into the cache (`vee pull macos` fetches a macOS restore image) |
-| `vee start <name>` | Boot a VM (detached by default) |
+| `vee start <name>` | Boot a VM (detached by default; `--recovery` boots into recoveryOS / the Linux rescue target where the backend supports it) |
 | `vee stop <name>` | Graceful shutdown |
 | `vee list` | List all VMs and status |
 | `vee status <name>` | Show detailed status of a VM |
