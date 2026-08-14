@@ -28,6 +28,7 @@ func TestSpecRoundTrip(t *testing.T) {
 		HardwareModel:     []byte{0x01, 0x02},
 		MachineIdentifier: []byte{0x03, 0x04},
 		Vsock:             true,
+		Recovery:          true,
 	}
 	if err := WriteSpec(dir, in); err != nil {
 		t.Fatalf("WriteSpec: %v", err)
@@ -45,6 +46,9 @@ func TestSpecRoundTrip(t *testing.T) {
 	}
 	if !out.Vsock {
 		t.Error("Vsock did not survive the round-trip")
+	}
+	if !out.Recovery {
+		t.Error("Recovery did not survive the round-trip")
 	}
 	// Zero display must default, not stay zero (a macOS guest without a
 	// display device hangs in the boot loader).
@@ -126,6 +130,9 @@ func TestSpecValidateLinux(t *testing.T) {
 		{"unknown platform", func(s *MachineSpec) { s.Platform = "windows" }},
 		{"cmdline without kernel", func(s *MachineSpec) { s.Cmdline = "console=hvc0" }},
 		{"initrd without kernel", func(s *MachineSpec) { s.Initrd = disk }},
+		// Recovery is the macOS start option; a Linux guest boots rescue via
+		// its kernel cmdline (issue #134).
+		{"recovery on a linux guest", func(s *MachineSpec) { s.Recovery = true }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

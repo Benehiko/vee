@@ -214,7 +214,7 @@ func TestBuildVZMachineLinuxSpec(t *testing.T) {
 		Disks: []DiskConfig{{Path: raw, Format: "raw", Media: "disk"}},
 		Vsock: true,
 	}
-	if _, err := m.buildVZMachine(context.Background(), cfg); err != nil {
+	if _, err := m.buildVZMachine(context.Background(), cfg, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -275,7 +275,7 @@ func TestBuildVZMachineLinuxSpecDirectKernel(t *testing.T) {
 		Cmdline: "console=hvc0 root=/dev/vda",
 		Initrd:  initrd,
 	}
-	if _, err := m.buildVZMachine(context.Background(), cfg); err != nil {
+	if _, err := m.buildVZMachine(context.Background(), cfg, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -293,7 +293,7 @@ func TestBuildVZMachineLinuxSpecDirectKernel(t *testing.T) {
 	t.Run("relative kernel path refused", func(t *testing.T) {
 		bad := *cfg
 		bad.Kernel = "vmlinux"
-		if _, err := m.buildVZMachine(context.Background(), &bad); err == nil {
+		if _, err := m.buildVZMachine(context.Background(), &bad, false); err == nil {
 			t.Error("expected an error for a relative kernel path")
 		}
 	})
@@ -301,10 +301,146 @@ func TestBuildVZMachineLinuxSpecDirectKernel(t *testing.T) {
 		bad := *cfg
 		bad.Kernel = ""
 		bad.Initrd = ""
-		if _, err := m.buildVZMachine(context.Background(), &bad); err == nil {
+		if _, err := m.buildVZMachine(context.Background(), &bad, false); err == nil {
 			t.Error("expected an error for cmdline without kernel")
 		}
 	})
+}
+
+// A recovery start of a direct-kernel Linux guest injects the rescue target
+// into the SPEC's cmdline only (issue #134): the spec is rewritten from the
+// config on every start, so the injection dies with the boot that asked for
+// it — and it must never ride the macOS recovery flag.
+func TestBuildVZMachineLinuxRecoveryCmdline(t *testing.T) {
+	if !platform.IsMacOS() || platform.HostArch() != "arm64" {
+		t.Skip("buildVZMachine requires an Apple Silicon macOS host")
+	}
+	if _, err := vzhelper.FindHelper(); err != nil {
+		t.Skip("vee-vz-helper is not installed on this host")
+	}
+	m := newVZTestManager(t)
+
+	vmDir := m.vmDir("lin")
+	if err := os.MkdirAll(filepath.Join(vmDir, "storage"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	raw := filepath.Join(vmDir, "storage", "disk-os.raw")
+	kernel := filepath.Join(vmDir, "vmlinux")
+	for _, p := range []string{raw, kernel} {
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	const cmdline = "console=hvc0 root=/dev/vda"
+	cfg := &VMConfig{
+		Name: "lin", Backend: "vz", Memory: "2G", CPUs: 2,
+		NIC:     NICConfig{Mode: "user"},
+		Disks:   []DiskConfig{{Path: raw, Format: "raw", Media: "disk"}},
+		Kernel:  kernel,
+		Cmdline: cmdline,
+	}
+	if _, err := m.buildVZMachine(context.Background(), cfg, true); err != nil {
+		t.Fatal(err)
+	}
+
+	spec, err := vzhelper.LoadSpec(vmDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := cmdline + " " + linuxRescueCmdline; spec.Cmdline != want {
+		t.Errorf("spec cmdline = %q, want %q", spec.Cmdline, want)
+	}
+	if spec.Recovery {
+		t.Error("linux rescue must ride the cmdline, not the macOS recovery flag")
+	}
+	if cfg.Cmdline != cmdline {
+		t.Errorf("recovery leaked into the config cmdline: %q", cfg.Cmdline)
+	}
+
+	// The next normal start rewrites the spec without the injection.
+	if _, err := m.buildVZMachine(context.Background(), cfg, false); err != nil {
+		t.Fatal(err)
+	}
+	spec, err = vzhelper.LoadSpec(vmDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Cmdline != cmdline {
+		t.Errorf("rescue injection survived a normal start: %q", spec.Cmdline)
+	}
+}
+
+// A recovery start of a macOS guest sets the spec's recovery flag — but only
+// when the installed helper is new enough to honour it: an older helper would
+// ignore the unknown field and silently boot the guest normally, so the build
+// must refuse instead (issue #134).
+func TestBuildVZMachineMacOSRecovery(t *testing.T) {
+	if !platform.IsMacOS() || platform.HostArch() != "arm64" {
+		t.Skip("buildVZMachine requires an Apple Silicon macOS host")
+	}
+	if _, err := vzhelper.FindHelper(); err != nil {
+		t.Skip("vee-vz-helper is not installed on this host")
+	}
+	m := newVZTestManager(t)
+
+	vmDir := m.vmDir("mac")
+	if err := os.MkdirAll(filepath.Join(vmDir, "storage"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	raw := filepath.Join(vmDir, "storage", "disk-os.raw")
+	aux := filepath.Join(vmDir, "aux.img")
+	for _, p := range []string{raw, aux} {
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := &VMConfig{
+		Name: "mac", Backend: "vz", Memory: "8G", CPUs: 4,
+		NIC:   NICConfig{Mode: "user"},
+		Disks: []DiskConfig{{Path: raw, Format: "raw", Media: "disk"}},
+		MacOS: &MacOSConfig{
+			AuxiliaryStorage:  aux,
+			HardwareModel:     []byte{1},
+			MachineIdentifier: []byte{2},
+		},
+	}
+
+	t.Run("helper too old", func(t *testing.T) {
+		orig := helperProtocol
+		helperProtocol = func(context.Context, string) int { return vzhelper.ProtocolRecovery - 1 }
+		t.Cleanup(func() { helperProtocol = orig })
+		_, err := m.buildVZMachine(context.Background(), cfg, true)
+		if err == nil || !strings.Contains(err.Error(), "predates --recovery") {
+			t.Errorf("buildVZMachine = %v, want a helper-too-old error", err)
+		}
+	})
+
+	orig := helperProtocol
+	helperProtocol = func(context.Context, string) int { return vzhelper.ProtocolRecovery }
+	t.Cleanup(func() { helperProtocol = orig })
+	if _, err := m.buildVZMachine(context.Background(), cfg, true); err != nil {
+		t.Fatal(err)
+	}
+	spec, err := vzhelper.LoadSpec(vmDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !spec.Recovery {
+		t.Error("recovery did not reach the spec")
+	}
+
+	// One boot only: the next normal start rewrites the spec without it.
+	if _, err := m.buildVZMachine(context.Background(), cfg, false); err != nil {
+		t.Fatal(err)
+	}
+	spec, err = vzhelper.LoadSpec(vmDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Recovery {
+		t.Error("recovery survived a normal start")
+	}
 }
 
 // A macos: section only means something to the vz backend; pairing it with

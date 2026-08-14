@@ -23,7 +23,10 @@ import (
 	"github.com/Benehiko/vee/internal/vm"
 )
 
-var startForeground bool
+var (
+	startForeground bool
+	startRecovery   bool
+)
 
 var startCmd = &cobra.Command{
 	Use:               "start <name>",
@@ -58,19 +61,45 @@ var startCmd = &cobra.Command{
 			}
 		}
 
+		// Resolve --recovery against what this guest can express at launch
+		// (issue #134). A supported plan passes the option through and skips
+		// the SSH-readiness wait afterwards — recovery environments run no
+		// sshd, so the spinner would only time out. An unsupported one boots
+		// normally, with the reason in front of the user rather than a silent
+		// "recovery" that never happened.
+		var startOpts []vm.StartOption
+		recoveryNote := ""
+		if startRecovery {
+			if cfg, cfgErr := mgr.LoadConfig(name); cfgErr == nil {
+				if mode, note := vm.RecoveryPlan(cfg); mode == vm.RecoveryUnsupported {
+					fmt.Fprintf(os.Stderr, "Warning: --recovery: %s\n", note)
+				} else {
+					startOpts = append(startOpts, vm.WithRecovery())
+					recoveryNote = note
+				}
+			}
+		}
+
 		wasInstalling := isInstalling(mgr, name)
 		if startForeground {
+			if recoveryNote != "" {
+				fmt.Fprintln(os.Stderr, recoveryNote)
+			}
 			// Stream serial log + phase spinner in parallel while the install
 			// pass runs. The serial streamer is cancelled once Start returns.
 			serialCtx, cancelSerial := context.WithCancel(cmd.Context())
 			serialPath := filepath.Join(prov.Config().StoragePath, name, "serial.log")
 			go streamSerialForeground(serialCtx, serialPath)
-			err := mgr.Start(cmd.Context(), name, true)
+			err := mgr.Start(cmd.Context(), name, true, startOpts...)
 			cancelSerial()
 			return err
 		}
-		if err := mgr.Start(cmd.Context(), name, false); err != nil {
+		if err := mgr.Start(cmd.Context(), name, false, startOpts...); err != nil {
 			return err
+		}
+		if recoveryNote != "" {
+			fmt.Printf("VM %q started: %s\n", name, recoveryNote)
+			return nil
 		}
 		// If the VM powered off immediately (install pass complete), skip the
 		// readiness spinner — there is nothing to wait for.
@@ -267,6 +296,7 @@ func (m *startSpinnerModel) View() string {
 
 func init() {
 	startCmd.Flags().BoolVar(&startForeground, "foreground", false, "Run in foreground (block until VM exits)")
+	startCmd.Flags().BoolVar(&startRecovery, "recovery", false, "Boot into the guest's recovery/rescue environment for this start (macOS recoveryOS; systemd rescue target for direct-kernel Linux guests)")
 }
 
 // streamSerialForeground tails the serial console log to stderr (ANSI-stripped)

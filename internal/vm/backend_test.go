@@ -52,12 +52,12 @@ func TestBuildBackendMachineDispatch(t *testing.T) {
 	// Apple Silicon macOS host"); on Apple Silicon a config without a macos:
 	// section is a Linux guest, which the empty config fails further in
 	// (memory validation). Either way the dispatch reached the vz path.
-	_, _, err := m.buildBackendMachine(context.Background(), &VMConfig{Backend: "vz"})
+	_, _, err := m.buildBackendMachine(context.Background(), &VMConfig{Backend: "vz"}, false)
 	if err == nil {
 		t.Error("empty vz config: want an error from the vz build path")
 	}
 
-	_, _, err = m.buildBackendMachine(context.Background(), &VMConfig{Backend: "bhyve"})
+	_, _, err = m.buildBackendMachine(context.Background(), &VMConfig{Backend: "bhyve"}, false)
 	if err == nil || !strings.Contains(err.Error(), "unknown backend") {
 		t.Errorf("unknown backend: got err %v, want unknown-backend error", err)
 	}

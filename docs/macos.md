@@ -431,9 +431,41 @@ installs a forward. Inside the guest, the host is always CID 2
 (`VMADDR_CID_HOST`).
 
 The control protocol also answers a `version` op with the protocol version
-vee and the helper must agree on (currently 1). A helper that predates these
+vee and the helper must agree on (currently 2). A helper that predates these
 ops answers them with `unknown op`, which vee reports as an "update
-`vee-vz-helper`" error rather than a raw protocol failure.
+`vee-vz-helper`" error rather than a raw protocol failure. The helper binary
+also answers `--print-protocol` directly, which vee uses to check for
+features *before* starting a VM (a helper too old for the flag fails to parse
+it, which vee reads as "too old").
+
+### Recovery (recoveryOS)
+
+`vee start <name> --recovery` boots a macOS guest into **recoveryOS** — the
+same environment a physical Mac reaches by holding the power button. It is a
+hypervisor start option
+(`VZMacOSVirtualMachineStartOptions.startUpFromMacOSRecovery`), so vee can
+request it purely host-side, without touching the guest.
+
+```sh
+vee start mymac --recovery
+vee view mymac        # recoveryOS has no SSH — use the display
+```
+
+Useful for the things recoveryOS exists for: changing the guest's security
+policy (`csrutil`, `bputil`), repairing or reinstalling the OS, and Terminal
+access to a guest that no longer boots.
+
+Notes:
+
+- **One boot only.** The flag applies to the start that carried it; the next
+  `vee start` boots normally. Nothing is persisted in `vm.yaml`.
+- **No SSH, no readiness wait.** recoveryOS runs no sshd, so vee skips the
+  usual readiness spinner and tells you to use `vee view` instead.
+- **Requires a current `vee-vz-helper`** (control protocol v2+). vee checks
+  before starting; an older helper would silently boot the guest normally,
+  so the start is refused with an update hint instead.
+- Requires macOS 13+ on the host (the framework returns an error on older
+  versions).
 
 ### Caveats
 

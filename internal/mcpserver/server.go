@@ -576,6 +576,7 @@ type vmStartIn struct {
 	Name           string `json:"name" jsonschema:"name of the VM"`
 	Wait           *bool  `json:"wait,omitempty" jsonschema:"wait for the guest to become ready (default true)"`
 	TimeoutSeconds int    `json:"timeout_seconds,omitempty" jsonschema:"readiness wait timeout; default 300"`
+	Recovery       bool   `json:"recovery,omitempty" jsonschema:"boot into the guest's recovery/rescue environment for this start (macOS recoveryOS on vz; systemd rescue target for direct-kernel Linux on vz); guests whose boot method has no launch-time hook boot normally and the message explains why"`
 }
 
 type vmStartOut struct {
@@ -591,17 +592,50 @@ func (s *server) vmStart(ctx context.Context, _ *mcp.CallToolRequest, in vmStart
 	if in.TimeoutSeconds > 0 {
 		timeout = time.Duration(in.TimeoutSeconds) * time.Second
 	}
+
+	// `vee start --recovery` analog (issue #134): a supported plan starts the
+	// guest into recovery and never waits for readiness — recovery
+	// environments run no sshd, so the wait could only time out. An
+	// unsupported plan boots normally and the message says why, rather than
+	// silently reporting a recovery boot that did not happen.
+	recoveryNote := ""
+	if in.Recovery {
+		cfg, err := s.mgr.LoadConfig(in.Name)
+		if err != nil {
+			return nil, vmStartOut{}, err
+		}
+		mode, note := vm.RecoveryPlan(cfg)
+		if mode != vm.RecoveryUnsupported {
+			if err := s.startDetached(ctx, in.Name, vm.WithRecovery()); err != nil {
+				return nil, vmStartOut{}, err
+			}
+			return nil, vmStartOut{Name: in.Name, Status: "started", Message: note}, nil
+		}
+		recoveryNote = "recovery was not applied: " + note
+	}
+
 	if in.Wait != nil && !*in.Wait {
 		if err := s.startDetached(ctx, in.Name); err != nil {
 			return nil, vmStartOut{}, err
 		}
-		return nil, vmStartOut{Name: in.Name, Status: "started", Message: "not waiting for readiness; poll with vm_status"}, nil
+		msg := "not waiting for readiness; poll with vm_status"
+		if recoveryNote != "" {
+			msg = recoveryNote + "; " + msg
+		}
+		return nil, vmStartOut{Name: in.Name, Status: "started", Message: msg}, nil
 	}
 	out, err := s.startAndWait(ctx, in.Name, timeout)
+	if recoveryNote != "" && err == nil {
+		if out.Message != "" {
+			out.Message = recoveryNote + "; " + out.Message
+		} else {
+			out.Message = recoveryNote
+		}
+	}
 	return nil, out, err
 }
 
-func (s *server) startDetached(ctx context.Context, name string) error {
+func (s *server) startDetached(ctx context.Context, name string, opts ...vm.StartOption) error {
 	// Mirror `vee start`: make sure the pinned QEMU bundle exists before the
 	// manager needs it. vz-backed VMs (macOS guests) don't use QEMU.
 	if cfg, err := s.mgr.LoadConfig(name); err != nil || cfg.BackendName() == backend.QEMU {
@@ -611,7 +645,7 @@ func (s *server) startDetached(ctx context.Context, name string) error {
 		}
 		s.prov.Config().QemuBinaryPath = qemuPath
 	}
-	return s.mgr.Start(ctx, name, false)
+	return s.mgr.Start(ctx, name, false, opts...)
 }
 
 func (s *server) startAndWait(ctx context.Context, name string, timeout time.Duration) (vmStartOut, error) {

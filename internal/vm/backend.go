@@ -15,8 +15,10 @@ import (
 // buildBackendMachine dispatches machine construction on the VM's backend.
 // The QEMU path is the existing buildMachine; other backends slot in here.
 // The returned PIDs are virtiofsd helpers — a QEMU-only concern (vz shares
-// directories natively).
-func (m *Manager) buildBackendMachine(ctx context.Context, cfg *VMConfig) (backend.Machine, []int, error) {
+// directories natively). recovery is only ever true for guests whose
+// RecoveryPlan resolved to a supported mode — all vz today — so the QEMU path
+// never sees it.
+func (m *Manager) buildBackendMachine(ctx context.Context, cfg *VMConfig, recovery bool) (backend.Machine, []int, error) {
 	switch cfg.BackendName() {
 	case backend.QEMU:
 		machine, virtiofsdPIDs, err := m.buildMachine(ctx, cfg)
@@ -25,7 +27,7 @@ func (m *Manager) buildBackendMachine(ctx context.Context, cfg *VMConfig) (backe
 		}
 		return qemuMachine{machine}, virtiofsdPIDs, nil
 	case backend.VZ:
-		machine, err := m.buildVZMachine(ctx, cfg)
+		machine, err := m.buildVZMachine(ctx, cfg, recovery)
 		if err != nil {
 			return nil, nil, err
 		}

@@ -203,7 +203,7 @@ func newCycleHarness(t *testing.T, pending bool) *cycleHarness {
 		h.steps = append(h.steps, "stop")
 		return h.stopErr
 	}
-	startForGrant = func(m *Manager, _ context.Context, name string, _ bool) error {
+	startForGrant = func(m *Manager, _ context.Context, name string, _ bool, _ ...StartOption) error {
 		h.steps = append(h.steps, "start")
 		if h.startErr != nil {
 			return h.startErr

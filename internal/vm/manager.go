@@ -316,11 +316,47 @@ func (m *Manager) Create(ctx context.Context, cfg *VMConfig) error {
 	return m.saveConfig(cfg)
 }
 
+// StartOption tweaks a single Start invocation. Options apply to that start
+// only — nothing they request is persisted into the VM config.
+type StartOption func(*startOptions)
+
+type startOptions struct {
+	// recovery boots the guest into its recovery/rescue environment where the
+	// backend can express that at launch (see RecoveryPlan, issue #134).
+	recovery bool
+}
+
+// WithRecovery boots the guest into its recovery/rescue environment for this
+// start only: recoveryOS for a vz macOS guest, the systemd rescue target for
+// a vz direct-kernel Linux guest. Where the guest's boot method has no
+// launch-time hook (EFI/GRUB whole-disk images, Windows), the start proceeds
+// normally and the no-op is logged — callers that need the warning in front
+// of the user should consult RecoveryPlan first.
+func WithRecovery() StartOption {
+	return func(o *startOptions) { o.recovery = true }
+}
+
 // Start launches a VM. If foreground is true it blocks; otherwise it detaches.
-func (m *Manager) Start(ctx context.Context, name string, foreground bool) error {
+func (m *Manager) Start(ctx context.Context, name string, foreground bool, opts ...StartOption) error {
+	var so startOptions
+	for _, opt := range opts {
+		opt(&so)
+	}
+
 	cfg, err := m.loadConfig(name)
 	if err != nil {
 		return err
+	}
+
+	// Resolve the recovery request against what this guest can express at
+	// launch. Where it cannot, warn and boot normally — never silently report
+	// a recovery boot that did not happen (issue #134).
+	if so.recovery {
+		if mode, note := RecoveryPlan(cfg); mode == RecoveryUnsupported {
+			m.provider.Logger().Warn("--recovery is a no-op for this guest",
+				zap.String("vm", name), zap.String("reason", note))
+			so.recovery = false
+		}
 	}
 
 	state, err := m.loadState(name)
@@ -439,7 +475,7 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool) error
 		}
 	}
 
-	machine, virtiofsdPIDs, err := m.buildBackendMachine(ctx, cfg)
+	machine, virtiofsdPIDs, err := m.buildBackendMachine(ctx, cfg, so.recovery)
 	if err != nil {
 		return err
 	}
