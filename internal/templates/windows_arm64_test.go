@@ -94,6 +94,11 @@ func TestWindowsARM64ConfigShape(t *testing.T) {
 	if cfg.SSHPort <= 0 {
 		t.Error("aarch64 config has no forwarded SSH port; the guest would be unreachable on user-mode NAT")
 	}
+	// ...and the unattend account, or `vee ssh` falls back to the local host
+	// username (Windows has no cloud-init user to resolve) and auth fails.
+	if cfg.SSHUser != winAdminUser {
+		t.Errorf("ssh user %q, want the unattend account %q", cfg.SSHUser, winAdminUser)
+	}
 	// qemu-ga rides the vioserial driver, which is test-signed on ARM64 and
 	// cannot load — attaching the QGA channel would just be a dead device.
 	if cfg.GuestAgent {

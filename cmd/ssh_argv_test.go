@@ -296,11 +296,13 @@ func TestShellQuote(t *testing.T) {
 
 // TestBuildSSHArgsRemoteCommand covers the round trip that issue #100
 // describes: ssh joins its remote-command arguments with spaces and lets the
-// remote shell re-split them, so vee has to quote each one.
+// remote shell re-split them, so vee has to quote each one — for the shell
+// the guest actually runs: POSIX for Linux/macOS, cmd.exe for Windows.
 func TestBuildSSHArgsRemoteCommand(t *testing.T) {
 	tests := []struct {
 		name      string
 		remoteCmd []string
+		windows   bool
 		want      string
 	}{
 		{
@@ -323,11 +325,29 @@ func TestBuildSSHArgsRemoteCommand(t *testing.T) {
 			remoteCmd: []string{"bash", "-c", `cd /x && echo "it's fine"`},
 			want:      `bash -c 'cd /x && echo "it'\''s fine"'`,
 		},
+		{
+			name:      "windows guests get no POSIX quotes",
+			remoteCmd: []string{"cmdkey", "/list"},
+			windows:   true,
+			want:      `cmdkey /list`,
+		},
+		{
+			name:      "windows backslash paths pass through bare",
+			remoteCmd: []string{"powershell", "-NoProfile", "-File", `C:\scripts\setup.ps1`},
+			windows:   true,
+			want:      `powershell -NoProfile -File C:\scripts\setup.ps1`,
+		},
+		{
+			name:      "windows spaces double-quote",
+			remoteCmd: []string{"cmd", "/c", `C:\Program Files\app\run.bat`},
+			windows:   true,
+			want:      `cmd /c "C:\Program Files\app\run.bat"`,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			args := buildSSHArgs("vee", "10.0.0.5", 22, "", "", tt.remoteCmd, nil)
+			args := buildSSHArgs("vee", "10.0.0.5", 22, "", "", tt.remoteCmd, nil, tt.windows)
 			if len(args) == 0 {
 				t.Fatal("buildSSHArgs returned no args")
 			}
@@ -344,11 +364,45 @@ func TestBuildSSHArgsRemoteCommand(t *testing.T) {
 	}
 }
 
+// TestCmdQuote pins the Windows-guest encoding: bare when nothing needs care
+// (backslash paths included — cmd.exe must see them unquoted), otherwise
+// double-quoted per the CRT argv rules with embedded quotes doubled ("") so
+// cmd.exe's metacharacter scan never leaves quote state mid-argument.
+func TestCmdQuote(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{"", `""`},
+		{"cmdkey", "cmdkey"},
+		{"/list", "/list"},
+		{"-NoProfile", "-NoProfile"},
+		{"key=value", "key=value"},
+		{`C:\Users\vee\run.bat`, `C:\Users\vee\run.bat`},
+		{"C:/scripts/setup.ps1", "C:/scripts/setup.ps1"},
+		{"%PATH%", "%PATH%"}, // cmd.exe expands %NAME% quoted or not; quoting it would change nothing
+		{"a b", `"a b"`},
+		{`C:\Program Files\app.exe`, `"C:\Program Files\app.exe"`},
+		{`C:\dir with space\`, `"C:\dir with space\\"`}, // trailing backslash run doubles before the closing quote
+		{`say "hi"`, `"say ""hi"""`},
+		{`a\"b`, `"a\\""b"`}, // backslash run before a quote doubles too
+		{"a & b", `"a & b"`},
+		{"a|b", `"a|b"`},
+		{"it's", `"it's"`},
+		{"$HOME", `"$HOME"`}, // literal under cmd.exe; only %...% can still expand
+	}
+	for _, tt := range tests {
+		if got := cmdQuote(tt.in); got != tt.want {
+			t.Errorf("cmdQuote(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
 // TestBuildSSHArgsUserFlagsPrecedeDefaults pins the ordering that lets a user
 // -o override vee's: ssh honours the first value it sees for an option.
 func TestBuildSSHArgsUserFlagsPrecedeDefaults(t *testing.T) {
 	args := buildSSHArgs("vee", "10.0.0.5", 22, "", "/tmp/known_hosts",
-		nil, []string{"-o", "StrictHostKeyChecking=no"})
+		nil, []string{"-o", "StrictHostKeyChecking=no"}, false)
 
 	userIdx := slices.Index(args, "StrictHostKeyChecking=no")
 	veeIdx := slices.Index(args, "StrictHostKeyChecking=accept-new")
@@ -364,7 +418,7 @@ func TestBuildSSHArgsUserFlagsPrecedeDefaults(t *testing.T) {
 // empty argument, which ssh would treat as a (blank) remote command and so
 // never allocate a pty for.
 func TestBuildSSHArgsNoRemoteCommand(t *testing.T) {
-	args := buildSSHArgs("vee", "10.0.0.5", 2222, "", "", nil, nil)
+	args := buildSSHArgs("vee", "10.0.0.5", 2222, "", "", nil, nil, false)
 	if got := args[len(args)-1]; got != "vee@10.0.0.5" {
 		t.Errorf("last arg = %q, want the destination with nothing after it", got)
 	}

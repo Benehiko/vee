@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"strings"
 	"time"
 
 	"github.com/Benehiko/vee/internal/backend"
@@ -310,6 +311,13 @@ func (c *VMConfig) BackendName() backend.Name {
 		return backend.QEMU
 	}
 	return backend.Name(c.Backend)
+}
+
+// WindowsGuest reports whether the config describes a Windows guest. It
+// matters wherever vee speaks to the inside of the VM: the shell an exec
+// request lands in is cmd.exe, not a POSIX shell.
+func (c *VMConfig) WindowsGuest() bool {
+	return strings.Contains(strings.ToLower(c.Template), "windows")
 }
 
 // SSHUsername resolves the account SSH-based operations log in as: the

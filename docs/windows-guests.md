@@ -173,12 +173,22 @@ Linux templates are:
 - **Keys.** The first-logon script writes the keys from `--ssh-keys` plus the
   vee-managed key into `C:\ProgramData\ssh\administrators_authorized_keys`
   (ACL'd to Administrators + SYSTEM, as sshd requires), so `vee ssh <name>`
-  works with no guest-side setup. Password auth also works with the unattend
-  account (`vee` / `vee`).
+  works with no guest-side setup. The config records `ssh_user: vee` (the
+  unattend account), so no `--user` flag is needed. Password auth also works
+  with the same account (`vee` / `vee`).
 - **Guest agent.** On amd64 the virtio-win guest tools install `qemu-ga` and
   the template attaches the QGA channel, so `vee ip` and readiness checks have
   a guest-agent path alongside SSH. (Not on arm64 — the ARM64 vioserial driver
   is test-signed and cannot load; SSH is the control path there.)
+- **Remote commands.** `vee ssh winvm -- <cmd>` quotes the command for
+  cmd.exe — the shell Windows' sshd hands exec requests to — rather than for a
+  POSIX shell: bare backslash paths pass through untouched, arguments with
+  spaces or metacharacters are double-quoted by Windows argv rules, and single
+  quotes (which cmd.exe treats as literal characters) are never emitted. So
+  `vee ssh winvm -- cmdkey /list` and
+  `vee ssh winvm -- powershell -NoProfile -File C:\scripts\setup.ps1` arrive
+  exactly as typed. To use cmd.exe operators, invoke a shell explicitly:
+  `vee ssh winvm -- cmd /c "dir & ver"`.
 
 To change the forwarded port after the VM exists:
 

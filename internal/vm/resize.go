@@ -235,7 +235,7 @@ func humanDiskSize(b int64) string {
 // a resize, keyed off what vee knows about the guest OS.
 func guestGrowHint(cfg *VMConfig) string {
 	switch {
-	case strings.Contains(strings.ToLower(cfg.Template), "windows"):
+	case cfg.WindowsGuest():
 		return `Inside Windows, extend C: over the new space (Disk Management → Extend Volume, or):
   powershell "Resize-Partition -DriveLetter C -Size (Get-PartitionSupportedSize -DriveLetter C).SizeMax"
 If Windows placed a recovery partition between C: and the free space, delete it
