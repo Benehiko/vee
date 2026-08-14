@@ -155,6 +155,10 @@ func NewWindowsConfig(ctx context.Context, p provider.Provider, version images.W
 		// is reachable via `vee ssh` without any manual setup (headless has
 		// nothing to do with it; the SPICE display coexists with the forward).
 		SSHPort: deterministicSSHPort(name),
+		// The unattend-created admin account. Without it recorded here,
+		// `vee ssh` would fall back to the local host username — Windows has
+		// no cloud-init user to resolve.
+		SSHUser: winAdminUser,
 		// virtio-win guest tools install qemu-ga (and the vioserial driver it
 		// rides on), so attach the QGA channel: `vee ip` and readiness get a
 		// guest-agent path alongside SSH.
@@ -304,6 +308,10 @@ func windowsARM64Config(conf *provider.Config, name, vmDir, installISOPath, extr
 		// driver, and virtio-win's ARM64 vioserial is test-signed only, so
 		// the QGA channel could never come up — SSH is the control path here.
 		SSHPort: deterministicSSHPort(name),
+		// The unattend-created admin account. Without it recorded here,
+		// `vee ssh` would fall back to the local host username — Windows has
+		// no cloud-init user to resolve.
+		SSHUser: winAdminUser,
 		GPU:     vm.GPUConfig{Mode: vm.GPUNone},
 		UEFI: vm.UEFIConfig{
 			Enabled: true,

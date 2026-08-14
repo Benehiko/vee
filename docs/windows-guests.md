@@ -173,8 +173,9 @@ Linux templates are:
 - **Keys.** The first-logon script writes the keys from `--ssh-keys` plus the
   vee-managed key into `C:\ProgramData\ssh\administrators_authorized_keys`
   (ACL'd to Administrators + SYSTEM, as sshd requires), so `vee ssh <name>`
-  works with no guest-side setup. Password auth also works with the unattend
-  account (`vee` / `vee`).
+  works with no guest-side setup. The config records `ssh_user: vee` (the
+  unattend account), so no `--user` flag is needed. Password auth also works
+  with the same account (`vee` / `vee`).
 - **Guest agent.** On amd64 the virtio-win guest tools install `qemu-ga` and
   the template attaches the QGA channel, so `vee ip` and readiness checks have
   a guest-agent path alongside SSH. (Not on arm64 — the ARM64 vioserial driver
