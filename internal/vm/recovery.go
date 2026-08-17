@@ -43,7 +43,7 @@ func RecoveryPlan(cfg *VMConfig) (RecoveryMode, string) {
 	if cfg.BackendName() == backend.VZ {
 		if cfg.MacOS != nil {
 			return RecoveryMacOS, fmt.Sprintf(
-				"booting into recoveryOS — SSH is unavailable there; open the guest's display with `vee view %s`", cfg.Name)
+				"booting into recoveryOS — SSH is unavailable there; open the guest's screen with `vee view %s --native` (recoveryOS runs no Screen Sharing)", cfg.Name)
 		}
 		if cfg.Kernel != "" {
 			return RecoveryLinuxKernel, fmt.Sprintf(

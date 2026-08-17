@@ -585,10 +585,10 @@ func vzControlRequest(ctx context.Context, sockPath string, req *vzhelper.Reques
 	return &resp, nil
 }
 
-// vzVsockOpTimeout bounds the vsock control ops: the helper answers them from
-// memory (it does not wait on the guest), so a slow response means a wedged
-// helper, not a booting guest.
-const vzVsockOpTimeout = 10 * time.Second
+// vzControlOpTimeout bounds control ops the helper answers from memory
+// without waiting on the guest — vsock bridging and the native display
+// request — so a slow response means a wedged helper, not a booting guest.
+const vzControlOpTimeout = 10 * time.Second
 
 // VZVsockConnect opens a host→guest virtio-vsock connection to a port the
 // guest is listening on (AF_VSOCK), for a running vz-backend VM. The helper
@@ -599,7 +599,7 @@ func (m *Manager) VZVsockConnect(ctx context.Context, name string, port uint32) 
 	if err != nil {
 		return nil, err
 	}
-	resp, err := vzControlRequest(ctx, sockPath, &vzhelper.Request{Op: vzhelper.OpVsockConnect, Port: port}, vzVsockOpTimeout)
+	resp, err := vzControlRequest(ctx, sockPath, &vzhelper.Request{Op: vzhelper.OpVsockConnect, Port: port}, vzControlOpTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("vsock-connect %s port %d: %w", name, port, err)
 	}
@@ -622,7 +622,7 @@ func (m *Manager) VZVsockListen(ctx context.Context, name string, port uint32, h
 	if err != nil {
 		return err
 	}
-	resp, err := vzControlRequest(ctx, sockPath, &vzhelper.Request{Op: vzhelper.OpVsockListen, Port: port, Path: hostSocket}, vzVsockOpTimeout)
+	resp, err := vzControlRequest(ctx, sockPath, &vzhelper.Request{Op: vzhelper.OpVsockListen, Port: port, Path: hostSocket}, vzControlOpTimeout)
 	if err != nil {
 		return fmt.Errorf("vsock-listen %s port %d: %w", name, port, err)
 	}
@@ -632,34 +632,75 @@ func (m *Manager) VZVsockListen(ctx context.Context, name string, port uint32, h
 	return nil
 }
 
+// vzControlSocket validates that a VM is driven through the helper control
+// protocol — vz backend, running — and returns its config and control socket.
+func (m *Manager) vzControlSocket(name string) (*VMConfig, string, error) {
+	cfg, err := m.loadConfig(name)
+	if err != nil {
+		return nil, "", err
+	}
+	if cfg.BackendName() != backend.VZ {
+		return nil, "", fmt.Errorf("VM %q does not use the vz backend — there is no helper control socket to drive", name)
+	}
+	state, err := m.LoadState(name)
+	if err != nil || state.ControlSocket == "" || !isAlive(state.PID) {
+		return nil, "", fmt.Errorf("VM %q is not running", name)
+	}
+	return cfg, state.ControlSocket, nil
+}
+
 // vzVsockControlSocket validates that a VM can serve vsock ops — vz backend,
 // vsock enabled, running — and returns its helper control socket.
 func (m *Manager) vzVsockControlSocket(name string) (string, error) {
-	cfg, err := m.loadConfig(name)
+	cfg, sockPath, err := m.vzControlSocket(name)
 	if err != nil {
 		return "", err
-	}
-	if cfg.BackendName() != backend.VZ {
-		return "", fmt.Errorf("VM %q does not use the vz backend — its vsock channel is not driven through the helper control protocol", name)
 	}
 	if !cfg.Vsock {
 		return "", fmt.Errorf("VM %q has no vsock device — set vsock: true in its vm.yaml and restart it", name)
 	}
-	state, err := m.LoadState(name)
-	if err != nil || state.ControlSocket == "" || !isAlive(state.PID) {
-		return "", fmt.Errorf("VM %q is not running", name)
+	return sockPath, nil
+}
+
+// VZShowDisplay asks the running helper of a vz macOS guest to present its
+// native display window (VZVirtualMachineView, issue #139) — the only screen
+// available in recoveryOS, at the login window, and during the macOS
+// installer, where the guest's own Screen Sharing service is not running.
+// The window lives inside vee-vz-helper (a display can only be attached by
+// the process that owns the VZVirtualMachine); closing it leaves the VM
+// running. The helper presents at most one window per VM run.
+func (m *Manager) VZShowDisplay(ctx context.Context, name string) error {
+	cfg, sockPath, err := m.vzControlSocket(name)
+	if err != nil {
+		return err
 	}
-	return state.ControlSocket, nil
+	if cfg.MacOS == nil {
+		return fmt.Errorf("VM %q is a headless Linux guest — it has no display device; use `vee ssh %s`", name, name)
+	}
+	resp, err := vzControlRequest(ctx, sockPath, &vzhelper.Request{Op: vzhelper.OpShowDisplay}, vzControlOpTimeout)
+	if err != nil {
+		return fmt.Errorf("show-display %s: %w", name, err)
+	}
+	if !resp.OK {
+		return fmt.Errorf("show-display %s: %w", name, vzHelperOpError(resp.Error, "the native display window"))
+	}
+	return nil
+}
+
+// vzHelperOpError upgrades a helper-reported op failure into an actionable
+// error: an "unknown op" answer means the running helper predates feature.
+func vzHelperOpError(msg, feature string) error {
+	if strings.Contains(msg, "unknown op") {
+		return fmt.Errorf("%s — the running %s predates %s (vee speaks control protocol v%d); update the helper (re-extract the release tarball or `make vz-helper`) and restart the VM", msg, vzhelper.HelperBinary, feature, vzhelper.ProtocolVersion)
+	}
+	return errors.New(msg)
 }
 
 // vzVsockOpError upgrades a helper-reported vsock failure into an actionable
 // error: an "unknown op" answer means the running helper predates the vsock
 // control ops (protocol version 0, issue #61).
 func vzVsockOpError(msg string) error {
-	if strings.Contains(msg, "unknown op") {
-		return fmt.Errorf("%s — the running %s predates vsock support (vee speaks control protocol v%d); update the helper (re-extract the release tarball or `make vz-helper`) and restart the VM", msg, vzhelper.HelperBinary, vzhelper.ProtocolVersion)
-	}
-	return errors.New(msg)
+	return vzHelperOpError(msg, "vsock support")
 }
 
 // waitReadyVZ polls until the vz guest is reachable: readiness means the
