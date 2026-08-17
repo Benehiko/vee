@@ -492,3 +492,20 @@ func TestVZVsockOpError(t *testing.T) {
 		t.Errorf("passthrough error = %q", got)
 	}
 }
+
+func TestVZHelperOpErrorShowDisplay(t *testing.T) {
+	// A helper that predates the show-display op (issue #139) answers with
+	// "unknown op"; the user needs "update the helper", not a protocol error.
+	err := vzHelperOpError(`unknown op "show-display"`, "the native display window")
+	for _, want := range []string{"vee-vz-helper", "native display window", "make vz-helper", "restart the VM"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("unknown-op error %q is missing %q", err, want)
+		}
+	}
+
+	// A helper that knows the op but refuses it (window already shown,
+	// headless guest) must pass through untouched.
+	if got := vzHelperOpError("the display window is already open", "the native display window").Error(); got != "the display window is already open" {
+		t.Errorf("passthrough error = %q", got)
+	}
+}

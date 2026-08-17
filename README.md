@@ -241,7 +241,7 @@ See [docs/gpu-passthrough-gaming.md](docs/gpu-passthrough-gaming.md) for Sunshin
 | `vee monitor <name>` | Real-time CPU / memory / disk / network stats |
 | `vee qmp <name> <command>` | Send a QMP (QEMU Machine Protocol) command to a running VM |
 | `vee screenshot <name> [file.png]` | Capture a running VM's display to a PNG file (works headless; QEMU backend) |
-| `vee view <name>` | Open or connect to a VM's display (SPICE, GPU, or Screen Sharing for a macOS guest) |
+| `vee view <name>` | Open or connect to a VM's display (SPICE, GPU, or Screen Sharing for a macOS guest; `--native` opens the vz helper's own window — works in recoveryOS, at the login window, and during install) |
 | `vee config <name>` | Edit a VM's configuration in an interactive TUI (`--ssh-port` changes the forwarded SSH port directly, live on a running VM) |
 | `vee check <name>` | Run health checks on an installed VM |
 | `vee network <name>` | Show firewall, VPN, DNS, route, and egress state of a running VM |

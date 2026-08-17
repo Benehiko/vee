@@ -14,7 +14,10 @@ import (
 	"github.com/Benehiko/vee/internal/vm"
 )
 
-var viewForceSPICE bool
+var (
+	viewForceSPICE bool
+	viewNative     bool
+)
 
 var viewCmd = &cobra.Command{
 	Use:               "view <name>",
@@ -22,10 +25,15 @@ var viewCmd = &cobra.Command{
 	ValidArgsFunction: completeVMNames,
 	Long: `Open the display for a running VM:
 
-  macOS guest (vz) Opens Screen Sharing (VNC) to the guest's own IP.
+  macOS guest (vz) Opens Screen Sharing (VNC) to the guest's own IP; when
+                   Screen Sharing cannot answer — recoveryOS, the login
+                   window, the macOS installer — falls back to the native
+                   display window presented by vee-vz-helper.
   GPU passthrough  Prints Moonlight/Sunshine connection instructions.
   SPICE            Opens remote-viewer (must be installed).
   virtio-gpu       Informs the user the display is in the QEMU GTK window.
+  --native         Skip Screen Sharing and open the native window directly
+                   (vz macOS guests only).
   --force-spice    Open remote-viewer even on passthrough VMs (headless admin).`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -50,6 +58,9 @@ var viewCmd = &cobra.Command{
 					name, name, filepath.Join(prov.Config().StoragePath, name, "serial.log"))
 			}
 			return viewVZ(cmd, cfg, name)
+		}
+		if viewNative {
+			return fmt.Errorf("--native opens the vee-vz-helper display window, which only vz macOS guests have — VM %q runs on the %s backend", name, state.BackendName())
 		}
 
 		// GPU passthrough — Sunshine/Moonlight streaming.
@@ -87,19 +98,26 @@ var viewCmd = &cobra.Command{
 	},
 }
 
-// viewVZ connects to the guest's Screen Sharing service. macOS registers
-// Screen Sharing.app as the vnc:// handler, so `open` is enough on the host;
-// other hosts cannot run vz VMs at all.
+// viewVZ opens a vz macOS guest's display: Screen Sharing (VNC) to the
+// guest's own IP when it answers, the helper's native display window when
+// asked (--native) or when Screen Sharing cannot answer — recoveryOS, the
+// login window and the macOS installer run no Screen Sharing at all (issue
+// #139). macOS registers Screen Sharing.app as the vnc:// handler, so `open`
+// is enough on the host; other hosts cannot run vz VMs at all.
 func viewVZ(cmd *cobra.Command, cfg *vm.VMConfig, name string) error {
+	if viewNative {
+		return viewVZNative(cmd, name, "")
+	}
 	if cfg.NIC.MAC == "" {
 		return fmt.Errorf("VM %q has no MAC address recorded; cannot resolve its IP", name)
 	}
 	ip, err := vm.ResolveIPFromMAC(cfg.NIC.MAC)
 	if err != nil {
-		return fmt.Errorf("could not resolve the guest IP for %q (MAC %s): %w\n"+
-			"The guest has not requested a DHCP lease yet — a freshly restored macOS guest takes "+
-			"a few minutes on its first boot. Helper log: %s", name, cfg.NIC.MAC, err,
-			filepath.Join(prov.Config().StoragePath, name, "vz-helper.log"))
+		// No lease or ARP entry: the guest OS is not up on the network —
+		// recoveryOS, the installer, or a first boot still in progress.
+		// Exactly the states the native window exists for.
+		return viewVZNative(cmd, name,
+			fmt.Sprintf("the guest has no resolvable IP yet (MAC %s): %v", cfg.NIC.MAC, err))
 	}
 
 	uri := "vnc://" + ip
@@ -115,13 +133,10 @@ func viewVZ(cmd *cobra.Command, cfg *vm.VMConfig, name string) error {
 	dialer := net.Dialer{Timeout: 3 * time.Second}
 	conn, dialErr := dialer.DialContext(cmd.Context(), "tcp", addr)
 	if dialErr != nil {
-		return fmt.Errorf("nothing is listening on %s: %w\n"+
-			"The guest's Screen Sharing service is not reachable yet. A freshly restored guest needs "+
-			"a few minutes on its first boot, while the provisioning daemon enables the service. "+
-			"If it stays unreachable, check that provisioning finished (vee ssh %s, then look for "+
-			"/private/var/db/.vee-firstboot-done) — a guest created with --skip-first-boot was never "+
-			"provisioned at all.\nHelper log: %s", addr, dialErr, name,
-			filepath.Join(prov.Config().StoragePath, name, "vz-helper.log"))
+		return viewVZNative(cmd, name,
+			fmt.Sprintf("nothing is listening on %s — the guest's Screen Sharing service is not running "+
+				"(recoveryOS, the login window and the installer never run it; a freshly created guest "+
+				"needs a few minutes on its first boots, and a --skip-first-boot guest was never provisioned)", addr))
 	}
 	_ = conn.Close()
 
@@ -142,7 +157,28 @@ func viewVZ(cmd *cobra.Command, cfg *vm.VMConfig, name string) error {
 	return nil
 }
 
+// viewVZNative asks the running vee-vz-helper to present its native display
+// window (issue #139). fallbackReason, when set, says why Screen Sharing was
+// not used — the window is then a fallback, and a failure must explain both
+// halves.
+func viewVZNative(cmd *cobra.Command, name, fallbackReason string) error {
+	if fallbackReason != "" {
+		fmt.Printf("Screen Sharing is unreachable: %s.\nOpening the native display window instead.\n", fallbackReason)
+	}
+	mgr := vm.NewManager(prov)
+	if err := mgr.VZShowDisplay(cmd.Context(), name); err != nil {
+		if fallbackReason != "" {
+			return fmt.Errorf("no display available for %q — the native window could not be opened either: %w\nHelper log: %s",
+				name, err, filepath.Join(prov.Config().StoragePath, name, "vz-helper.log"))
+		}
+		return err
+	}
+	fmt.Printf("Opened the display window for %q — it is owned by vee-vz-helper, and closing it leaves the VM running.\n", name)
+	return nil
+}
+
 func init() {
 	viewCmd.Flags().BoolVar(&viewForceSPICE, "force-spice", false, "Open SPICE viewer even for GPU passthrough VMs")
+	viewCmd.Flags().BoolVar(&viewNative, "native", false, "Open the native display window presented by vee-vz-helper (vz macOS guests) — works in recoveryOS, at the login window, and during install, where Screen Sharing is not running")
 	rootCmd.AddCommand(viewCmd)
 }

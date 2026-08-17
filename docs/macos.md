@@ -345,7 +345,7 @@ stop then SIGKILL.
 | Disk format | qcow2 (and raw) | raw only |
 | Firmware/boot | OVMF pflash pair | `VZMacOSBootLoader` + auxiliary storage |
 | Guest IP | user-mode hostfwd on 127.0.0.1 | resolved by MAC from host DHCP leases |
-| Display | SPICE / cocoa window | guest Screen Sharing (VNC) |
+| Display | SPICE / cocoa window | guest Screen Sharing (VNC); native helper window (`vee view --native`) |
 | Guest agent | QGA (optional) | none |
 
 ### Creating a guest
@@ -431,12 +431,41 @@ installs a forward. Inside the guest, the host is always CID 2
 (`VMADDR_CID_HOST`).
 
 The control protocol also answers a `version` op with the protocol version
-vee and the helper must agree on (currently 2). A helper that predates these
+vee and the helper must agree on (currently 3). A helper that predates these
 ops answers them with `unknown op`, which vee reports as an "update
 `vee-vz-helper`" error rather than a raw protocol failure. The helper binary
 also answers `--print-protocol` directly, which vee uses to check for
 features *before* starting a VM (a helper too old for the flag fails to parse
 it, which vee reads as "too old").
+
+### Native display window
+
+`vee view <name> --native` opens the guest's screen in a native macOS window
+(`VZVirtualMachineView`) with keyboard and mouse input. Unlike the Screen
+Sharing path it needs nothing from the guest OS, so it works in the states
+that are otherwise invisible: **recoveryOS** (`vee start --recovery`), the
+**login window**, and the **macOS installer / Setup Assistant**. Plain
+`vee view <name>` still prefers Screen Sharing, and falls back to the native
+window automatically — with a message saying why — when the guest has no
+resolvable IP or nothing answers on port 5900.
+
+The window is presented by `vee-vz-helper` itself (a display can only be
+attached by the process that owns the `VZVirtualMachine`): the `show-display`
+control op asks the helper's main thread to run the window's AppKit event
+loop. Consequences of that design:
+
+- **Closing the window leaves the VM running.** The window is a viewport, not
+  the VM's lifetime; stop the guest with `vee stop` as usual.
+- **One window per VM run.** AppKit cannot restart the window's event loop
+  once it terminates, so after the window is closed the helper refuses a
+  second `show-display` with advice to stop and start the VM.
+- **The window opens in the session the helper runs in.** A helper started
+  from an SSH-only login has no WindowServer access and cannot present a
+  window — start the VM from a GUI session to use `--native`.
+- macOS guests only: Linux vz guests carry no graphics device (`vee ssh` and
+  `serial.log` are their consoles).
+- Requires control protocol v3+. Against an older running helper the op
+  answers `unknown op`, which vee reports as an update-the-helper error.
 
 ### Recovery (recoveryOS)
 
@@ -448,7 +477,7 @@ request it purely host-side, without touching the guest.
 
 ```sh
 vee start mymac --recovery
-vee view mymac        # recoveryOS has no SSH — use the display
+vee view mymac --native   # recoveryOS has no SSH and no Screen Sharing — use the native window
 ```
 
 Useful for the things recoveryOS exists for: changing the guest's security
@@ -460,7 +489,10 @@ Notes:
 - **One boot only.** The flag applies to the start that carried it; the next
   `vee start` boots normally. Nothing is persisted in `vm.yaml`.
 - **No SSH, no readiness wait.** recoveryOS runs no sshd, so vee skips the
-  usual readiness spinner and tells you to use `vee view` instead.
+  usual readiness spinner and tells you to use `vee view --native` instead.
+  recoveryOS runs no Screen Sharing either, so the native display window (see
+  above) is the only way to operate it — which is what makes recovery-only
+  tools like `csrutil` and `bputil` usable at all.
 - **Requires a current `vee-vz-helper`** (control protocol v2+). vee checks
   before starting; an older helper would silently boot the guest normally,
   so the start is refused with an update hint instead.
@@ -516,8 +548,8 @@ Notes:
   vee does not recognize is reported once and given up on, since it will not
   become recognizable, and a guest disk vee could not release again fails the
   start outright rather than handing Virtualization.framework an image the host
-  still holds. `vee view` still probes port 5900 and reports when nothing
-  answers.
+  still holds. `vee view` still probes port 5900 first, and when nothing
+  answers it says so and falls back to the native display window.
 - **Terminal type.** A guest has only Apple's terminfo database, so a modern
   emulator's TERM (Ghostty sends `xterm-ghostty`) has no entry and zsh's line
   editor garbles input. `vee ssh` substitutes `xterm-256color` for vz guests

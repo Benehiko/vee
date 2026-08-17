@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -20,6 +21,13 @@ import (
 	"github.com/Benehiko/vee/internal/buildinfo"
 	"github.com/Benehiko/vee/internal/vzhelper"
 )
+
+// The native display window (issue #139) runs NSApplication's event loop, and
+// AppKit only functions on the process's main OS thread — locking from init
+// is the documented way to keep the main goroutine there.
+func init() {
+	runtime.LockOSThread()
+}
 
 func run() int {
 	vmDir := flag.String("vm-dir", "", "VM directory containing "+vzhelper.SpecFileName)
@@ -144,6 +152,8 @@ func runVM(vmDir string) error {
 	cs := &controlState{
 		machine:      machine,
 		vsock:        vsock,
+		platform:     spec.PlatformName(),
+		display:      newDisplayGate(),
 		shutdownDone: make(chan struct{}),
 	}
 
@@ -161,6 +171,53 @@ func runVM(vmDir string) error {
 		}
 	}
 
+	// State watching runs off the main goroutine so the main thread stays
+	// free to host the native display window (issue #139): presenting it runs
+	// an AppKit event loop, which only functions on the main thread (locked
+	// by init).
+	watchDone := make(chan struct{})
+	var watchErr error
+	go func() {
+		defer close(watchDone)
+		watchErr = watchStates(stateCh, cs, finish)
+	}()
+
+	title := spec.Name
+	if spec.Recovery {
+		title += " (recoveryOS)"
+	}
+	for {
+		select {
+		case <-watchDone:
+			return watchErr
+		case <-cs.display.requests():
+			// A request can race the VM stopping; a window presented over a
+			// stopped machine would never be told to close.
+			select {
+			case <-watchDone:
+				return watchErr
+			default:
+			}
+			// Blocks the main thread in the window's event loop until the
+			// user closes the window or the VM stops. Closing the window
+			// leaves the VM running; the toolbar VM controller stays off so
+			// the window cannot pause or force-stop a guest vee believes it
+			// manages.
+			if err := machine.StartGraphicApplication(
+				float64(spec.Display.WidthPx), float64(spec.Display.HeightPx),
+				vz.WithWindowTitle(title),
+			); err != nil {
+				fmt.Fprintln(os.Stderr, "vee-vz-helper: display window:", err)
+			}
+			cs.display.windowClosed()
+		}
+	}
+}
+
+// watchStates consumes VM state transitions until the machine reaches a
+// terminal state, records the outcome via finish, and returns the terminal
+// error (nil for a clean stop).
+func watchStates(stateCh <-chan vz.VirtualMachineState, cs *controlState, finish func(string, *vzhelper.Result)) error {
 	for state := range stateCh {
 		switch state {
 		case vz.VirtualMachineStateStopped:
@@ -445,6 +502,12 @@ func attachCommonDevices(config *vz.VirtualMachineConfiguration, spec *vzhelper.
 type controlState struct {
 	machine *vz.VirtualMachine
 	vsock   *vsockState
+	// platform is the guest platform from the machine spec: the display op
+	// is macOS-only (Linux guests carry no graphics device).
+	platform string
+	// display serializes native-display-window requests toward the main
+	// goroutine (issue #139).
+	display *displayGate
 	// stopRequested distinguishes host-requested stops from guest-initiated
 	// shutdowns.
 	stopRequested atomic.Bool
@@ -514,6 +577,17 @@ func handleConn(conn net.Conn, cs *controlState) {
 			}
 		case vzhelper.OpVsockListen:
 			if err := cs.vsock.listenForward(req.Port, req.Path); err != nil {
+				resp = vzhelper.Response{Error: err.Error()}
+			} else {
+				resp = vzhelper.Response{OK: true}
+			}
+		case vzhelper.OpShowDisplay:
+			// OK means "the window is being presented", not "it is visible":
+			// the main goroutine blocks in the window's event loop for its
+			// whole lifetime, so there is no later moment to answer from.
+			if cs.platform != vzhelper.PlatformMacOS {
+				resp = vzhelper.Response{Error: "this guest runs headless (no graphics device) — the native display window is available for macOS guests only"}
+			} else if err := cs.display.request(); err != nil {
 				resp = vzhelper.Response{Error: err.Error()}
 			} else {
 				resp = vzhelper.Response{OK: true}

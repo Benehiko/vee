@@ -71,7 +71,8 @@ const (
 // Version history:
 //   - 1: vsock control ops (issue #61)
 //   - 2: MachineSpec.Recovery and the --print-protocol flag (issue #134)
-const ProtocolVersion = 2
+//   - 3: show-display op — native display window (issue #139)
+const ProtocolVersion = 3
 
 // ProtocolRecovery is the minimum protocol version whose helper honours
 // MachineSpec.Recovery. An older helper would ignore the unknown JSON field
@@ -104,6 +105,17 @@ const (
 	// the caller must be listening on). Sending it again for the same port
 	// retargets the forward. Requires MachineSpec.Vsock.
 	OpVsockListen = "vsock-listen"
+	// OpShowDisplay asks the helper to present its native display window
+	// (VZVirtualMachineView) for a macOS guest — the only screen recoveryOS,
+	// the login window, and the macOS installer have, since the guest's own
+	// Screen Sharing service exists only once the OS is up (issue #139). The
+	// window lives inside the helper because a display can only be attached
+	// by the process that owns the VZVirtualMachine; closing it leaves the VM
+	// running. At most one window per VM run: AppKit cannot restart the
+	// window's event loop once it terminates, so a repeat request after the
+	// window closed is refused with advice to restart the VM. macOS guests
+	// only — Linux vz guests carry no graphics device.
+	OpShowDisplay = "show-display"
 )
 
 // Terminal reasons reported on the OpWaitShutdown response.
