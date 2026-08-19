@@ -40,9 +40,10 @@ func CheckDisksForData(cfg *VMConfig) ([]DiskWarning, error) {
 		if d.IsInstallISO() {
 			continue
 		}
-		// Passthrough disks are expected to contain data when SkipInstall is
-		// set — the user explicitly chose to boot from an existing disk.
-		if d.Passthrough && cfg.SkipInstall {
+		// Passthrough disks and adopted image files are expected to contain
+		// data when SkipInstall is set — the user explicitly chose to boot from
+		// an existing disk, so its contents are the reason it was named.
+		if (d.Passthrough || d.ImageFile) && cfg.SkipInstall {
 			continue
 		}
 		if d.Passthrough {

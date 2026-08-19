@@ -140,7 +140,9 @@ func (m *Manager) ResizeBootDisk(ctx context.Context, name, spec string) (*Resiz
 func findResizableBootDisk(cfg *VMConfig) int {
 	for i := range cfg.Disks {
 		d := &cfg.Disks[i]
-		if d.Passthrough || d.Media != "disk" || d.Readonly {
+		// Adopted image files are excluded alongside passthrough devices: both
+		// belong to the user, and vee must not grow a disk it does not own.
+		if d.Passthrough || d.ImageFile || d.Media != "disk" || d.Readonly {
 			continue
 		}
 		switch d.Format {

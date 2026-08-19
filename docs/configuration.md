@@ -74,10 +74,37 @@ vee create win --template windows --boot-disk-path /mnt/nvme
 - The resolved path is written into the VM's `vm.yaml`, so restarts, backups, and
   QMP all use the new location.
 
-This is different from `--boot-disk`, which boots from a **raw host block device**
-(`/dev/disk/by-id/...`) via passthrough rather than a managed qcow2 image. If you
-pass a raw `--boot-disk` there is no managed qcow2 disk to relocate, so
+This is different from `--boot-disk`, which boots from a disk vee does not
+manage. If you pass `--boot-disk` there is no managed qcow2 image to relocate, so
 `--boot-disk-path` has no effect.
+
+## Booting a disk vee does not manage (`--boot-disk`)
+
+`--boot-disk` boots from storage that already exists, instead of from a fresh
+image vee creates. It accepts either kind of source and detects which is which:
+
+```sh
+# A host block device, passed through raw.
+vee create nas --boot-disk /dev/disk/by-id/ata-ST22000NM000C_ZXA0S3H6
+
+# An existing disk image, adopted in place.
+vee create old-box --boot-disk ubuntu.qcow2 --no-auto-install
+```
+
+- The **image format is detected** with `qemu-img info`, never assumed. This
+  matters: attaching a qcow2 as if it were raw exposes the qcow2 container header
+  to the guest where the partition table should be, so the firmware finds nothing
+  bootable and drops to the UEFI shell.
+- Relative paths are **resolved when the VM is created**, so a disk named as
+  `ubuntu.qcow2` keeps working regardless of the directory QEMU is later started
+  from.
+- An adopted image is **yours, not vee's**. Vee never creates, grows, relocates,
+  or deletes it — so `vee resize` and `--boot-disk-path` skip it, and deleting the
+  VM leaves the image alone.
+- Pair it with `--no-auto-install` when the disk already holds an installed OS;
+  otherwise vee runs its install flow on top of it.
+- A path that is neither a block device nor a regular file is rejected at create
+  time rather than producing a VM that cannot boot.
 
 ## Other configurable paths
 

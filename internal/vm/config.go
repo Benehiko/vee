@@ -21,6 +21,11 @@ type DiskConfig struct {
 	// Passthrough marks this as a raw host block device (e.g. /dev/disk/by-id/...).
 	// Path must point to the host device. Format, cache, aio are set automatically.
 	Passthrough bool `yaml:"passthrough,omitempty" json:"passthrough,omitempty"`
+	// ImageFile marks this as a pre-existing host image file that vee adopts
+	// as-is (e.g. `vee create --boot-disk ubuntu.qcow2`). vee never creates,
+	// resizes or deletes such a disk, and Format records the image's real
+	// format so it is not misread as raw.
+	ImageFile bool `yaml:"image_file,omitempty" json:"image_file,omitempty"`
 	// BootIndex sets the UEFI boot priority for this disk. 1 = highest priority.
 	// 0 means unset (firmware default ordering). Lower values boot first.
 	BootIndex int `yaml:"boot_index,omitempty" json:"boot_index,omitempty"`
