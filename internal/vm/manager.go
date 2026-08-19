@@ -1287,12 +1287,14 @@ func managedBootDiskAbsPath(vmName string, d DiskConfig) string {
 }
 
 // findManagedBootDisk returns the index of the VM's managed boot qcow2 disk —
-// the first writable, non-passthrough qcow2 "disk". This is the same predicate
+// the first writable, vee-owned qcow2 "disk". This is the same predicate
 // used by build.applyOverrides when relocating with --boot-disk-path.
+// Passthrough devices and adopted image files are excluded: vee does not own
+// either, so it must not move them out from under their owner.
 func findManagedBootDisk(cfg *VMConfig) int {
 	for i := range cfg.Disks {
 		d := &cfg.Disks[i]
-		if d.Passthrough || d.Media != "disk" || d.Format != "qcow2" {
+		if d.Passthrough || d.ImageFile || d.Media != "disk" || d.Format != "qcow2" {
 			continue
 		}
 		return i
@@ -1635,6 +1637,7 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 			qemu.WithBackingFile(d.BackingFile),
 			qemu.WithSerial(d.Serial),
 			qemu.WithPassthrough(d.Passthrough),
+			qemu.WithImageFile(d.ImageFile),
 			qemu.WithBootIndex(d.BootIndex),
 		)
 		_ = i

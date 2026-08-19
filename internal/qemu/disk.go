@@ -114,6 +114,12 @@ type Disk struct {
 	// The Path must be a host device (e.g. /dev/disk/by-id/...).
 	// Sets format=raw, cache=none, aio=native automatically.
 	Passthrough bool
+	// ImageFile marks this disk as a pre-existing host image file adopted as-is
+	// (e.g. `vee create --boot-disk ubuntu.qcow2`). Like Passthrough it attaches
+	// via virtio-blk-pci and is never created or resized by vee, but its Format
+	// is honoured rather than forced to raw, and its Path is absolutised because
+	// an image file — unlike a /dev node — is routinely given as a relative path.
+	ImageFile bool
 	// BootIndex sets the UEFI boot priority via bootindex=N on the -device arg.
 	// 0 means unset. 1 = highest priority; lower values boot first.
 	BootIndex int
@@ -196,6 +202,12 @@ func WithPassthrough(passthrough bool) DiskOptions {
 	}
 }
 
+func WithImageFile(imageFile bool) DiskOptions {
+	return func(disk *Disk) {
+		disk.ImageFile = imageFile
+	}
+}
+
 func WithBootIndex(idx int) DiskOptions {
 	return func(disk *Disk) {
 		disk.BootIndex = idx
@@ -256,6 +268,10 @@ func (q *Disk) Create(ctx context.Context) error {
 		q.provider.Logger().Info("skipping disk creation", zap.String("reason", "passthrough disk"))
 		return nil
 	}
+	if q.ImageFile {
+		q.provider.Logger().Info("skipping disk creation", zap.String("reason", "adopted image file"), zap.String("path", q.AbsolutePath()))
+		return nil
+	}
 	if _, err := exec.LookPath("qemu-img"); err != nil {
 		return err
 	}
@@ -310,9 +326,20 @@ func (q *Disk) Create(ctx context.Context) error {
 	return cmd.Run()
 }
 
+// Delete removes the disk's backing image. It refuses to touch storage vee does
+// not own: a passthrough host block device, and an adopted image file the user
+// pointed --boot-disk at. Neither was created by vee, so neither is vee's to
+// destroy — and unlike a /dev node, which os.Remove cannot delete anyway, an
+// adopted image file is an ordinary user file that would be silently unlinked.
 func (q *Disk) Delete() error {
 	if q.Media == DiskMediaCdrom {
 		return errors.New("iso disks should be deleted by the images package")
+	}
+	if q.Passthrough {
+		return fmt.Errorf("refusing to delete passthrough block device %s: it is not vee-managed storage", q.Path)
+	}
+	if q.ImageFile {
+		return fmt.Errorf("refusing to delete adopted image file %s: it was supplied by the user, not created by vee", q.AbsolutePath())
 	}
 	if _, err := os.Stat(q.AbsolutePath()); err != nil {
 		if os.IsNotExist(err) {
@@ -325,6 +352,15 @@ func (q *Disk) Delete() error {
 
 func (q *Disk) AbsolutePath() string {
 	if q.Passthrough {
+		return q.Path
+	}
+	// An adopted image file keeps the path the user gave, made absolute against
+	// the process working directory. Without this a relative --boot-disk path
+	// would be handed to QEMU verbatim and resolved against QEMU's own cwd.
+	if q.ImageFile {
+		if abs, err := filepath.Abs(q.Path); err == nil {
+			return abs
+		}
 		return q.Path
 	}
 	suffixes := []string{"qcow2", "qcow", "img", "raw", "iso", "vmdk", "vdi", "vhd"}
@@ -445,10 +481,19 @@ func (q *Disk) Args() []string {
 	}
 
 	// Passthrough disks: raw host device via virtio-blk-pci with optional serial.
-	if q.Passthrough {
+	// ImageFile disks share this branch: the same virtio-blk-pci device (so
+	// bootindex and the dedicated iothread apply equally) but with the image's
+	// real format, which must never be forced to raw — handing QEMU a qcow2
+	// with format=raw exposes the container header to the guest instead of the
+	// partition table, and the firmware finds no bootable filesystem.
+	if q.Passthrough || q.ImageFile {
+		format := "raw"
+		if q.ImageFile && q.Format != "" {
+			format = string(q.Format)
+		}
 		driveArgs := []string{
 			"file=" + q.AbsolutePath(),
-			"format=raw",
+			"format=" + format,
 			"if=none",
 			"id=" + id,
 			"cache=none",

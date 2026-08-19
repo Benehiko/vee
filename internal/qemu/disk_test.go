@@ -1,6 +1,7 @@
 package qemu_test
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -431,5 +432,108 @@ func TestDiskName(t *testing.T) {
 	if !strings.Contains(name, filepath.Base(m.AbsolutePath())) &&
 		!strings.Contains(name, m.Name()) {
 		t.Logf("disk name: %s (machine: %s)", name, m.Name())
+	}
+}
+
+// An adopted image file attaches like a passthrough disk (virtio-blk-pci, so
+// bootindex and the iothread apply) but must carry the image's real format.
+// format=raw on a qcow2 is the bug this guards: QEMU would pass the container
+// bytes through and the guest would see no partition table.
+func TestDiskArgsImageFileFormatPreserved(t *testing.T) {
+	p := newTestProvider(t)
+	m := newTestMachine(t)
+	disk := qemu.NewDisk(p, m,
+		qemu.WithCustomPath("/srv/vms/ubuntu.qcow2"),
+		qemu.WithImageFile(true),
+		qemu.WithFormat("qcow2"),
+		qemu.WithBootIndex(1),
+	)
+	joined := strings.Join(disk.Args(), " ")
+
+	if !strings.Contains(joined, "format=qcow2") {
+		t.Errorf("adopted qcow2 image must be attached as qcow2: %s", joined)
+	}
+	if strings.Contains(joined, "format=raw") {
+		t.Errorf("adopted qcow2 image must never be attached as raw: %s", joined)
+	}
+	if !strings.Contains(joined, "virtio-blk-pci") {
+		t.Errorf("adopted image should use virtio-blk-pci device: %s", joined)
+	}
+	if !strings.Contains(joined, "bootindex=1") {
+		t.Errorf("adopted boot image should carry bootindex: %s", joined)
+	}
+}
+
+// A relative --boot-disk path must be absolutised: QEMU resolves file= against
+// its own working directory, not the one the user ran vee from.
+func TestDiskArgsImageFileAbsolutisesPath(t *testing.T) {
+	p := newTestProvider(t)
+	m := newTestMachine(t)
+	disk := qemu.NewDisk(p, m,
+		qemu.WithCustomPath("ubuntu.qcow2"),
+		qemu.WithImageFile(true),
+		qemu.WithFormat("qcow2"),
+	)
+	joined := strings.Join(disk.Args(), " ")
+
+	if strings.Contains(joined, "file=ubuntu.qcow2") {
+		t.Errorf("relative image path must not reach QEMU verbatim: %s", joined)
+	}
+	if !strings.Contains(joined, "/ubuntu.qcow2") {
+		t.Errorf("image path should be absolute: %s", joined)
+	}
+}
+
+// Delete must refuse storage vee does not own. A passthrough /dev node survives
+// os.Remove by accident (permissions); an adopted image file is an ordinary user
+// file that would really be unlinked, so the guard is what protects it.
+func TestDiskDeleteRefusesUnownedStorage(t *testing.T) {
+	p := newTestProvider(t)
+	m := newTestMachine(t)
+
+	t.Run("adopted image file", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "ubuntu.qcow2")
+		if err := os.WriteFile(path, []byte("not really a qcow2"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		disk := qemu.NewDisk(p, m,
+			qemu.WithCustomPath(path),
+			qemu.WithImageFile(true),
+			qemu.WithFormat("qcow2"),
+		)
+		if err := disk.Delete(); err == nil {
+			t.Fatal("expected Delete to refuse an adopted image file")
+		}
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("adopted image file must still exist after a refused Delete: %v", err)
+		}
+	})
+
+	t.Run("passthrough device", func(t *testing.T) {
+		disk := qemu.NewDisk(p, m,
+			qemu.WithCustomPath("/dev/disk/by-id/nvme0n1"),
+			qemu.WithPassthrough(true),
+		)
+		if err := disk.Delete(); err == nil {
+			t.Fatal("expected Delete to refuse a passthrough block device")
+		}
+	})
+}
+
+// A vee-managed image is still deleted normally — the guards must not have
+// turned Delete into a no-op for the disks vee does own.
+func TestDiskDeleteRemovesManagedImage(t *testing.T) {
+	p := newTestProvider(t)
+	m := newTestMachine(t)
+	path := filepath.Join(t.TempDir(), "disk-managed.qcow2")
+	if err := os.WriteFile(path, []byte("managed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	disk := qemu.NewDisk(p, m, qemu.WithCustomPath(path), qemu.WithFormat("qcow2"))
+	if err := disk.Delete(); err != nil {
+		t.Fatalf("Delete on a managed disk should succeed: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("managed disk should have been removed, stat err = %v", err)
 	}
 }

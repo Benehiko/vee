@@ -1,8 +1,12 @@
 package build
 
 import (
+	"context"
 	"database/sql"
+	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"go.uber.org/zap"
@@ -11,6 +15,15 @@ import (
 	"github.com/Benehiko/vee/internal/vm"
 	"github.com/Benehiko/vee/provider"
 )
+
+// mustApplyOverrides runs applyOverrides and fails the test on error, keeping
+// the call sites of tests that are not exercising disk validation terse.
+func mustApplyOverrides(t *testing.T, cfg *vm.VMConfig, opts Opts, prov provider.Provider) {
+	t.Helper()
+	if err := applyOverrides(context.Background(), cfg, opts, prov); err != nil {
+		t.Fatalf("applyOverrides: %v", err)
+	}
+}
 
 // osDisk is a template's typical primary boot disk: a writable qcow2 placed
 // under <storage_path>/<name>/storage by the template.
@@ -32,7 +45,7 @@ func TestApplyOverridesBootDiskPathRetargetsOSDisk(t *testing.T) {
 		Disks: []vm.DiskConfig{osDisk(vmDir)},
 	}
 
-	applyOverrides(cfg, Opts{Name: "t1", BootDiskPath: "/mnt/nvme"}, nil)
+	mustApplyOverrides(t, cfg, Opts{Name: "t1", BootDiskPath: "/mnt/nvme"}, nil)
 
 	if got := cfg.Disks[0].Path; got != "/mnt/nvme" {
 		t.Errorf("boot disk Path: got %q, want %q", got, "/mnt/nvme")
@@ -50,7 +63,7 @@ func TestApplyOverridesBootDiskPathLeavesOtherDisksAlone(t *testing.T) {
 		Disks: []vm.DiskConfig{cdrom, osDisk(vmDir), data},
 	}
 
-	applyOverrides(cfg, Opts{Name: "t2", BootDiskPath: "/mnt/nvme"}, nil)
+	mustApplyOverrides(t, cfg, Opts{Name: "t2", BootDiskPath: "/mnt/nvme"}, nil)
 
 	if cfg.Disks[0].Path != "/some/installer.iso" {
 		t.Errorf("cdrom Path changed: %q", cfg.Disks[0].Path)
@@ -67,13 +80,13 @@ func TestApplyOverridesBootDiskPathLeavesOtherDisksAlone(t *testing.T) {
 // value untouched (so a template could one day default it on).
 func TestApplyOverridesNested(t *testing.T) {
 	cfg := &vm.VMConfig{Name: "t4", Disks: []vm.DiskConfig{osDisk("/home/user/.vee/vms/t4")}}
-	applyOverrides(cfg, Opts{Name: "t4", Nested: true}, nil)
+	mustApplyOverrides(t, cfg, Opts{Name: "t4", Nested: true}, nil)
 	if !cfg.Nested {
 		t.Error("Opts.Nested=true did not set cfg.Nested")
 	}
 
 	cfg = &vm.VMConfig{Name: "t5", Disks: []vm.DiskConfig{osDisk("/home/user/.vee/vms/t5")}}
-	applyOverrides(cfg, Opts{Name: "t5"}, nil)
+	mustApplyOverrides(t, cfg, Opts{Name: "t5"}, nil)
 	if cfg.Nested {
 		t.Error("cfg.Nested set without Opts.Nested")
 	}
@@ -88,7 +101,7 @@ func TestApplyOverridesNoBootDiskPathKeepsDefault(t *testing.T) {
 		Disks: []vm.DiskConfig{osDisk(vmDir)},
 	}
 
-	applyOverrides(cfg, Opts{Name: "t3"}, nil)
+	mustApplyOverrides(t, cfg, Opts{Name: "t3"}, nil)
 
 	if got := cfg.Disks[0].Path; got != want {
 		t.Errorf("boot disk Path: got %q, want %q", got, want)
@@ -119,7 +132,7 @@ func TestApplyOverridesExtraDiskIsAppended(t *testing.T) {
 		Disks: []vm.DiskConfig{osDisk(vmDir)},
 	}
 
-	applyOverrides(cfg, Opts{Name: "t6", Disk: "60G"}, newDiskProvider(storage))
+	mustApplyOverrides(t, cfg, Opts{Name: "t6", Disk: "60G"}, newDiskProvider(storage))
 
 	if len(cfg.Disks) != 2 {
 		t.Fatalf("got %d disks, want 2: %+v", len(cfg.Disks), cfg.Disks)
@@ -142,7 +155,7 @@ func TestApplyOverridesExtraDiskPathIsAbsolute(t *testing.T) {
 		Disks: []vm.DiskConfig{osDisk(filepath.Join(storage, "t7"))},
 	}
 
-	applyOverrides(cfg, Opts{Name: "t7", Disk: "60G"}, newDiskProvider(storage))
+	mustApplyOverrides(t, cfg, Opts{Name: "t7", Disk: "60G"}, newDiskProvider(storage))
 
 	extra := cfg.Disks[len(cfg.Disks)-1]
 	if extra.Path == "" {
@@ -171,7 +184,7 @@ func TestApplyOverridesExtraDiskSkippedForVZMacOS(t *testing.T) {
 		Disks:   []vm.DiskConfig{osDisk(filepath.Join(storage, "t8"))},
 	}
 
-	applyOverrides(cfg, Opts{Name: "t8", Disk: "60G"}, newDiskProvider(storage))
+	mustApplyOverrides(t, cfg, Opts{Name: "t8", Disk: "60G"}, newDiskProvider(storage))
 
 	if len(cfg.Disks) != 1 {
 		t.Errorf("vz macOS guest got %d disks, want the template's 1: %+v", len(cfg.Disks), cfg.Disks)
@@ -187,7 +200,7 @@ func TestApplyOverridesExtraDiskKeptForVZLinux(t *testing.T) {
 		Disks: []vm.DiskConfig{osDisk(filepath.Join(storage, "t9"))},
 	}
 
-	applyOverrides(cfg, Opts{Name: "t9", Backend: string(backend.VZ), Disk: "60G"}, newDiskProvider(storage))
+	mustApplyOverrides(t, cfg, Opts{Name: "t9", Backend: string(backend.VZ), Disk: "60G"}, newDiskProvider(storage))
 
 	if len(cfg.Disks) != 2 {
 		t.Fatalf("vz Linux guest got %d disks, want 2: %+v", len(cfg.Disks), cfg.Disks)
@@ -201,14 +214,130 @@ func TestApplyOverridesExtraDiskKeptForVZLinux(t *testing.T) {
 // template's backend (empty = QEMU for every non-macos template).
 func TestApplyOverridesBackend(t *testing.T) {
 	cfg := &vm.VMConfig{Name: "t10", Disks: []vm.DiskConfig{osDisk("/home/user/.vee/vms/t10")}}
-	applyOverrides(cfg, Opts{Name: "t10", Backend: string(backend.VZ)}, nil)
+	mustApplyOverrides(t, cfg, Opts{Name: "t10", Backend: string(backend.VZ)}, nil)
 	if cfg.BackendName() != backend.VZ {
 		t.Errorf("BackendName = %q, want %q", cfg.BackendName(), backend.VZ)
 	}
 
 	cfg = &vm.VMConfig{Name: "t11", Disks: []vm.DiskConfig{osDisk("/home/user/.vee/vms/t11")}}
-	applyOverrides(cfg, Opts{Name: "t11"}, nil)
+	mustApplyOverrides(t, cfg, Opts{Name: "t11"}, nil)
 	if cfg.BackendName() != backend.QEMU {
 		t.Errorf("BackendName = %q, want the QEMU default", cfg.BackendName())
 	}
+}
+
+// A --boot-disk naming an existing qcow2 must be adopted as an image file with
+// its real format, not described as a raw passthrough device. Getting this wrong
+// hands QEMU `format=raw,file=...qcow2`, so the guest firmware reads the qcow2
+// container header where the partition table should be, finds no bootable
+// filesystem, and drops to the EFI shell.
+func TestApplyOverridesBootDiskQcow2Image(t *testing.T) {
+	dir := t.TempDir()
+	img := filepath.Join(dir, "ubuntu.qcow2")
+	writeQcow2(t, img)
+
+	cfg := &vm.VMConfig{Name: "img1"}
+	mustApplyOverrides(t, cfg, Opts{Name: "img1", BootDisk: img, NoAutoInstall: true}, nil)
+
+	d := findDiskByPath(t, cfg, img)
+	if d.Format != "qcow2" {
+		t.Errorf("adopted qcow2 boot disk should have format qcow2, got %q", d.Format)
+	}
+	if d.Passthrough {
+		t.Error("an image file must not be marked as block-device passthrough")
+	}
+	if !d.ImageFile {
+		t.Error("an existing image file boot disk should be marked ImageFile")
+	}
+	if d.BootIndex != 1 {
+		t.Errorf("boot disk should get bootindex 1, got %d", d.BootIndex)
+	}
+}
+
+// A raw image file is still an image file, not a passthrough device: the format
+// coincides but the ownership semantics (never created, never resized) differ.
+func TestApplyOverridesBootDiskRawImage(t *testing.T) {
+	dir := t.TempDir()
+	img := filepath.Join(dir, "disk.img")
+	if err := os.WriteFile(img, make([]byte, 1<<20), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &vm.VMConfig{Name: "img2"}
+	mustApplyOverrides(t, cfg, Opts{Name: "img2", BootDisk: img, NoAutoInstall: true}, nil)
+
+	d := findDiskByPath(t, cfg, img)
+	if d.Format != "raw" {
+		t.Errorf("raw image should have format raw, got %q", d.Format)
+	}
+	if !d.ImageFile || d.Passthrough {
+		t.Errorf("raw image should be ImageFile and not Passthrough, got ImageFile=%t Passthrough=%t",
+			d.ImageFile, d.Passthrough)
+	}
+}
+
+// A path that is neither a block device nor a regular file must be rejected with
+// a message naming the path, rather than silently producing a VM that cannot boot.
+func TestApplyOverridesBootDiskRejectsNonDisk(t *testing.T) {
+	t.Run("missing path", func(t *testing.T) {
+		cfg := &vm.VMConfig{Name: "bad1"}
+		err := applyOverrides(context.Background(), cfg,
+			Opts{Name: "bad1", BootDisk: filepath.Join(t.TempDir(), "nope.qcow2")}, nil)
+		if err == nil {
+			t.Fatal("expected an error for a missing --boot-disk path")
+		}
+		if !strings.Contains(err.Error(), "nope.qcow2") {
+			t.Errorf("error should name the offending path, got: %v", err)
+		}
+	})
+
+	t.Run("directory", func(t *testing.T) {
+		dir := t.TempDir()
+		cfg := &vm.VMConfig{Name: "bad2"}
+		err := applyOverrides(context.Background(), cfg, Opts{Name: "bad2", BootDisk: dir}, nil)
+		if err == nil {
+			t.Fatal("expected an error for a directory --boot-disk path")
+		}
+	})
+}
+
+// --boot-disk-path relocates only the disk vee manages itself; it must not
+// retarget an adopted image, whose path is the user's own file.
+func TestApplyOverridesBootDiskPathLeavesAdoptedImage(t *testing.T) {
+	dir := t.TempDir()
+	img := filepath.Join(dir, "ubuntu.qcow2")
+	writeQcow2(t, img)
+
+	cfg := &vm.VMConfig{Name: "img3"}
+	mustApplyOverrides(t, cfg,
+		Opts{Name: "img3", BootDisk: img, NoAutoInstall: true, BootDiskPath: "/mnt/nvme"}, nil)
+
+	d := findDiskByPath(t, cfg, img)
+	if d.Path != img {
+		t.Errorf("adopted image path should be untouched by --boot-disk-path, got %q", d.Path)
+	}
+}
+
+// writeQcow2 creates a real, minimal qcow2 file. The format is probed with
+// qemu-img, so a valid header — not just the extension — is what matters.
+func writeQcow2(t *testing.T, path string) {
+	t.Helper()
+	if _, err := exec.LookPath("qemu-img"); err != nil {
+		t.Skip("qemu-img not available; format detection cannot be exercised")
+	}
+	//nolint:gosec // test-local path
+	if out, err := exec.CommandContext(context.Background(), "qemu-img", "create", "-f", "qcow2", path, "64M").CombinedOutput(); err != nil {
+		t.Fatalf("qemu-img create: %v: %s", err, out)
+	}
+}
+
+func findDiskByPath(t *testing.T, cfg *vm.VMConfig, path string) vm.DiskConfig {
+	t.Helper()
+	for _, d := range cfg.Disks {
+		if d.Path == path {
+			return d
+		}
+	}
+	t.Fatalf("no disk with path %q in config (%d disks)", path, len(cfg.Disks))
+	return vm.DiskConfig{}
 }

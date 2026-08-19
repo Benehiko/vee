@@ -11,8 +11,10 @@ package build
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -206,7 +208,9 @@ func Build(ctx context.Context, prov provider.Provider, opts Opts) (*vm.VMConfig
 		return nil, err
 	}
 
-	applyOverrides(cfg, opts, prov)
+	if err := applyOverrides(ctx, cfg, opts, prov); err != nil {
+		return nil, err
+	}
 	applyMirror(ctx, cfg, prov)
 	return cfg, nil
 }
@@ -443,7 +447,7 @@ func configFromTemplate(ctx context.Context, prov provider.Provider, opts Opts, 
 // applyOverrides folds explicit Opts values onto the template-produced cfg.
 // Mirrors the cobra `Flags().Changed(...)` checks of the original cmd/create.go
 // so the CLI and TUI produce identical configs.
-func applyOverrides(cfg *vm.VMConfig, opts Opts, prov provider.Provider) {
+func applyOverrides(ctx context.Context, cfg *vm.VMConfig, opts Opts, prov provider.Provider) error {
 	// Backend first: later overrides (extra disks) branch on the effective
 	// backend.
 	if opts.Backend != "" {
@@ -535,8 +539,10 @@ func applyOverrides(cfg *vm.VMConfig, opts Opts, prov provider.Provider) {
 		}
 		cfg.Disks = append(cfg.Disks, extra)
 	}
-	// When skipping install with a boot disk, the passthrough disk is the OS
-	// disk — strip any template-default qcow2 disks so they are not created.
+	// When skipping install with a boot disk, the user's disk (a passthrough
+	// device or an adopted image file) is the OS disk — strip any
+	// template-default qcow2 disks so they are not created. This runs before
+	// those disks are appended below, so it only ever removes template defaults.
 	if opts.NoAutoInstall && opts.BootDisk != "" {
 		filtered := cfg.Disks[:0]
 		for _, d := range cfg.Disks {
@@ -565,14 +571,31 @@ func applyOverrides(cfg *vm.VMConfig, opts Opts, prov provider.Provider) {
 		}
 		for _, raw := range allDisks {
 			dd := templates.ParseDataDisk(raw)
+			// A disk given here is either a host block device to pass through
+			// (the common case: --data-disk /dev/disk/by-id/...) or a
+			// pre-existing image file to adopt (--boot-disk ubuntu.qcow2).
+			// These need different QEMU wiring: passthrough is always raw,
+			// whereas an image file must be attached with its real format —
+			// describing a qcow2 as raw shows the guest the container header
+			// instead of the partition table, so the firmware finds nothing
+			// bootable and drops to the EFI shell. Classify rather than assume.
+			kind, format, err := classifyDisk(ctx, dd.Path)
+			if err != nil {
+				return err
+			}
 			disk := vm.DiskConfig{
-				Path:        dd.Path,
-				Format:      "raw",
-				Interface:   "virtio",
-				Media:       "disk",
-				Cache:       "none",
-				Passthrough: true,
-				Serial:      dd.Serial,
+				Path:      dd.Path,
+				Format:    format,
+				Interface: "virtio",
+				Media:     "disk",
+				Cache:     "none",
+				Serial:    dd.Serial,
+			}
+			switch kind {
+			case diskKindDevice:
+				disk.Passthrough = true
+			case diskKindImage:
+				disk.ImageFile = true
 			}
 			if opts.BootDisk != "" && dd.Path == opts.BootDisk {
 				disk.BootIndex = 1
@@ -590,7 +613,9 @@ func applyOverrides(cfg *vm.VMConfig, opts Opts, prov provider.Provider) {
 	if opts.BootDiskPath != "" {
 		for i := range cfg.Disks {
 			d := &cfg.Disks[i]
-			if d.Passthrough || d.Media != "disk" || d.Format != "qcow2" {
+			// Skip disks vee does not own: a passthrough device, and an adopted
+			// image file (whose Path is the user's own qcow2, not a managed disk).
+			if d.Passthrough || d.ImageFile || d.Media != "disk" || d.Format != "qcow2" {
 				continue
 			}
 			d.Path = opts.BootDiskPath
@@ -628,6 +653,7 @@ func applyOverrides(cfg *vm.VMConfig, opts Opts, prov provider.Provider) {
 	// requirements — the failure would only surface at start, long after
 	// the expensive restore.
 	templates.ClampMacOSMinimums(cfg)
+	return nil
 }
 
 // resolveGPUVendor turns the user-provided vendor string into the strongly
@@ -692,4 +718,70 @@ func defaultConfig(prov provider.Provider, opts Opts) *vm.VMConfig {
 		GPU:  vm.GPUConfig{Mode: vm.GPUNone},
 		UEFI: vm.UEFIConfig{Enabled: uefi},
 	}
+}
+
+// diskKind distinguishes the two things a --data-disk / --boot-disk path can
+// name: a host block device to pass through, or an existing image file to adopt.
+type diskKind int
+
+const (
+	diskKindDevice diskKind = iota
+	diskKindImage
+)
+
+// classifyDisk decides how a --data-disk / --boot-disk path must be attached and
+// returns the QEMU format string to describe it with.
+//
+// Block devices are passed through raw. Regular files are image files whose
+// format is probed with `qemu-img info` — never assumed — because attaching a
+// qcow2 as raw leaves the guest firmware looking at the qcow2 header where the
+// partition table should be, which fails as an unbootable disk rather than as a
+// clear error. Anything else (a directory, a missing path) is rejected here,
+// where the message can still name the flag, instead of surfacing as a QEMU
+// open() failure or a silent boot failure much later.
+func classifyDisk(ctx context.Context, path string) (diskKind, string, error) {
+	st, err := os.Stat(path)
+	if err != nil {
+		return 0, "", fmt.Errorf("disk %q: %w (expected a host block device such as "+
+			"/dev/disk/by-id/..., or an existing disk image file)", path, err)
+	}
+	switch {
+	case st.Mode()&os.ModeDevice != 0:
+		return diskKindDevice, "raw", nil
+	case st.Mode().IsRegular():
+		format, err := probeImageFormat(ctx, path)
+		if err != nil {
+			return 0, "", fmt.Errorf("disk %q: %w", path, err)
+		}
+		return diskKindImage, format, nil
+	default:
+		return 0, "", fmt.Errorf("disk %q is neither a block device nor a regular file "+
+			"(mode %s); pass a host block device such as /dev/disk/by-id/..., or a disk image file",
+			path, st.Mode().Type())
+	}
+}
+
+// probeImageFormat returns an image file's real format via `qemu-img info`.
+// An unreadable or unrecognised image is an error, not a raw fallback: guessing
+// raw is exactly the failure mode this exists to prevent.
+func probeImageFormat(ctx context.Context, path string) (string, error) {
+	qemuImg, err := exec.LookPath("qemu-img")
+	if err != nil {
+		return "", fmt.Errorf("qemu-img not found in $PATH; it is needed to detect the disk image format: %w", err)
+	}
+	//nolint:gosec // qemu-img resolved from $PATH; path is a user-supplied disk image path, passed as a single argv entry
+	out, err := exec.CommandContext(ctx, qemuImg, "info", "--output=json", path).Output()
+	if err != nil {
+		return "", fmt.Errorf("qemu-img info: %w", err)
+	}
+	var info struct {
+		Format string `json:"format"`
+	}
+	if err := json.Unmarshal(out, &info); err != nil {
+		return "", fmt.Errorf("parse qemu-img info output: %w", err)
+	}
+	if info.Format == "" {
+		return "", fmt.Errorf("qemu-img info reported no format")
+	}
+	return info.Format, nil
 }
