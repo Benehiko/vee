@@ -257,6 +257,7 @@ func TestApplyOverridesBootDiskQcow2Image(t *testing.T) {
 // A raw image file is still an image file, not a passthrough device: the format
 // coincides but the ownership semantics (never created, never resized) differ.
 func TestApplyOverridesBootDiskRawImage(t *testing.T) {
+	requireQemuImg(t)
 	dir := t.TempDir()
 	img := filepath.Join(dir, "disk.img")
 	if err := os.WriteFile(img, make([]byte, 1<<20), 0o600); err != nil {
@@ -318,13 +319,21 @@ func TestApplyOverridesBootDiskPathLeavesAdoptedImage(t *testing.T) {
 	}
 }
 
-// writeQcow2 creates a real, minimal qcow2 file. The format is probed with
-// qemu-img, so a valid header — not just the extension — is what matters.
-func writeQcow2(t *testing.T, path string) {
+// requireQemuImg skips the test when qemu-img is unavailable. Disk classification
+// probes the image format with it, so any test that feeds an image file through
+// applyOverrides needs it present — CI runners do not all ship qemu-img.
+func requireQemuImg(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("qemu-img"); err != nil {
 		t.Skip("qemu-img not available; format detection cannot be exercised")
 	}
+}
+
+// writeQcow2 creates a real, minimal qcow2 file. The format is probed with
+// qemu-img, so a valid header — not just the extension — is what matters.
+func writeQcow2(t *testing.T, path string) {
+	t.Helper()
+	requireQemuImg(t)
 	//nolint:gosec // test-local path
 	if out, err := exec.CommandContext(context.Background(), "qemu-img", "create", "-f", "qcow2", path, "64M").CombinedOutput(); err != nil {
 		t.Fatalf("qemu-img create: %v: %s", err, out)
