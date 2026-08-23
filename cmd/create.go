@@ -63,14 +63,17 @@ var (
 	createGPUVendor     string
 	createMedia         []string
 	createDNSAdminUser  string
-	createRunnerURL     string
-	createRunnerLabels  []string
-	createRunnerSSHKey  bool
-	createPassword      string
-	createBootDisk      string
-	createBootDiskPath  string
-	createNested        bool
-	createBackend       string
+
+	createBitmagnetPGDir  string
+	createBitmagnetWGConf string
+	createRunnerURL       string
+	createRunnerLabels    []string
+	createRunnerSSHKey    bool
+	createPassword        string
+	createBootDisk        string
+	createBootDiskPath    string
+	createNested          bool
+	createBackend         string
 )
 
 var createCmd = &cobra.Command{
@@ -106,6 +109,15 @@ Templates apply sane defaults automatically:
                   so clients can reach the resolver. Admin UI on port 3000
                   (http://<name>.local:3000 via mDNS); the admin password is
                   prompted for and stored only as a bcrypt hash.
+  bitmagnet       2G / 2 CPUs, Alpine Linux, bitmagnet BitTorrent DHT crawler and
+                  indexer with PostgreSQL, behind a WireGuard kill-switch: if the
+                  tunnel is down the guest cannot talk at all. The web UI (port
+                  3333) is never exposed — reach it with vee tunnel. Pass
+                  --pg-data-dir <host dir> to keep the crawled index on the host,
+                  outliving the VM. With no VPN configured the DHT crawler is
+                  disabled, so the guest cannot announce your address to the swarm.
+                  NordVPN users: NordLynx is WireGuard, so export a NordLynx config
+                  and pass it with --wg-conf.
   github-runner   4G / 4 CPUs, Ubuntu cloud image, self-hosted GitHub Actions runner.
                   Uses outbound HTTPS long-polling; no inbound port forwarding required.
                   Pass --runner-url (repo or org URL) and enter the registration token
@@ -231,6 +243,13 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
 				AdminUser:    createDNSAdminUser,
 				PasswordHash: hash,
 			}
+		}
+		if opts.Template == "bitmagnet" {
+			extras, extrasErr := collectBitmagnetExtras()
+			if extrasErr != nil {
+				return extrasErr
+			}
+			opts.BitmagnetExtras = extras
 		}
 		if opts.Template == "github-runner" {
 			if createRunnerURL == "" {
@@ -627,6 +646,8 @@ func init() {
 	createCmd.Flags().StringVar(&createGPUVendor, "gpu-vendor", "amd", "Guest GPU vendor for driver selection: amd, nvidia, virtio (gaming-arch/gaming-bazzite templates)")
 	createCmd.Flags().StringArrayVar(&createMedia, "media", nil, "Media source for jellyfin template (repeatable). Forms: hostdir:/host@/guest[:ro], nfs://server/export@/guest[:ro], smb://[user@]server/share@/guest[:ro], block:/dev/disk/by-id/...@/guest[:fstype], usb:VENDOR:PRODUCT@/guest[:fstype]")
 	createCmd.Flags().StringVar(&createDNSAdminUser, "dns-admin-user", "admin", "AdGuard Home web UI username (dns-sink template); the password is prompted for")
+	createCmd.Flags().StringVar(&createBitmagnetPGDir, "pg-data-dir", "", "host directory bind-mounted as PostgreSQL's data directory (bitmagnet template); empty keeps the database on the VM's own disk")
+	createCmd.Flags().StringVar(&createBitmagnetWGConf, "wg-conf", "", "path to a WireGuard .conf backing the kill-switch (bitmagnet template); prompted for when omitted")
 	createCmd.Flags().StringVar(&createRunnerURL, "runner-url", "", "GitHub repo or org URL for runner registration (github-runner template)")
 	createCmd.Flags().StringArrayVar(&createRunnerLabels, "runner-labels", nil, "Runner labels (github-runner template; default: self-hosted,linux,kvm)")
 	createCmd.Flags().BoolVar(&createRunnerSSHKey, "runner-ssh-key", false, "Generate a per-instance GitHub SSH key for this runner instead of the shared global key (github-runner template)")
@@ -646,6 +667,7 @@ func init() {
 			"docker\tAlpine Linux VM with Docker daemon on tcp://localhost:2375",
 			"jellyfin\tJellyfin media server with NFS/SMB/USB/host-dir libraries + mDNS",
 			"dns-sink\tAlpine + AdGuard Home DNS sinkhole for ad/malware blocking (bridge NIC)",
+			"bitmagnet\tAlpine + bitmagnet DHT crawler and PostgreSQL behind a WireGuard kill-switch",
 			"github-runner\tSelf-hosted GitHub Actions runner (outbound HTTPS, no port forwarding needed)",
 			"macos\tmacOS guest via Virtualization.framework (Apple Silicon hosts)",
 		}, cobra.ShellCompDirectiveNoFileComp

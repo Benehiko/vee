@@ -248,6 +248,7 @@ var templateCatalog = []templateInfo{
 	{Name: "torrent", Description: "qbittorrent-nox with optional VPN kill-switch", Params: "share_mounts, and nordvpn_token/nordvpn_country or wireguard_conf for the kill-switch"},
 	{Name: "jellyfin", Description: "Jellyfin media server with NFS/SMB/host-dir media mounts; requires nic_mode=bridge", Params: "media (spec strings), media_secrets"},
 	{Name: "dns-sink", Description: "Alpine + AdGuard Home DNS sinkhole blocking ad and malware domains LAN-wide; requires nic_mode=bridge", Params: "dns_admin_user, dns_admin_password_hash (bcrypt)"},
+	{Name: "bitmagnet", Description: "Alpine + bitmagnet BitTorrent DHT crawler and PostgreSQL behind a WireGuard kill-switch; the web UI is never exposed, reach it with vee tunnel; without wireguard_conf the DHT crawler is disabled so the guest cannot announce its address to the swarm", Params: "wireguard_conf (NordLynx configs work), pg_data_dir (host directory holding the crawled index)"},
 	{Name: "github-runner", Description: "Self-hosted GitHub Actions runner", Params: "requires runner_url; runner_token unless a credential snapshot exists; runner_labels, runner_ssh_key"},
 }
 
@@ -345,6 +346,10 @@ type vmCreateIn struct {
 	// dns-sink template.
 	DNSAdminUser         string `json:"dns_admin_user,omitempty" jsonschema:"AdGuard Home web UI username (default admin)"`
 	DNSAdminPasswordHash string `json:"dns_admin_password_hash,omitempty" jsonschema:"bcrypt hash of the AdGuard Home web UI password; empty leaves the UI without a login (LAN-restricted by the guest firewall)"`
+
+	// bitmagnet template. The kill-switch is configured through the shared
+	// wireguard_conf field above.
+	PGDataDir string `json:"pg_data_dir,omitempty" jsonschema:"absolute host directory bind-mounted over virtiofs as PostgreSQL's data directory, so the crawled index outlives the VM; empty keeps the database on the VM's own disk"`
 }
 
 type vmCreateOut struct {
@@ -455,6 +460,50 @@ func (s *server) templateExtras(in vmCreateIn, opts *build.Opts) (runnerPubKey s
 			AdminUser:    in.DNSAdminUser,
 			PasswordHash: in.DNSAdminPasswordHash,
 		}
+
+	case "bitmagnet":
+		extras := &build.BitmagnetExtras{}
+		// The password is generated rather than accepted as a parameter: it is
+		// never typed by a human, and a plaintext value passed here would be
+		// recorded in the tool-call transcript.
+		password, pwErr := templates.GeneratePGPassword()
+		if pwErr != nil {
+			return "", pwErr
+		}
+		extras.PGPassword = password
+
+		if in.WireGuardConf != "" {
+			content, readErr := os.ReadFile(in.WireGuardConf) //nolint:gosec // path supplied by the operating user via the MCP client
+			if readErr != nil {
+				return "", fmt.Errorf("read WireGuard config: %w", readErr)
+			}
+			wg, parseErr := vpn.ParseWireGuardConf(string(content))
+			if parseErr != nil {
+				return "", fmt.Errorf("parse WireGuard config: %w", parseErr)
+			}
+			extras.WireGuard = wg
+			extras.VPNProvider = "wireguard"
+		}
+
+		if in.PGDataDir != "" {
+			if !filepath.IsAbs(in.PGDataDir) {
+				return "", fmt.Errorf("pg_data_dir must be an absolute host path, got %q", in.PGDataDir)
+			}
+			if mkErr := os.MkdirAll(in.PGDataDir, 0o700); mkErr != nil {
+				return "", fmt.Errorf("create PostgreSQL data directory: %w", mkErr)
+			}
+			// The guest's postgres account is renumbered to the host owner of
+			// the share; virtiofs will not let the guest chown it. See
+			// templates.BitmagnetOptions.
+			uid, gid, statErr := dirOwner(in.PGDataDir)
+			if statErr != nil {
+				return "", statErr
+			}
+			extras.PGDataHostDir = in.PGDataDir
+			extras.PGDataHostUID = uid
+			extras.PGDataHostGID = gid
+		}
+		opts.BitmagnetExtras = extras
 
 	case "github-runner":
 		prepared, prepErr := runnersetup.Prepare(in.Name, in.RunnerURL, in.RunnerLabels, in.RunnerSSHKey, func() (string, error) {
