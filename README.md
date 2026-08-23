@@ -47,7 +47,7 @@ Templates apply sane defaults (memory, CPUs, disks, networking, cloud-init) auto
 | `torrent` | Lightweight 2G / 1 CPU · qbittorrent-nox via cloud-init · optional VPN kill-switch |
 | `jellyfin` | Jellyfin · NFS/SMB/host-dir/block/USB media · mDNS |
 | `dns-sink` | Alpine Linux · AdGuard Home DNS sinkhole · 512M / 1 CPU · LAN-wide ad and malware blocking · bridge NIC |
-| `bitmagnet` | Alpine Linux · bitmagnet DHT crawler + PostgreSQL · 2G / 2 CPUs · WireGuard kill-switch · web UI over `vee tunnel` only · `--pg-data-dir` keeps the index on the host |
+| `bitmagnet` | Alpine Linux · bitmagnet DHT crawler + PostgreSQL · 2G / 2 CPUs · WireGuard kill-switch · web UI over `vee tunnel` only · `--pg-data-dir` keeps the index on the host · `--nordvpn-token` auto-fetches a NordLynx config |
 | `windows` | Windows · UEFI · secure boot + TPM 2.0 on x86_64 · arm64 (Apple Silicon) boots NVMe + ramfb with the hardware checks bypassed |
 | `docker` | Alpine Linux · Docker daemon on `tcp://localhost:2375` |
 | `github-runner` | Self-hosted Actions runner · outbound HTTPS long-polling |

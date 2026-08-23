@@ -248,7 +248,7 @@ var templateCatalog = []templateInfo{
 	{Name: "torrent", Description: "qbittorrent-nox with optional VPN kill-switch", Params: "share_mounts, and nordvpn_token/nordvpn_country or wireguard_conf for the kill-switch"},
 	{Name: "jellyfin", Description: "Jellyfin media server with NFS/SMB/host-dir media mounts; requires nic_mode=bridge", Params: "media (spec strings), media_secrets"},
 	{Name: "dns-sink", Description: "Alpine + AdGuard Home DNS sinkhole blocking ad and malware domains LAN-wide; requires nic_mode=bridge", Params: "dns_admin_user, dns_admin_password_hash (bcrypt)"},
-	{Name: "bitmagnet", Description: "Alpine + bitmagnet BitTorrent DHT crawler and PostgreSQL behind a WireGuard kill-switch; the web UI is never exposed, reach it with vee tunnel; without wireguard_conf the DHT crawler is disabled so the guest cannot announce its address to the swarm", Params: "wireguard_conf (NordLynx configs work), pg_data_dir (host directory holding the crawled index)"},
+	{Name: "bitmagnet", Description: "Alpine + bitmagnet BitTorrent DHT crawler and PostgreSQL behind a WireGuard kill-switch; the web UI is never exposed, reach it with vee tunnel; without wireguard_conf the DHT crawler is disabled so the guest cannot announce its address to the swarm", Params: "wireguard_conf, or nordvpn_token/nordvpn_country to fetch a NordLynx config automatically; pg_data_dir (host directory holding the crawled index)"},
 	{Name: "github-runner", Description: "Self-hosted GitHub Actions runner", Params: "requires runner_url; runner_token unless a credential snapshot exists; runner_labels, runner_ssh_key"},
 }
 
@@ -335,8 +335,8 @@ type vmCreateIn struct {
 	// torrent template.
 	ShareMounts    []shareMountIn `json:"share_mounts,omitempty" jsonschema:"host directories shared into the torrent VM via virtiofs"`
 	NFSMounts      []nfsMountIn   `json:"nfs_mounts,omitempty" jsonschema:"NFS exports mounted directly by the torrent guest; requires nic_mode=bridge"`
-	NordVPNToken   string         `json:"nordvpn_token,omitempty" jsonschema:"NordVPN access token for the VPN kill-switch"`
-	NordVPNCountry string         `json:"nordvpn_country,omitempty" jsonschema:"NordVPN country to connect to; empty for auto"`
+	NordVPNToken   string         `json:"nordvpn_token,omitempty" jsonschema:"NordVPN access token for the VPN kill-switch; the bitmagnet template exchanges it for a NordLynx WireGuard config"`
+	NordVPNCountry string         `json:"nordvpn_country,omitempty" jsonschema:"NordVPN country to connect to, e.g. Netherlands; empty for auto"`
 	WireGuardConf  string         `json:"wireguard_conf,omitempty" jsonschema:"path to a WireGuard config file for a generic VPN kill-switch"`
 
 	// jellyfin template.
@@ -363,7 +363,7 @@ type vmCreateOut struct {
 
 // templateExtras validates template-specific parameters and assembles the
 // extras structs that the CLI collects via terminal prompts.
-func (s *server) templateExtras(in vmCreateIn, opts *build.Opts) (runnerPubKey string, err error) {
+func (s *server) templateExtras(ctx context.Context, in vmCreateIn, opts *build.Opts) (runnerPubKey string, err error) {
 	switch in.Template {
 	case "passthrough":
 		if in.NVMeDev == "" || in.OVMFVars == "" {
@@ -394,7 +394,7 @@ func (s *server) templateExtras(in vmCreateIn, opts *build.Opts) (runnerPubKey s
 		}
 		switch {
 		case in.NordVPNToken != "":
-			if err := vpn.ValidateToken(in.NordVPNToken); err != nil {
+			if err := vpn.ValidateToken(ctx, in.NordVPNToken); err != nil {
 				return "", fmt.Errorf("validate NordVPN token: %w", err)
 			}
 			extras.NordConf = &vpn.NordVPNConfig{Token: in.NordVPNToken, Country: in.NordVPNCountry}
@@ -472,7 +472,8 @@ func (s *server) templateExtras(in vmCreateIn, opts *build.Opts) (runnerPubKey s
 		}
 		extras.PGPassword = password
 
-		if in.WireGuardConf != "" {
+		switch {
+		case in.WireGuardConf != "":
 			content, readErr := os.ReadFile(in.WireGuardConf) //nolint:gosec // path supplied by the operating user via the MCP client
 			if readErr != nil {
 				return "", fmt.Errorf("read WireGuard config: %w", readErr)
@@ -483,6 +484,16 @@ func (s *server) templateExtras(in vmCreateIn, opts *build.Opts) (runnerPubKey s
 			}
 			extras.WireGuard = wg
 			extras.VPNProvider = "wireguard"
+
+		case in.NordVPNToken != "":
+			// NordLynx is WireGuard, so a Nord account yields a complete
+			// wg0.conf without the operator exporting one by hand.
+			wg, fetchErr := vpn.NordLynxConfig(ctx, in.NordVPNToken, in.NordVPNCountry)
+			if fetchErr != nil {
+				return "", fetchErr
+			}
+			extras.WireGuard = wg
+			extras.VPNProvider = "nordlynx"
 		}
 
 		if in.PGDataDir != "" {
@@ -587,7 +598,7 @@ func (s *server) vmCreate(ctx context.Context, _ *mcp.CallToolRequest, in vmCrea
 		Nested:        in.Nested,
 		NoAutoInstall: in.NoAutoInstall,
 	}
-	runnerPubKey, err := s.templateExtras(in, &opts) //nolint:contextcheck // vpn.ValidateToken's HTTP call takes no context, same as the CLI prompt path
+	runnerPubKey, err := s.templateExtras(ctx, in, &opts)
 	if err != nil {
 		return nil, vmCreateOut{}, err
 	}

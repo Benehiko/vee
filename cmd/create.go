@@ -64,16 +64,18 @@ var (
 	createMedia         []string
 	createDNSAdminUser  string
 
-	createBitmagnetPGDir  string
-	createBitmagnetWGConf string
-	createRunnerURL       string
-	createRunnerLabels    []string
-	createRunnerSSHKey    bool
-	createPassword        string
-	createBootDisk        string
-	createBootDiskPath    string
-	createNested          bool
-	createBackend         string
+	createBitmagnetPGDir       string
+	createBitmagnetWGConf      string
+	createBitmagnetNordToken   string
+	createBitmagnetNordCountry string
+	createRunnerURL            string
+	createRunnerLabels         []string
+	createRunnerSSHKey         bool
+	createPassword             string
+	createBootDisk             string
+	createBootDiskPath         string
+	createNested               bool
+	createBackend              string
 )
 
 var createCmd = &cobra.Command{
@@ -116,8 +118,9 @@ Templates apply sane defaults automatically:
                   --pg-data-dir <host dir> to keep the crawled index on the host,
                   outliving the VM. With no VPN configured the DHT crawler is
                   disabled, so the guest cannot announce your address to the swarm.
-                  NordVPN users: NordLynx is WireGuard, so export a NordLynx config
-                  and pass it with --wg-conf.
+                  NordVPN users: pass --nordvpn-token (optionally with
+                  --nordvpn-country) to fetch a NordLynx config automatically —
+                  NordLynx is WireGuard. Or export one and pass it with --wg-conf.
   github-runner   4G / 4 CPUs, Ubuntu cloud image, self-hosted GitHub Actions runner.
                   Uses outbound HTTPS long-polling; no inbound port forwarding required.
                   Pass --runner-url (repo or org URL) and enter the registration token
@@ -201,7 +204,7 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
 					return fmt.Errorf("prompt share mounts: %w", mountErr)
 				}
 			}
-			nordConf, wgConf, vpnProvider, vpnErr := promptVPN()
+			nordConf, wgConf, vpnProvider, vpnErr := promptVPN(cmd.Context())
 			if vpnErr != nil {
 				return fmt.Errorf("VPN setup: %w", vpnErr)
 			}
@@ -648,6 +651,8 @@ func init() {
 	createCmd.Flags().StringVar(&createDNSAdminUser, "dns-admin-user", "admin", "AdGuard Home web UI username (dns-sink template); the password is prompted for")
 	createCmd.Flags().StringVar(&createBitmagnetPGDir, "pg-data-dir", "", "host directory bind-mounted as PostgreSQL's data directory (bitmagnet template); empty keeps the database on the VM's own disk")
 	createCmd.Flags().StringVar(&createBitmagnetWGConf, "wg-conf", "", "path to a WireGuard .conf backing the kill-switch (bitmagnet template); prompted for when omitted")
+	createCmd.Flags().StringVar(&createBitmagnetNordToken, "nordvpn-token", "", "NordVPN access token (bitmagnet template); fetches a NordLynx WireGuard config automatically instead of --wg-conf")
+	createCmd.Flags().StringVar(&createBitmagnetNordCountry, "nordvpn-country", "", "country to connect through, e.g. Netherlands (bitmagnet template, with --nordvpn-token)")
 	createCmd.Flags().StringVar(&createRunnerURL, "runner-url", "", "GitHub repo or org URL for runner registration (github-runner template)")
 	createCmd.Flags().StringArrayVar(&createRunnerLabels, "runner-labels", nil, "Runner labels (github-runner template; default: self-hosted,linux,kvm)")
 	createCmd.Flags().BoolVar(&createRunnerSSHKey, "runner-ssh-key", false, "Generate a per-instance GitHub SSH key for this runner instead of the shared global key (github-runner template)")

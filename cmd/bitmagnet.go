@@ -2,10 +2,12 @@ package cmd
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/Benehiko/vee/internal/templates"
 	"github.com/Benehiko/vee/internal/vm/build"
@@ -78,11 +80,14 @@ func promptBitmagnetVPN() (*vpn.WireGuardConfig, error) {
 	if createBitmagnetWGConf != "" {
 		return loadWireGuardConf(createBitmagnetWGConf)
 	}
+	if createBitmagnetNordToken != "" {
+		return fetchNordLynxConf(createBitmagnetNordToken, createBitmagnetNordCountry)
+	}
 
 	stdin := bufio.NewReader(os.Stdin)
 	fmt.Fprintln(os.Stderr, "bitmagnet crawls the BitTorrent DHT and announces this VM to the swarm.")
 	fmt.Fprintln(os.Stderr, "A WireGuard tunnel with a kill-switch is strongly recommended.")
-	fmt.Fprintln(os.Stderr, "NordVPN users: export a NordLynx config — NordLynx is WireGuard.")
+	fmt.Fprintln(os.Stderr, "NordVPN users: pass --nordvpn-token to fetch a NordLynx config automatically.")
 	fmt.Fprint(os.Stderr, "Configure WireGuard? [Y/n]: ")
 
 	answer, _ := stdin.ReadString('\n')
@@ -102,6 +107,29 @@ func promptBitmagnetVPN() (*vpn.WireGuardConfig, error) {
 		return nil, fmt.Errorf("a WireGuard config path is required (answer 'n' to run without a VPN)")
 	}
 	return loadWireGuardConf(confPath)
+}
+
+// fetchNordLynxConf builds a WireGuard config from a NordVPN account.
+//
+// NordVPN's own client is a snap and Alpine has no snapd, which is why this
+// template takes WireGuard only. That is not a gap for NordVPN users though:
+// NordLynx is WireGuard, so the account's NordLynx key plus a recommended
+// server is a complete wg0.conf — and fetching it is friendlier than asking
+// someone to export one from the dashboard by hand.
+func fetchNordLynxConf(token, country string) (*vpn.WireGuardConfig, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	fmt.Fprintln(os.Stderr, "Fetching NordLynx configuration from NordVPN...")
+	conf, err := vpn.NordLynxConfig(ctx, token, country)
+	if err != nil {
+		return nil, err
+	}
+	// Report the endpoint: the kill-switch pins its handshake hole to this
+	// address, so knowing which server was chosen is what makes the resulting
+	// firewall rules intelligible.
+	fmt.Fprintf(os.Stderr, "Using NordLynx endpoint %s\n", conf.Endpoint)
+	return conf, nil
 }
 
 // loadWireGuardConf reads and parses a wg .conf file from the host.

@@ -43,7 +43,28 @@ vee create bitmagnet --template bitmagnet \
 
 ### NordVPN users
 
-NordVPN's own client ships as a snap, and Alpine has no snapd — so unlike the [torrent](../torrent/) template, this one offers WireGuard only. That is not a loss of coverage: **NordLynx is WireGuard**. Export a NordLynx configuration from your NordVPN account and pass it with `--wg-conf` and everything works exactly as it would with the native client, including the kill-switch.
+NordVPN's own client ships as a snap, and Alpine has no snapd — so unlike the [torrent](../torrent/) template, this one offers WireGuard only. That is not a loss of coverage: **NordLynx is WireGuard**.
+
+Pass your access token and the config is fetched for you:
+
+```sh
+vee create bitmagnet --template bitmagnet \
+  --nordvpn-token <token> \
+  --nordvpn-country Netherlands \
+  --pg-data-dir /mnt/tank/bitmagnet-pg
+```
+
+Generate a token at [my.nordaccount.com/dashboard/nordvpn/access-tokens/](https://my.nordaccount.com/dashboard/nordvpn/access-tokens/). `--nordvpn-country` is optional; without it NordVPN recommends a server anywhere. An unknown country name is an error rather than a silent fallback — connecting through a different jurisdiction than the one you asked for is exactly the sort of surprise this template exists to avoid.
+
+vee assembles the `wg0.conf` from two sources: your account's NordLynx private key (authenticated) and a recommended WireGuard server's public key, hostname and port (public, load-aware). The endpoint is recorded as the server's IP address rather than its hostname, because the kill-switch pins its handshake hole to resolved addresses and there is no DNS left once `OUTPUT` is denied.
+
+The chosen endpoint is printed at create time, so the resulting firewall rules are intelligible.
+
+{{< hint info >}}
+The credentials endpoint is the one NordVPN's own clients use, not a documented, versioned public API — it can change without notice. If the fetch ever fails, exporting a NordLynx config manually and passing `--wg-conf` keeps working.
+{{< /hint >}}
+
+Or export one yourself and pass it with `--wg-conf`; both paths produce the same guest.
 
 ### Running without a VPN
 
