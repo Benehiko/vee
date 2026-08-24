@@ -280,6 +280,24 @@ func bitmagnetRunCmds(opts BitmagnetOptions) []string {
 		// vee tunnel and vee ssh resolve bridge-mode VM addresses over QGA.
 		"rc-update add qemu-guest-agent default",
 		"rc-service qemu-guest-agent start",
+
+		// The Alpine cloud image ships "AllowTcpForwarding no", which makes
+		// every ssh -L forward reset on connect. This template depends on
+		// forwarding: the web UI is deliberately given no firewall hole, so
+		// `vee tunnel` over SSH is the only way to reach it. Without this the
+		// UI is unreachable by any means.
+		//
+		// Scoped to a drop-in rather than editing sshd_config in place, so the
+		// image's own file stays pristine and the intent is greppable.
+		"mkdir -p /etc/ssh/sshd_config.d",
+		`printf 'AllowTcpForwarding yes\n' > /etc/ssh/sshd_config.d/10-vee-tunnel.conf`,
+		// Older sshd builds ignore the drop-in directory unless it is included,
+		// and Alpine's stock config does not always carry the Include line.
+		`grep -qs '^Include /etc/ssh/sshd_config.d/\*.conf' /etc/ssh/sshd_config || `+
+			`sed -i '1i Include /etc/ssh/sshd_config.d/*.conf' /etc/ssh/sshd_config`,
+		// Validate before reloading: a bad config would leave sshd dead and the
+		// guest unreachable, which on a kill-switched VM means unrecoverable.
+		"sshd -t && rc-service sshd reload",
 	)
 
 	cmds = append(cmds, bitmagnetKillSwitchCmds(opts)...)
