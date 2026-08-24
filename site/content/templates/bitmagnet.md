@@ -116,7 +116,9 @@ Re-creating against a directory that already holds a cluster reuses it. `initdb`
 Without `--pg-data-dir`, PostgreSQL stores its data on the VM's own qcow2 disk and the index is lost with the VM.
 
 {{< hint info >}}
-Point `--pg-data-dir` at a directory on real local storage. A network filesystem is not a safe place for a PostgreSQL data directory.
+`--pg-data-dir` must point at **local storage**. vee rejects NFS, SMB/CIFS, 9p, Ceph, GlusterFS and FUSE paths at create time.
+
+This is enforced rather than advised because the failure is silent and slow. PostgreSQL's `initdb` fsyncs thousands of small files during bootstrap, and over virtiofs onto a network mount each one is a full round trip — a ten-second `initdb` becomes hours. NFS mounted `hard` (the default) never returns an error either, so the guest blocks forever instead of failing: cloud-init stalls mid-`initdb`, and every step after it — including the firewall rules and the VPN tunnel — never runs. The VM looks created and boots fine, but has no kill-switch and no tunnel.
 {{< /hint >}}
 
 ### Ownership on a virtiofs share

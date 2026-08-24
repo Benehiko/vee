@@ -24,6 +24,7 @@ import (
 	"github.com/Benehiko/vee/internal/backend"
 	"github.com/Benehiko/vee/internal/journal"
 	"github.com/Benehiko/vee/internal/media"
+	"github.com/Benehiko/vee/internal/platform"
 	"github.com/Benehiko/vee/internal/qemu"
 	"github.com/Benehiko/vee/internal/qemubin"
 	"github.com/Benehiko/vee/internal/runnersetup"
@@ -506,6 +507,12 @@ func (s *server) templateExtras(ctx context.Context, in vmCreateIn, opts *build.
 			// The guest's postgres account is renumbered to the host owner of
 			// the share; virtiofs will not let the guest chown it. See
 			// templates.BitmagnetOptions.
+			if fs := platform.NetworkFilesystemName(in.PGDataDir); fs != "" {
+				return "", fmt.Errorf(
+					"pg_data_dir %s is on %s; PostgreSQL cannot run its data directory over a network "+
+						"filesystem (initdb would stall indefinitely). Use a directory on local storage",
+					in.PGDataDir, fs)
+			}
 			uid, gid, statErr := dirOwner(in.PGDataDir)
 			if statErr != nil {
 				return "", statErr

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Benehiko/vee/internal/platform"
 	"github.com/Benehiko/vee/internal/templates"
 	"github.com/Benehiko/vee/internal/vm/build"
 	"github.com/Benehiko/vee/internal/vpn"
@@ -40,6 +41,18 @@ func collectBitmagnetExtras() (*build.BitmagnetExtras, error) {
 		// path that is not there.
 		if mkErr := os.MkdirAll(absDir, 0o700); mkErr != nil {
 			return nil, fmt.Errorf("create PostgreSQL data directory: %w", mkErr)
+		}
+		// Refuse a network filesystem outright rather than letting it hang.
+		// PostgreSQL's initdb fsyncs thousands of small files, and over
+		// virtiofs onto NFS each one is a network round trip — a ten-second
+		// initdb becomes hours. With NFS's default "hard" option it never even
+		// errors: the guest blocks forever, cloud-init stalls mid-initdb, and
+		// every later step (the firewall, the VPN tunnel) silently never runs.
+		if fs := platform.NetworkFilesystemName(absDir); fs != "" {
+			return nil, fmt.Errorf(
+				"--pg-data-dir %s is on %s; PostgreSQL cannot run its data directory over a network filesystem "+
+					"(initdb would stall indefinitely and the VM would never finish provisioning). "+
+					"Use a directory on local storage", absDir, fs)
 		}
 		uid, gid, statErr := ownerOf(absDir)
 		if statErr != nil {
