@@ -1,6 +1,7 @@
 package templates
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -520,6 +521,48 @@ func TestTorrentUserDataIsValidYAML(t *testing.T) {
 	for i, c := range cmds {
 		if _, ok := c.(string); !ok {
 			t.Errorf("runcmd[%d] parsed as %T, not a string: %v", i, c, c)
+		}
+	}
+}
+
+// TestWireGuardDoesNotInstallResolvconf guards a package that must never come
+// back. wg-quick honours the "DNS =" directive by shelling out to a
+// resolvconf(8) command, and on Ubuntu 24.04 systemd-resolved is what supplies
+// it: the package declares "Provides: resolvconf" and ships /usr/sbin/resolvconf
+// as a symlink to resolvectl. It has Priority: important and is active on the
+// cloud image out of the box.
+//
+// Naming resolvconf explicitly did not add anything. Both the standalone
+// resolvconf and openresolv packages were dropped in noble, so apt found no
+// installation candidate and cloud-init settled on "status: error" for every
+// WireGuard torrent VM — harmless to the running services, since cloud-init
+// retries the rest of the list individually, but it permanently poisons the
+// exit status that genuine failures would otherwise show up in.
+//
+// Had it been installable it would have been worse than useless: wg-quick only
+// prepends its "tun." interface prefix when /etc/resolvconf/interface-order
+// exists, a file that package ships, and resolvectl's compat shim rejects the
+// prefixed name ("Failed to resolve interface"). Installing it would have
+// broken the DNS it was meant to enable.
+//
+// NewTorrentConfig downloads a disk image, so the package list cannot be built
+// in a unit test; assert against the source that produces it instead.
+func TestWireGuardDoesNotInstallResolvconf(t *testing.T) {
+	src, err := os.ReadFile("torrent.go")
+	if err != nil {
+		t.Fatalf("read torrent.go: %v", err)
+	}
+
+	for _, line := range strings.Split(string(src), "\n") {
+		code, _, _ := strings.Cut(line, "//")
+		if !strings.Contains(code, "packages = append(") {
+			continue
+		}
+		if strings.Contains(code, `"resolvconf"`) || strings.Contains(code, `"openresolv"`) {
+			t.Errorf("resolvconf has no installation candidate on Ubuntu 24.04; "+
+				"installing it poisons cloud-init's exit status and breaks wg-quick's "+
+				"DNS handling. systemd-resolved already provides resolvconf(8): %q",
+				strings.TrimSpace(line))
 		}
 	}
 }

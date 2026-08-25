@@ -439,7 +439,21 @@ func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, ssh
 			Permissions: "0600",
 		})
 		runCmds = append(torrentWGKillSwitchCmds(wgConf, nfsMounts), runCmds...)
-		packages = append(packages, "wireguard", "resolvconf")
+		// No resolvconf package: wg-quick shells out to a resolvconf(8)
+		// *command* to honour the "DNS =" directive, and on Ubuntu 24.04
+		// systemd-resolved is what provides it (it declares
+		// "Provides: resolvconf" and ships /usr/sbin/resolvconf as a
+		// symlink to resolvectl). It is installed and active on the cloud
+		// image already. The standalone resolvconf and openresolv packages
+		// were both dropped in noble, so naming resolvconf here only made
+		// cloud-init exit "status: error" on every WireGuard torrent VM,
+		// masking genuine failures.
+		//
+		// Installing it would also break DNS rather than enable it:
+		// wg-quick only prepends the "tun." interface prefix when
+		// /etc/resolvconf/interface-order exists (a file that package
+		// ships), and resolvectl's compat shim rejects the prefixed name.
+		packages = append(packages, "wireguard")
 
 	default:
 		// No VPN. ufw's default outgoing policy is allow, so NFS already
