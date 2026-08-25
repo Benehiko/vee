@@ -279,7 +279,7 @@ func TestGuestChecksDNSLeak(t *testing.T) {
 	if got["guest:dns-leak"] != NetCheckFail {
 		t.Errorf("dns-leak = %q, want fail (LAN resolver)", got["guest:dns-leak"])
 	}
-	for _, name := range []string{"guest:route", "guest:ufw", "guest:killswitch", "guest:vpn", "guest:egress-ip", "guest:dns-egress"} {
+	for _, name := range []string{"guest:route", "guest:firewall", "guest:killswitch", "guest:vpn", "guest:egress-ip", "guest:dns-egress"} {
 		if got[name] != NetCheckPass {
 			t.Errorf("%s = %q, want pass", name, got[name])
 		}
@@ -385,5 +385,82 @@ func TestGuestChecksNonVPN(t *testing.T) {
 	checks := guestChecks(cfg, NetworkOptions{}, &HostNetwork{}, &GuestNetwork{})
 	if len(checks) != 0 {
 		t.Errorf("non-VPN VM should have no guest judgments, got %v", checks)
+	}
+}
+
+// The recorded vpn_provider names the source of the tunnel, not the mechanism
+// used to probe it. "wireguard" and "nordlynx" (both written by the bitmagnet
+// template) must probe as WireGuard; matching the raw string is what made
+// vee network skip the tunnel probe entirely for those VMs.
+func TestVPNMechanism(t *testing.T) {
+	for provider, want := range map[string]string{
+		"":          vpnMechNone,
+		"nordvpn":   vpnMechNordVPN,
+		"generic":   vpnMechWireGuard,
+		"wireguard": vpnMechWireGuard,
+		"nordlynx":  vpnMechWireGuard,
+		"future":    vpnMechWireGuard,
+	} {
+		if got := vpnMechanism(provider); got != want {
+			t.Errorf("vpnMechanism(%q) = %q, want %q", provider, got, want)
+		}
+	}
+}
+
+// A bitmagnet guest firewalls with iptables and has no ufw at all. Its
+// kill-switch must still be judged rather than silently skipped, and the
+// firewall check must not report a correctly-configured guest as unreadable.
+func TestGuestChecksIPTablesKillSwitch(t *testing.T) {
+	host := &HostNetwork{PublicIP: "82.1.2.3"}
+	newGuest := func(policy string) *GuestNetwork {
+		return &GuestNetwork{
+			Interfaces: []qemu.GuestNetworkInterface{
+				{Name: "eth0", IPAddresses: []qemu.GuestIPAddress{{IPAddress: "192.168.1.5", Prefix: 24, IPAddressType: "ipv4"}}},
+			},
+			DefaultRoute: "dev wg0",
+			DNSServers:   []string{"103.86.96.100"},
+			IPTables:     IPTablesState{Available: true, OutputPolicy: policy, RuleCount: 8},
+			VPN:          VPNState{Provider: "wireguard", Available: true, Connected: true, Endpoint: "185.65.135.1:51820"},
+			EgressIP:     "185.65.135.1",
+			DNSEgressIP:  "185.65.135.1",
+		}
+	}
+	statuses := func(cfg *VMConfig, g *GuestNetwork) map[string]string {
+		got := map[string]string{}
+		for _, c := range guestChecks(cfg, NetworkOptions{}, host, g) {
+			got[c.Name] = c.Status
+		}
+		return got
+	}
+
+	// Recorded as "wireguard" — the value the bitmagnet CLI path writes.
+	got := statuses(&VMConfig{VPNProvider: "wireguard"}, newGuest("DROP"))
+	for _, name := range []string{"guest:firewall", "guest:killswitch", "guest:vpn", "guest:route"} {
+		if got[name] != NetCheckPass {
+			t.Errorf("%s = %q, want pass", name, got[name])
+		}
+	}
+
+	// An ACCEPT policy is a real kill-switch failure, not an unreadable one.
+	if got := statuses(&VMConfig{VPNProvider: "nordlynx"}, newGuest("ACCEPT")); got["guest:killswitch"] != NetCheckFail {
+		t.Errorf("killswitch = %q, want fail (OUTPUT policy ACCEPT)", got["guest:killswitch"])
+	}
+
+	// Neither front-end readable: unavailable, never a false pass.
+	blind := newGuest("DROP")
+	blind.IPTables = IPTablesState{}
+	if got := statuses(&VMConfig{VPNProvider: "wireguard"}, blind); got["guest:killswitch"] != NetCheckUnavailable {
+		t.Errorf("killswitch = %q, want unavailable", got["guest:killswitch"])
+	}
+}
+
+func TestParseIPTablesRules(t *testing.T) {
+	state := ParseIPTablesRules(`-P INPUT DROP
+-P FORWARD DROP
+-P OUTPUT DROP
+-A INPUT -i lo -j ACCEPT
+-A OUTPUT -o wg0 -j ACCEPT`)
+	if !state.Available || state.OutputPolicy != "DROP" || state.RuleCount != 2 {
+		t.Errorf("got %+v, want available OUTPUT=DROP rules=2", state)
 	}
 }

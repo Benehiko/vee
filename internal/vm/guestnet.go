@@ -60,13 +60,14 @@ type GuestNetwork struct {
 	// NordLynx and wg-quick both route this way: the main table's default
 	// route legitimately stays on the LAN NIC while every unmarked packet is
 	// diverted to the tunnel's own table.
-	PolicyRoute string     `json:"policy_route,omitempty"`
-	DNSServers  []string   `json:"dns_servers,omitempty"`
-	UFW         UFWState   `json:"ufw"`
-	VPN         VPNState   `json:"vpn"`
-	EgressIP    string     `json:"egress_ip,omitempty"`
-	DNSEgressIP string     `json:"dns_egress_ip,omitempty"`
-	Checks      []NetCheck `json:"checks"`
+	PolicyRoute string        `json:"policy_route,omitempty"`
+	DNSServers  []string      `json:"dns_servers,omitempty"`
+	UFW         UFWState      `json:"ufw"`
+	IPTables    IPTablesState `json:"iptables"`
+	VPN         VPNState      `json:"vpn"`
+	EgressIP    string        `json:"egress_ip,omitempty"`
+	DNSEgressIP string        `json:"dns_egress_ip,omitempty"`
+	Checks      []NetCheck    `json:"checks"`
 }
 
 // UFWState summarizes `ufw status verbose` inside the guest.
@@ -75,6 +76,16 @@ type UFWState struct {
 	Active          bool   `json:"active"`
 	DefaultOutgoing string `json:"default_outgoing,omitempty"`
 	RuleCount       int    `json:"rule_count"`
+}
+
+// IPTablesState summarizes the guest's iptables OUTPUT policy. Alpine guests
+// (the bitmagnet template) have no ufw and enforce their kill-switch with
+// iptables directly, so the firewall judgment has to read this instead.
+type IPTablesState struct {
+	Available bool `json:"available"`
+	// OutputPolicy is the OUTPUT chain's default policy, "DROP" or "ACCEPT".
+	OutputPolicy string `json:"output_policy,omitempty"`
+	RuleCount    int    `json:"rule_count"`
 }
 
 // VPNState summarizes the guest's VPN tunnel, provider-specific: nordvpn
@@ -303,8 +314,18 @@ func (m *Manager) guestNetwork(ctx context.Context, cfg *VMConfig, state *VMStat
 		guest.UFW = ParseUFWStatus(out)
 	}
 
-	switch cfg.VPNProvider {
-	case "nordvpn":
+	// iptables, for guests with no ufw. -S prints the policy line ("-P OUTPUT
+	// DROP") and every rule, and needs root: over QGA the probe already runs as
+	// root, over the SSH fallback sudo -n covers a passwordless sudoer and
+	// degrades to unavailable otherwise.
+	if !guest.UFW.Available {
+		if out, ok := probe("iptables -S 2>/dev/null || sudo -n iptables -S 2>/dev/null || echo " + guestUnavailable); ok {
+			guest.IPTables = ParseIPTablesRules(out)
+		}
+	}
+
+	switch vpnMechanism(cfg.VPNProvider) {
+	case vpnMechNordVPN:
 		if out, ok := probe("nordvpn status 2>/dev/null || echo " + guestUnavailable); ok {
 			guest.VPN.Available = true
 			connected, server, detail := ParseNordVPNStatus(out)
@@ -315,7 +336,7 @@ func (m *Manager) guestNetwork(ctx context.Context, cfg *VMConfig, state *VMStat
 		if out, ok := probe("nordvpn settings 2>/dev/null || echo " + guestUnavailable); ok {
 			guest.VPN.Killswitch = ParseNordVPNSettings(out)
 		}
-	case "generic":
+	case vpnMechWireGuard:
 		if out, ok := probe("wg show wg0 2>/dev/null || sudo -n wg show wg0 2>/dev/null || echo " + guestUnavailable); ok {
 			guest.VPN.Available = true
 			endpoint, handshake := ParseWGShow(out)
@@ -360,8 +381,10 @@ func guestChecks(cfg *VMConfig, opts NetworkOptions, host *HostNetwork, guest *G
 		return nil
 	}
 
+	mech := vpnMechanism(cfg.VPNProvider)
+
 	tunnelDev := "wg0"
-	if cfg.VPNProvider == "nordvpn" {
+	if mech == vpnMechNordVPN {
 		tunnelDev = "nordlynx"
 	}
 
@@ -428,24 +451,47 @@ func guestChecks(cfg *VMConfig, opts NetworkOptions, host *HostNetwork, guest *G
 		}
 	}
 
-	// Firewall.
+	// Firewall. Two front-ends are in play: the torrent template's Ubuntu
+	// guests use ufw, and the bitmagnet template's Alpine guests have no ufw
+	// and drive iptables directly. Judge whichever one the guest actually has,
+	// rather than reporting a correctly-firewalled Alpine guest as
+	// "ufw not readable".
 	switch {
-	case !guest.UFW.Available:
-		add("guest:ufw", NetCheckUnavailable, "ufw not readable in guest")
-	case !guest.UFW.Active:
-		add("guest:ufw", NetCheckFail, "ufw inactive")
+	case guest.UFW.Available && !guest.UFW.Active:
+		add("guest:firewall", NetCheckFail, "ufw inactive")
+	case guest.UFW.Available:
+		add("guest:firewall", NetCheckPass,
+			fmt.Sprintf("ufw active, outgoing=%s (%d rules)", guest.UFW.DefaultOutgoing, guest.UFW.RuleCount))
+	case guest.IPTables.Available:
+		add("guest:firewall", NetCheckPass,
+			fmt.Sprintf("iptables, OUTPUT policy %s (%d rules)", guest.IPTables.OutputPolicy, guest.IPTables.RuleCount))
 	default:
-		add("guest:ufw", NetCheckPass,
-			fmt.Sprintf("active, outgoing=%s (%d rules)", guest.UFW.DefaultOutgoing, guest.UFW.RuleCount))
+		add("guest:firewall", NetCheckUnavailable, "no ufw or iptables state readable in guest")
 	}
-	if cfg.VPNProvider == "generic" && guest.UFW.Available && guest.UFW.Active {
-		// The WireGuard template's kill-switch is ufw's default-deny outbound;
-		// NordVPN enforces its kill-switch inside the daemon instead.
-		if guest.UFW.DefaultOutgoing == "deny" {
-			add("guest:killswitch", NetCheckPass, "ufw default deny (outgoing)")
-		} else {
-			add("guest:killswitch", NetCheckFail,
-				fmt.Sprintf("ufw default outgoing is %q, expected deny", guest.UFW.DefaultOutgoing))
+
+	// Kill-switch, for the WireGuard mechanism only: NordVPN enforces its own
+	// inside the daemon and is judged from `nordvpn settings` below. Both
+	// front-ends express the same rule — deny egress by default so that a
+	// tunnel that never came up (or dropped) silences the guest instead of
+	// letting it fall back to the LAN.
+	if mech == vpnMechWireGuard {
+		switch {
+		case guest.UFW.Available && guest.UFW.Active:
+			if guest.UFW.DefaultOutgoing == "deny" {
+				add("guest:killswitch", NetCheckPass, "ufw default deny (outgoing)")
+			} else {
+				add("guest:killswitch", NetCheckFail,
+					fmt.Sprintf("ufw default outgoing is %q, expected deny", guest.UFW.DefaultOutgoing))
+			}
+		case guest.IPTables.Available:
+			if guest.IPTables.OutputPolicy == "DROP" {
+				add("guest:killswitch", NetCheckPass, "iptables OUTPUT policy DROP")
+			} else {
+				add("guest:killswitch", NetCheckFail,
+					fmt.Sprintf("iptables OUTPUT policy is %q, expected DROP", guest.IPTables.OutputPolicy))
+			}
+		default:
+			add("guest:killswitch", NetCheckUnavailable, "no firewall state readable in guest")
 		}
 	}
 
@@ -462,7 +508,7 @@ func guestChecks(cfg *VMConfig, opts NetworkOptions, host *HostNetwork, guest *G
 	default:
 		add("guest:vpn", NetCheckFail, cfg.VPNProvider+" not connected: "+guest.VPN.Detail)
 	}
-	if cfg.VPNProvider == "nordvpn" {
+	if mech == vpnMechNordVPN {
 		switch guest.VPN.Killswitch {
 		case "on":
 			add("guest:killswitch", NetCheckPass, "nordvpn kill switch enabled")
@@ -675,6 +721,22 @@ func ParseUFWStatus(output string) UFWState {
 	return state
 }
 
+// ParseIPTablesRules parses `iptables -S` output: the "-P CHAIN POLICY" lines
+// carry the chain defaults and the "-A" lines are the rules.
+func ParseIPTablesRules(output string) IPTablesState {
+	state := IPTablesState{Available: true}
+	for line := range strings.SplitSeq(strings.TrimSpace(output), "\n") {
+		fields := strings.Fields(line)
+		switch {
+		case len(fields) == 3 && fields[0] == "-P" && fields[1] == "OUTPUT":
+			state.OutputPolicy = fields[2]
+		case len(fields) > 0 && fields[0] == "-A":
+			state.RuleCount++
+		}
+	}
+	return state
+}
+
 // sanitizeNordVPNLine strips the spinner characters and carriage returns the
 // nordvpn CLI prepends to its output lines.
 func sanitizeNordVPNLine(line string) string {
@@ -796,4 +858,38 @@ func ParseIPAddrBrief(output string) []qemu.GuestNetworkInterface {
 		ifaces = append(ifaces, *byName[name])
 	}
 	return ifaces
+}
+
+// VPN mechanisms. The vpn_provider recorded in a VM config names the *source*
+// of the tunnel (which the operator chose), not the *mechanism* used to
+// inspect it. Several provider names map onto the same mechanism: "generic",
+// "wireguard" and "nordlynx" are all plain WireGuard interfaces probed with
+// `wg show`, because NordLynx is WireGuard and the bitmagnet template renders
+// a wg0.conf for it rather than installing NordVPN's client.
+//
+// Probing keys off the mechanism, never the provider string. Matching the raw
+// provider is what made `vee network` skip the tunnel probe entirely for
+// bitmagnet VMs (recorded as "wireguard"/"nordlynx"): the report still
+// rendered its route and egress checks, so a dead VPN check read as a healthy
+// VM.
+const (
+	vpnMechNone      = ""
+	vpnMechNordVPN   = "nordvpn"   // the NordVPN snap daemon, probed via `nordvpn status`
+	vpnMechWireGuard = "wireguard" // a wg interface, probed via `wg show wg0`
+)
+
+// vpnMechanism maps a recorded vpn_provider onto the mechanism used to probe
+// it. An unrecognized non-empty provider is treated as WireGuard: every
+// provider vee configures other than the NordVPN snap renders a wg0.conf, so
+// that is both the safe default and the correct one for a future provider
+// added without updating this function.
+func vpnMechanism(provider string) string {
+	switch provider {
+	case "":
+		return vpnMechNone
+	case "nordvpn":
+		return vpnMechNordVPN
+	default:
+		return vpnMechWireGuard
+	}
 }
