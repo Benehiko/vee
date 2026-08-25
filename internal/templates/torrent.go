@@ -63,8 +63,20 @@ func nfsServers(mounts []NFSMount) []string {
 // VPN commands are inserted after these by the caller.
 func torrentBaseRunCmds() []string {
 	return []string{
+		// Inbound: SSH only. qBittorrent's web UI is deliberately absent —
+		// vee tunnel forwards it over the SSH connection, so it never needs a
+		// hole of its own. This matches the Alpine base, which never opened one
+		// (see torrentAlpineKillSwitchCmds), and bitmagnet, whose UI on 3333 is
+		// likewise tunnel-only.
+		//
+		// The forward in HostFwds binds 127.0.0.1 on the host and arrives at
+		// the guest over loopback, which is also what makes the UI usable
+		// without a password: qBittorrent is configured with
+		// LocalHostAuth=false, so it skips authentication for loopback
+		// connections only. No WebUI\Password is ever set, so a rule opening
+		// 8080 to the LAN gained nothing — non-loopback clients are answered
+		// with 403 — while still exposing the listener on every bridged VM.
 		"ufw allow OpenSSH",
-		"ufw allow 8080/tcp",
 		"ufw --force enable",
 		// vee tunnel + vee ssh on bridge mode resolve the VM IP via QGA, so
 		// the guest agent has to be live before the readiness check fires.

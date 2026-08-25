@@ -192,10 +192,19 @@ Alpine base differs.
 
 ## Access
 
-The qbittorrent-nox web UI listens on port 8080 inside the guest. The default
-user-mode NAT network forwards it to `127.0.0.1:8080` on the host; on a bridged
-VM, or any VM with a VPN kill-switch, use `vee tunnel dl 8080` to forward it over
-SSH instead.
+The qbittorrent-nox web UI listens on port 8080 inside the guest, and the guest
+firewall never opens that port to the LAN — on any torrent VM, with or without a
+VPN. `vee tunnel` is the only way in.
 
-With a kill-switch enabled the port is never opened to the LAN, so `vee tunnel`
-is the only way in.
+On the default user-mode NAT network the port is forwarded to `127.0.0.1:8080`
+on the host, which reaches the guest over loopback and works out of the box. On
+a bridged VM there is no such forward, so use `vee tunnel dl qbittorrent` (or
+`vee tunnel dl 8080`) to forward it over SSH. `vee tunnel` detects a port it
+cannot reach directly and falls back to SSH on its own.
+
+That loopback path is also what makes the UI usable without a password.
+qBittorrent is configured with `LocalHostAuth=false`, so it skips authentication
+for loopback connections only; a request arriving from the LAN would be answered
+with `403` even if the firewall let it through. Reaching the UI therefore means
+having SSH access to the guest, which is the intended access model — the same
+one the Alpine base and the [bitmagnet]({{< relref "bitmagnet" >}}) template use.
