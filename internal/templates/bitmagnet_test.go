@@ -1,6 +1,7 @@
 package templates
 
 import (
+	"encoding/base64"
 	"fmt"
 	"strings"
 	"testing"
@@ -612,5 +613,133 @@ func TestWireGuardEndpointHost(t *testing.T) {
 	}
 	if got := wireGuardEndpointHost(nil); got != "" {
 		t.Errorf("wireGuardEndpointHost(nil) = %q, want empty", got)
+	}
+}
+
+// TestBitmagnetEndpointRefreshInstalled covers the rotation path. The handshake
+// hole is pinned to the addresses resolved once, at build time; nothing else
+// recomputes them. Without a refresh a provider that re-addresses its server
+// leaves wg-quick dialling the new IP while the firewall still permits only the
+// old one — the handshake is dropped, the tunnel never comes back, and a reboot
+// does not help because the stale addresses are what got persisted.
+//
+// That fails closed, so the crawler falls silent rather than leaking. But a
+// silent permanent outage is the same class of failure the pinning was
+// introduced to prevent, and it is the bug #151 fixed for the torrent bases.
+func TestBitmagnetEndpointRefreshInstalled(t *testing.T) {
+	cmds := bitmagnetKillSwitchCmds(BitmagnetOptions{WireGuard: testWireGuardConf()})
+
+	if indexOf(cmds, wgRefreshScriptPath) < 0 {
+		t.Fatal("no endpoint-refresh wiring; a rotated endpoint would strand the guest permanently")
+	}
+
+	// The boot hook has to re-resolve before the handshake is attempted, not
+	// after it fails: a guest booting after a rotation should come up with a
+	// working tunnel rather than waiting for a later cron tick.
+	hook := indexOf(cmds, "/etc/local.d/wg0.start")
+	if hook < 0 {
+		t.Fatal("no boot hook emitted")
+	}
+	refreshPos := strings.Index(cmds[hook], wgRefreshScriptPath)
+	upPos := strings.Index(cmds[hook], "wg-quick up wg0")
+	if refreshPos < 0 || upPos < 0 || refreshPos > upPos {
+		t.Errorf("boot hook does not re-resolve before bringing the tunnel up: %q", cmds[hook])
+	}
+
+	// A rotation while the guest is running needs picking up without a reboot.
+	if indexOf(cmds, "/etc/periodic/1min/vee-wg-refresh") < 0 {
+		t.Error("no periodic refresh; a rotation would not be noticed until the next reboot")
+	}
+	// Alpine ships crond stopped and out of the default runlevel, so dropping a
+	// script into /etc/periodic alone would never run it.
+	if indexOf(cmds, "rc-update add crond default") < 0 {
+		t.Error("crond is never enabled; the periodic refresh would never fire")
+	}
+}
+
+// TestBitmagnetBootHookNotOverwritten pins the ordering hazard. The refresh
+// wiring installs its own /etc/local.d/wg0.start that runs the re-resolve ahead
+// of "wg-quick up". A plain hook written unconditionally afterwards would
+// clobber it and silently take the refresh back out on every boot — leaving the
+// rotation bug in place while every other assertion still passed.
+func TestBitmagnetBootHookNotOverwritten(t *testing.T) {
+	cmds := bitmagnetKillSwitchCmds(BitmagnetOptions{WireGuard: testWireGuardConf()})
+
+	var hooks []string
+	for _, c := range cmds {
+		if strings.Contains(c, "> /etc/local.d/wg0.start") {
+			hooks = append(hooks, c)
+		}
+	}
+	if len(hooks) != 1 {
+		t.Fatalf("expected exactly one wg0.start writer, got %d: %q", len(hooks), hooks)
+	}
+	if !strings.Contains(hooks[0], wgRefreshScriptPath) {
+		t.Errorf("the surviving boot hook is the plain one; the refresh is overwritten: %q", hooks[0])
+	}
+}
+
+// TestBitmagnetLiteralEndpointSkipsRefresh checks the other branch. An IP
+// literal cannot rotate, so the refresh machinery is pointless there — but the
+// tunnel still needs a boot hook, or the guest comes back after a reboot with
+// the kill-switch up and no tunnel.
+func TestBitmagnetLiteralEndpointSkipsRefresh(t *testing.T) {
+	conf := testWireGuardConf()
+	conf.Endpoint = "203.0.113.5:51820"
+	cmds := bitmagnetKillSwitchCmds(BitmagnetOptions{WireGuard: conf})
+
+	if idx := indexOf(cmds, wgRefreshScriptPath); idx >= 0 {
+		t.Errorf("refresh machinery installed for an endpoint that cannot rotate: %q", cmds[idx])
+	}
+	hook := indexOf(cmds, "/etc/local.d/wg0.start")
+	if hook < 0 {
+		t.Fatal("no boot hook for a literal endpoint; the tunnel would not survive a reboot")
+	}
+	if !strings.Contains(cmds[hook], "wg-quick up wg0") {
+		t.Errorf("boot hook does not bring the tunnel up: %q", cmds[hook])
+	}
+}
+
+// TestBitmagnetRefreshScriptShipped checks the script itself reaches the guest.
+// The wiring only references a path; without the write-file carrying its
+// content, every boot hook and cron tick would run a file that does not exist.
+//
+// The write-file helper is exercised directly rather than through
+// NewBitmagnetConfig, which downloads a disk image — see the note above
+// TestTorrentPackagesForBase.
+func TestBitmagnetRefreshScriptShipped(t *testing.T) {
+	conf := testWireGuardConf()
+	wf := wgRefreshWriteFile(conf, alpineFirewallCmds(conf))
+	if wf == nil {
+		t.Fatal("the refresh script is never written; the boot hook would run a missing file")
+	}
+	if wf.Path != wgRefreshScriptPath {
+		t.Errorf("refresh script path = %q, want %q", wf.Path, wgRefreshScriptPath)
+	}
+	if wf.Encoding != "b64" {
+		t.Errorf("refresh script encoding = %q, want b64", wf.Encoding)
+	}
+	if wf.Permissions != "0755" {
+		t.Errorf("refresh script permissions = %q, want 0755", wf.Permissions)
+	}
+
+	decoded, err := base64.StdEncoding.DecodeString(wf.Content)
+	if err != nil {
+		t.Fatalf("refresh script is not valid base64: %v", err)
+	}
+	// It has to be the iptables rendering, not ufw's: bitmagnet is Alpine-based
+	// and has no ufw. A ufw-rendered script would fail every command silently
+	// and never re-pin anything.
+	script := string(decoded)
+	if !strings.Contains(script, "iptables") {
+		t.Error("refresh script is not rendered for the iptables base")
+	}
+	if strings.Contains(script, "ufw ") {
+		t.Error("refresh script carries ufw commands, which Alpine does not have")
+	}
+	// The rules have to be persisted after a re-pin, or the corrected hole is
+	// lost on the next boot and the guest returns to the stale-pin outage.
+	if !strings.Contains(script, "/etc/init.d/iptables save") {
+		t.Error("refresh script never persists the re-pinned rules")
 	}
 }

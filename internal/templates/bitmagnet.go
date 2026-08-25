@@ -190,6 +190,12 @@ func NewBitmagnetConfig(
 			Content:     vpn.RenderWireGuardConf(opts.WireGuard),
 			Permissions: "0600",
 		})
+		// The endpoint-refresh script, for a hostname endpoint that can rotate.
+		// It arrives as a write-file rather than a runcmd because its content is
+		// a multi-line shell program — see wgRefreshWriteFile.
+		if wf := wgRefreshWriteFile(opts.WireGuard, alpineFirewallCmds(opts.WireGuard)); wf != nil {
+			writeFiles = append(writeFiles, *wf)
+		}
 	}
 
 	return &vm.VMConfig{
@@ -485,7 +491,6 @@ func bitmagnetKillSwitchCmds(opts BitmagnetOptions) []string {
 
 	if opts.WireGuard != nil {
 		endpointPort := wireGuardEndpointPort(opts.WireGuard)
-		endpointHost := wireGuardEndpointHost(opts.WireGuard)
 
 		cmds = append(cmds,
 			// Resolve the endpoint here, before the deny policy lands, and pin
@@ -493,8 +498,12 @@ func bitmagnetKillSwitchCmds(opts BitmagnetOptions) []string {
 			// hostname, and once OUTPUT is DROP there is no DNS left to resolve
 			// it with — so the lookup has to happen first and its result be
 			// baked into the rules.
-			fmt.Sprintf("WG_EP=$(getent ahostsv4 %q | awk '{print $1}' | sort -u); "+
-				"echo \"$WG_EP\" > /etc/wireguard/endpoint-addrs", endpointHost),
+			//
+			// Shared with the torrent bases rather than spelled out again: the
+			// refresh script re-resolves into the same file, so the two have to
+			// agree on its path and format or a refresh would write somewhere
+			// the boot-time rules never read.
+			wgResolveEndpointCmd(opts.WireGuard),
 
 			"iptables -P OUTPUT DROP",
 			"iptables -A OUTPUT -o lo -j ACCEPT",
@@ -536,14 +545,38 @@ func bitmagnetKillSwitchCmds(opts BitmagnetOptions) []string {
 			// service reads /etc/conf.d/wireguard, and wg-quick applies the
 			// Address/DNS/AllowedIPs directives our rendered wg0.conf carries.
 			"wg-quick up wg0",
+		)
+
+		// Re-pin the handshake hole when the endpoint rotates. Without this the
+		// hole stays pinned to the addresses resolved once at build time: a
+		// provider that re-addresses its server leaves wg-quick dialling the new
+		// IP while the firewall still permits only the old one, so the handshake
+		// is dropped and the tunnel never comes back. It fails closed — the
+		// crawler falls silent rather than leaking — but it is a silent
+		// permanent outage, and it survives reboots.
+		//
+		// Returns nothing for a literal-IP endpoint, which cannot rotate; the
+		// plain boot hook below covers that case.
+		refresh := alpineWGEndpointRefreshCmds(opts.WireGuard)
+		cmds = append(cmds, refresh...)
+
+		if len(refresh) == 0 {
 			// Cloud-init runcmds fire once, so the tunnel needs a boot-time
 			// hook of its own or the guest comes back after a reboot with the
 			// kill-switch up and no tunnel — reachable over SSH, crawling
 			// nothing, which is the correct failure but a confusing one.
-			`printf '#!/bin/sh\nwg-quick up wg0\n' > /etc/local.d/wg0.start`,
-			"chmod 0755 /etc/local.d/wg0.start",
-			"rc-update add local default",
-		)
+			//
+			// Only for a literal-IP endpoint: the refresh wiring above installs
+			// its own /etc/local.d/wg0.start, which runs the re-resolve ahead of
+			// "wg-quick up". Writing this one unconditionally would overwrite
+			// that and take the refresh back out on every boot.
+			cmds = append(cmds,
+				`printf '#!/bin/sh\nwg-quick up wg0\n' > /etc/local.d/wg0.start`,
+				"chmod 0755 /etc/local.d/wg0.start",
+			)
+		}
+
+		cmds = append(cmds, "rc-update add local default")
 	}
 
 	return append(cmds,
