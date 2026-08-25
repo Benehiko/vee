@@ -25,14 +25,15 @@ var networkCmd = &cobra.Command{
 The host section reports what the host can see of the guest (NIC mode, ARP
 visibility, SSH and guest-agent reachability). The guest section reports what
 the guest sees of its own networking (interfaces, default route, DNS servers,
-ufw, VPN tunnel) probed via the guest agent with an SSH fallback.
+firewall, VPN tunnel) probed via the guest agent with an SSH fallback. The
+firewall is read from ufw where the guest has it and from iptables otherwise.
 
-For VPN-configured VMs (the torrent template) the report includes pass/fail
-checks: kill-switch enabled, default route through the tunnel, DNS not
-leaking to the LAN resolver, and the guest's egress IP differing from the
-host's public IP. The egress checks make one HTTPS request to Cloudflare's
-trace endpoint from each side and one DNS query from the guest; disable them
-with --skip-egress.`,
+For VPN-configured VMs (the torrent and bitmagnet templates) the report
+includes pass/fail checks: kill-switch enabled, default route through the
+tunnel, DNS not leaking to the LAN resolver, and the guest's egress IP
+differing from the host's public IP. The egress checks make one HTTPS request
+to Cloudflare's trace endpoint from each side and one DNS query from the
+guest; disable them with --skip-egress.`,
 	Args:              cobra.ExactArgs(1),
 	ValidArgsFunction: completeVMNames,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -100,10 +101,15 @@ func printNetworkReport(r *vm.NetworkReport) {
 	if len(r.Guest.DNSServers) > 0 {
 		printNetFact("dns", strings.Join(r.Guest.DNSServers, ", "))
 	}
-	if r.Guest.UFW.Available {
-		printNetFact("ufw", fmt.Sprintf("%s, outgoing=%s (%d rules)",
+	switch {
+	case r.Guest.UFW.Available:
+		printNetFact("firewall", fmt.Sprintf("ufw %s, outgoing=%s (%d rules)",
 			map[bool]string{true: "active", false: "inactive"}[r.Guest.UFW.Active],
 			r.Guest.UFW.DefaultOutgoing, r.Guest.UFW.RuleCount))
+	case r.Guest.IPTables.Available:
+		// Alpine guests (bitmagnet) carry no ufw and drive iptables directly.
+		printNetFact("firewall", fmt.Sprintf("iptables, OUTPUT %s (%d rules)",
+			r.Guest.IPTables.OutputPolicy, r.Guest.IPTables.RuleCount))
 	}
 	if r.Guest.VPN.Provider != "" {
 		v := r.Guest.VPN

@@ -64,7 +64,7 @@ guest:
   interfaces   enp1s0 192.168.1.50/24, nordlynx 10.5.0.2/32
   route        default dev nordlynx
   dns          103.86.96.100, 103.86.99.100
-  ufw          active, outgoing=allow (3 rules)
+  firewall     ufw active, outgoing=allow (3 rules)
   vpn          nordvpn connected (de1234.nordvpn.com), killswitch=on
   egress       185.130.184.90
   dns egress   185.130.184.91
@@ -77,13 +77,18 @@ host:ssh          PASS    127.0.0.1:2222 reachable
 host:qga          PASS    guest agent responding
 guest:route       PASS    default dev nordlynx
 guest:dns-leak    PASS    103.86.96.100, 103.86.99.100
-guest:ufw         PASS    active, outgoing=allow (3 rules)
+guest:firewall    PASS    ufw active, outgoing=allow (3 rules)
 guest:vpn         PASS    nordvpn connected de1234.nordvpn.com
 guest:killswitch  PASS    nordvpn kill switch enabled
 guest:egress-ip   PASS    185.130.184.90 differs from host 82.1.2.3
 guest:dns-egress  PASS    185.130.184.91 differs from host 82.1.2.3
 ```
 
-Probes whose tooling is missing in the guest (no `dig`, no `ufw`) degrade to `UNAVAILABLE` rather than failing the report.
+The firewall is read from `ufw` on guests that have it and from `iptables`
+otherwise, so the Alpine-based [bitmagnet](../../templates/bitmagnet/) template
+reports its kill-switch as `iptables, OUTPUT DROP` in the same slot.
+
+Probes whose tooling is missing in the guest (no `dig`, no firewall front-end
+readable) degrade to `UNAVAILABLE` rather than failing the report.
 
 `--json` prints the full structured report; the same data is available over MCP as the `vm_network` tool.
