@@ -356,14 +356,17 @@ func torrentAlpineWriteFiles(savePath string, wgConf *vpn.WireGuardConfig) []vm.
 // This is the opt-in alternative to the default Ubuntu base, selected with
 // --distro alpine. It buys a much smaller guest and the better-hardened
 // kill-switch — the handshake hole and the SSH hole are both narrower than
-// ufw's rule vocabulary can express — at three costs worth knowing:
+// ufw's rule vocabulary can express — at two costs worth knowing:
 //
-//   - NordVPN is unavailable. It ships as a snap and Alpine has no snapd, so
-//     only a generic WireGuard config can back the kill-switch here.
 //   - x86_64 only. The Alpine cloud image vee downloads is a BIOS x86_64
 //     image; the Ubuntu base runs on arm64 as well.
 //   - No SPICE display. The guest is a headless daemon and the web UI is
 //     reached over `vee tunnel`, so there is nothing to draw.
+//
+// A NordVPN account is not a third cost. The NordVPN client itself is a snap
+// and Alpine has no snapd, but NordLynx is WireGuard: a nordConf is exchanged
+// for a NordLynx wg0.conf here and backs the same kill-switch as any other
+// WireGuard config, exactly as the bitmagnet template does it.
 func NewTorrentAlpineConfig(
 	ctx context.Context,
 	p provider.Provider,
@@ -375,10 +378,25 @@ func NewTorrentAlpineConfig(
 	wgConf *vpn.WireGuardConfig,
 	vpnProvider string,
 ) (*vm.VMConfig, error) {
+	// NordLynx is WireGuard, so a NordVPN account needs no snapd here: exchange
+	// the account token for a NordLynx config and drive the same kill-switch.
+	// The Ubuntu base installs the NordVPN client instead, which enforces its
+	// own kill-switch inside the daemon; here the firewall does it.
 	if nordConf != nil {
-		return nil, fmt.Errorf(
-			"the alpine torrent base cannot use NordVPN: it installs as a snap and Alpine has no snapd. " +
-				"Use --distro ubuntu for NordVPN, or supply a WireGuard config instead")
+		if wgConf != nil {
+			return nil, fmt.Errorf("pass either a NordVPN token or a WireGuard config, not both")
+		}
+		lynx, err := vpn.NordLynxConfig(ctx, nordConf.Token, nordConf.Country)
+		if err != nil {
+			return nil, fmt.Errorf("fetch NordLynx config: %w", err)
+		}
+		wgConf = lynx
+		if vpnProvider == "" || vpnProvider == "nordvpn" {
+			// Record the mechanism actually in use: the guest runs a wg0
+			// interface, not the NordVPN daemon, and `vee network` probes by
+			// mechanism.
+			vpnProvider = "nordlynx"
+		}
 	}
 
 	img, err := images.NewImage(p, images.DistroAlpine, "latest")

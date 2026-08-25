@@ -255,20 +255,26 @@ func TestAlpineNFSUsesAlpinePackageName(t *testing.T) {
 	}
 }
 
-// TestAlpineRejectsNordVPN pins the one capability the Alpine base cannot
-// offer. NordVPN installs as a snap and Alpine has no snapd, so silently
-// ignoring it would leave the guest with no VPN at all — the exact failure the
-// kill-switch exists to prevent.
-func TestAlpineRejectsNordVPN(t *testing.T) {
+// TestAlpineRejectsBothVPNs guards the one genuinely ambiguous input. A
+// NordVPN token and a WireGuard config are two ways to describe the same
+// tunnel, and silently preferring one would give the guest a VPN the caller did
+// not ask for.
+//
+// Note there is deliberately no test that NordVPN is rejected outright: the
+// NordVPN *client* is a snap and Alpine has no snapd, but NordLynx is
+// WireGuard, so a token is exchanged for a wg0.conf and backs the same
+// kill-switch. That exchange needs the network, so it is covered by the e2e
+// test rather than here.
+func TestAlpineRejectsBothVPNs(t *testing.T) {
 	_, err := NewTorrentAlpineConfig(
 		t.Context(), nil, "dl", nil, nil, nil,
-		&vpn.NordVPNConfig{Token: "tok"}, nil, "nordvpn",
+		&vpn.NordVPNConfig{Token: "tok"}, testWGConf(), "nordvpn",
 	)
 	if err == nil {
-		t.Fatal("NordVPN on the Alpine base must be rejected, not silently ignored")
+		t.Fatal("passing both a NordVPN token and a WireGuard config must be rejected")
 	}
-	if !strings.Contains(err.Error(), "snap") {
-		t.Errorf("the error should explain why NordVPN is unavailable, got %q", err)
+	if !strings.Contains(err.Error(), "not both") {
+		t.Errorf("the error should name the conflict, got %q", err)
 	}
 }
 

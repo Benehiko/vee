@@ -80,19 +80,22 @@ connections that are already established (a bare source-port rule would let any
 process open new connections to the internet with the tunnel down), and DHCP
 renewal is pinned to the broadcast address.
 
-It costs three things:
+It costs two things:
 
 | | Ubuntu (default) | Alpine (`--distro alpine`) |
 |---|---|---|
-| VPN | NordVPN or generic WireGuard | Generic WireGuard only — NordVPN ships as a snap and Alpine has no snapd |
 | Architecture | x86_64 and arm64 | x86_64 only |
 | SPICE display | Yes | No — headless; the web UI is reached over `vee tunnel` |
 | Memory | 2G | 1G |
 | Firewall | `ufw` | `iptables` |
+| NordVPN | NordVPN client (daemon kill-switch) | NordLynx config (firewall kill-switch) |
 
-Asking for NordVPN on the Alpine base is an error rather than a silent
-downgrade: a torrent VM that quietly came up with no VPN is the exact failure
-the kill-switch exists to prevent.
+**A NordVPN account works on both bases.** The NordVPN client is a snap and
+Alpine has no snapd, but NordLynx is WireGuard: on the Alpine base your account
+token is exchanged for a NordLynx `wg0.conf` and drives the same firewall
+kill-switch as any other WireGuard config. The prompt is identical either way.
+The difference is only in who enforces the kill-switch — the NordVPN daemon on
+Ubuntu, the firewall on Alpine.
 
 Existing Ubuntu VMs are unaffected — the base is chosen at create time and
 nothing migrates.
@@ -156,11 +159,18 @@ the VM looks healthy while downloading nothing. Check it with `vee network dl`.
 
 ### NordVPN
 
-Choose option 1 and supply an access token (and optionally a country). The
-template installs the NordVPN snap and connects over NordLynx. Here the
-kill-switch is enforced by the NordVPN daemon rather than by `ufw`, so the
-exceptions above do not apply — NFS servers and port 22 are registered with
-`nordvpn whitelist` instead.
+Choose option 1 and supply an access token (and optionally a country).
+
+On the default Ubuntu base the template installs the NordVPN snap and connects
+over NordLynx. The kill-switch is enforced by the NordVPN daemon rather than by
+`ufw`, so the exceptions above do not apply — NFS servers and port 22 are
+registered with `nordvpn whitelist` instead.
+
+On the Alpine base the token is exchanged for a NordLynx WireGuard config up
+front, and from there it is an ordinary WireGuard tunnel behind the firewall
+kill-switch — the exception table above applies unchanged. `vee network` reports
+the provider as `nordlynx`, since what the guest actually runs is a `wg0`
+interface rather than the NordVPN daemon.
 
 ### Verifying
 

@@ -93,7 +93,7 @@ Templates apply sane defaults automatically:
   passthrough     Raw NVMe boot + GPU passthrough, 8G / 6 CPUs, SPICE, virtiofs Games
   torrent         Lightweight qbittorrent-nox via cloud-init, optional VPN kill-switch
                   (supports --distro: ubuntu default, alpine — smaller, iptables
-                  kill-switch, WireGuard only)
+                  kill-switch; NordVPN tokens work on both, via NordLynx)
   devbox          8G / 4 CPUs, Docker + zsh via cloud-init (supports --distro)
   server          8G / 2 CPUs, openssh + ufw + fail2ban via cloud-init (supports --distro)
   desktop         8G / 4 CPUs, GNOME + Mesa via cloud-init, accelerated virtio-gpu
