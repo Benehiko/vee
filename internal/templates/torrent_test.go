@@ -226,6 +226,15 @@ func TestWireGuardTunnelRetryPersists(t *testing.T) {
 	if !strings.Contains(joined, "systemctl enable --now vee-wg-retry.timer") {
 		t.Error("the retry timer must be enabled, or it does not survive the reboot it exists for")
 	}
+	// The recovery must use restart, not start. wg-quick@ is Type=oneshot with
+	// RemainAfterExit=yes, so once its ExecStart has succeeded systemd reports
+	// the unit active-exited even after the interface is gone — and "start"
+	// against an active unit is a no-op that exits 0. Verified live: with wg0
+	// torn down, the timer fired every 60s and reported success while the
+	// tunnel stayed down indefinitely.
+	if !strings.Contains(joined, "systemctl restart wg-quick@wg0") {
+		t.Error("the retry must restart wg-quick@wg0: start is a no-op while the unit is still active-exited")
+	}
 }
 
 // TestTorrentRuncmdOrdering pins the ordering constraint a real first boot

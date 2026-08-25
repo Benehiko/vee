@@ -288,9 +288,18 @@ func torrentWGKillSwitchCmds(wgConf *vpn.WireGuardConfig, nfsMounts []NFSMount) 
 // sits firewalled with no tunnel indefinitely. That fails closed, so nothing
 // leaks, but it is a silent outage that needs a console to notice.
 //
-// The timer is deliberately dumb: "is wg0 up, and if not start it again". It
+// The timer is deliberately dumb: "is wg0 up, and if not bring it back". It
 // stops firing once the tunnel holds, and the pinned handshake hole means a
 // retry has somewhere to go even with the deny policy fully active.
+//
+// The recovery uses "systemctl restart", not "start". The upstream wg-quick@
+// unit is Type=oneshot with RemainAfterExit=yes, so systemd keeps reporting it
+// as active-exited once its ExecStart has succeeded — even after the interface
+// itself is gone. Against an already-active unit "systemctl start" is a no-op
+// that exits 0, which made the retry silently do nothing in precisely the
+// situation it exists for: wg0 down while the unit still looks up. "restart"
+// tears the stale unit state down and runs wg-quick up again, which is what
+// actually recreates the interface.
 func torrentWGRetryCmds() []string {
 	const unit = `[Unit]
 Description=Retry the WireGuard tunnel until it comes up
@@ -298,7 +307,7 @@ After=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/bin/sh -c 'wg show wg0 >/dev/null 2>&1 || systemctl start wg-quick@wg0'
+ExecStart=/bin/sh -c 'wg show wg0 >/dev/null 2>&1 || systemctl restart wg-quick@wg0'
 `
 	const timer = `[Unit]
 Description=Periodically retry the WireGuard tunnel
