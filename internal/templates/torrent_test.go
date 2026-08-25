@@ -566,3 +566,49 @@ func TestWireGuardDoesNotInstallResolvconf(t *testing.T) {
 		}
 	}
 }
+
+// TestWebUINeverExposedOnUbuntu pins the Ubuntu base to the same access model
+// the Alpine base and the NordVPN path already enforce: SSH is the only way in,
+// and vee tunnel forwards the web UI over it, so 8080 never gets a hole.
+//
+// torrentBaseRunCmds used to carry "ufw allow 8080/tcp", which put the listener
+// on the LAN for every --nic-mode=bridge VM while the Alpine template's own
+// comment claimed the UI "never needs a hole of its own". The rule bought
+// nothing even for someone who wanted LAN access: no WebUI\Password is ever
+// set, and qBittorrent is configured with LocalHostAuth=false, so it skips
+// authentication for loopback only and answers a LAN client with 403.
+//
+// The tunnel is unaffected. HostFwds binds 127.0.0.1 on the host and the
+// request reaches qBittorrent over guest loopback, which is both what the ufw
+// rule never governed and what the auth bypass keys on.
+func TestWebUINeverExposedOnUbuntu(t *testing.T) {
+	joined := strings.Join(torrentBaseRunCmds(), "\n")
+
+	if strings.Contains(joined, "8080") {
+		t.Error("qBittorrent's port must stay closed: vee tunnel forwards it over SSH")
+	}
+	if !strings.Contains(joined, "ufw allow OpenSSH") {
+		t.Error("SSH is the only way into the guest and must be allowed inbound")
+	}
+}
+
+// TestWebUIStaysTunnellable guards the other half of the change. Closing the
+// firewall hole must not disturb the pieces vee tunnel actually depends on: the
+// service entry it reads the port from, and the host-loopback forward the
+// request arrives on. Dropping either would make the UI unreachable rather than
+// merely LAN-closed.
+func TestWebUIStaysTunnellable(t *testing.T) {
+	src, err := os.ReadFile("torrent.go")
+	if err != nil {
+		t.Fatalf("read torrent.go: %v", err)
+	}
+	s := string(src)
+
+	if !strings.Contains(s, `{Name: "qbittorrent", Port: 8080, Protocol: vm.ServiceHTTP}`) {
+		t.Error("the qbittorrent service entry is what vee tunnel resolves the port from")
+	}
+	if !strings.Contains(s, `"tcp:127.0.0.1:8080-:8080"`) {
+		t.Error("the host forward must stay bound to 127.0.0.1: it is the tunnel's path in, " +
+			"and guest loopback is what qBittorrent's LocalHostAuth bypass keys on")
+	}
+}
