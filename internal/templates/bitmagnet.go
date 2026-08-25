@@ -552,48 +552,6 @@ func bitmagnetKillSwitchCmds(opts BitmagnetOptions) []string {
 	)
 }
 
-// wireGuardEndpointHost extracts the host part of a WireGuard endpoint
-// ("host:port"), which may be a hostname or an IPv4/IPv6 literal. The guest
-// resolves it before the deny policy lands so the handshake hole can be pinned
-// to real addresses.
-func wireGuardEndpointHost(cfg *vpn.WireGuardConfig) string {
-	if cfg == nil {
-		return ""
-	}
-	ep := cfg.Endpoint
-	// Bracketed IPv6 literal: [2001:db8::1]:51820
-	if strings.HasPrefix(ep, "[") {
-		if end := strings.Index(ep, "]"); end > 0 {
-			return ep[1:end]
-		}
-	}
-	if idx := strings.LastIndex(ep, ":"); idx >= 0 {
-		return ep[:idx]
-	}
-	return ep
-}
-
-// wireGuardEndpointPort extracts the UDP port from a WireGuard endpoint
-// ("host:port"), falling back to the standard 51820 when it cannot be parsed.
-// The fallback is deliberately permissive: guessing wrong here only costs a
-// tunnel that will not establish, whereas failing the build would reject a
-// config that WireGuard itself accepts.
-func wireGuardEndpointPort(cfg *vpn.WireGuardConfig) int {
-	const defaultPort = 51820
-	if cfg == nil {
-		return defaultPort
-	}
-	idx := strings.LastIndex(cfg.Endpoint, ":")
-	if idx < 0 {
-		return defaultPort
-	}
-	port := 0
-	if _, err := fmt.Sscanf(cfg.Endpoint[idx+1:], "%d", &port); err != nil || port <= 0 || port > 65535 {
-		return defaultPort
-	}
-	return port
-}
-
 // bitmagnetConfig returns the initial /etc/bitmagnet/config.yml.
 //
 // The HTTP server binds all interfaces inside the guest, which is safe only

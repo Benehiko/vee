@@ -206,6 +206,118 @@ func nordVPNCmds(token, connectCmd string, nfsMounts []NFSMount) []string {
 	return append(cmds, connectCmd)
 }
 
+// torrentWGKillSwitchCmds returns the ufw rules that enforce the WireGuard
+// kill-switch, and brings the tunnel up behind them.
+//
+// The policy is default-deny outbound: if wg0 never comes up, or drops later,
+// qBittorrent cannot fall back to the LAN interface and announce the host's
+// real address to the swarm. It stops talking instead. Failing closed is the
+// whole point.
+//
+// Everything opened here is opened narrowly. The only unrestricted egress is
+// wg0 itself; the handshake is pinned to the endpoint's own addresses, and SSH
+// is the single management path in because `vee tunnel` forwards every other
+// service over it.
+func torrentWGKillSwitchCmds(wgConf *vpn.WireGuardConfig, nfsMounts []NFSMount) []string {
+	// Resolve the endpoint before the deny policy takes effect, and pin the
+	// handshake hole to the addresses that come back. Without this the
+	// tunnel cannot be established from behind the kill-switch: the
+	// handshake leaves on the LAN interface, not wg0, so it matches none of
+	// the allow rules below.
+	//
+	// This only works because ufw is still inactive here — "ufw --force
+	// enable" lives in the base rules and runs after this block — so DNS
+	// still resolves. On every later boot ufw restores the deny policy
+	// before wg-quick runs, which is why the addresses are written to disk
+	// rather than resolved again.
+	wgCmds := []string{wgResolveEndpointCmd(wgConf)}
+
+	// Kill-switch: default-deny outbound/forward, allow only on wg0 + loopback.
+	wgCmds = append(wgCmds,
+		"ufw default deny outgoing",
+		"ufw default deny forward",
+		"ufw allow out on wg0",
+		"ufw allow out on lo",
+	)
+
+	// The handshake hole itself, pinned to the resolved endpoint addresses
+	// and port rather than opened to the whole internet on that port. An
+	// unpinned "allow out 51820/udp" is a usable covert channel: any process
+	// could reach any host that happens to listen there, with the tunnel
+	// down. Pinned, the only reachable destination is the VPN endpoint,
+	// which is where the traffic was going anyway.
+	wgCmds = append(wgCmds, fmt.Sprintf(
+		"for ip in $(cat %s); do ufw allow out to \"$ip\" port %d proto udp; done",
+		wgEndpointAddrsFile, wireGuardEndpointPort(wgConf),
+	))
+	// SSH is the only management path into a kill-switched guest, so its
+	// replies have to survive the deny-outgoing policy above. The inbound
+	// "ufw allow OpenSSH" in the base rules is not enough on its own: the
+	// outbound half of an established SSH connection leaves on the LAN
+	// interface, not wg0, and would otherwise be dropped. Everything else
+	// stays inside the tunnel — vee tunnel forwards services over this SSH
+	// connection rather than exposing their ports.
+	wgCmds = append(wgCmds, "ufw allow out 22/tcp")
+	// The NFS holes must be in place before wg-quick brings the tunnel up,
+	// or the mounts race the kill-switch.
+	//
+	// Their position relative to "ufw default deny outgoing" does not
+	// matter: ufw default policies are chain policies applied at the end of
+	// evaluation, not ordered rules, so an allow issued before the policy is
+	// not overridden by it.
+	wgCmds = append(wgCmds, nfsBypassRules(nfsMounts)...)
+	wgCmds = append(wgCmds, "systemctl enable --now wg-quick@wg0")
+	// wg-quick@wg0 is enabled, so systemd starts it on every boot — but the
+	// upstream unit carries no Restart=, and at boot ufw has already
+	// restored the deny policy before wg-quick runs. A handshake that fails
+	// then is never retried, leaving the guest firewalled with no tunnel
+	// until someone intervenes. This timer re-attempts it, so a transient
+	// failure heals itself.
+	wgCmds = append(wgCmds, torrentWGRetryCmds()...)
+
+	return wgCmds
+}
+
+// torrentWGRetryCmds installs a systemd timer that re-attempts the WireGuard
+// tunnel until it is up.
+//
+// wg-quick@wg0 is enabled and so runs on every boot, but the upstream unit sets
+// no Restart=, and ufw restores the deny policy earlier in boot than wg-quick
+// starts. A handshake that fails at that moment — the endpoint briefly
+// unreachable, the LAN not yet forwarding — is never retried, and the guest
+// sits firewalled with no tunnel indefinitely. That fails closed, so nothing
+// leaks, but it is a silent outage that needs a console to notice.
+//
+// The timer is deliberately dumb: "is wg0 up, and if not start it again". It
+// stops firing once the tunnel holds, and the pinned handshake hole means a
+// retry has somewhere to go even with the deny policy fully active.
+func torrentWGRetryCmds() []string {
+	const unit = `[Unit]
+Description=Retry the WireGuard tunnel until it comes up
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'wg show wg0 >/dev/null 2>&1 || systemctl start wg-quick@wg0'
+`
+	const timer = `[Unit]
+Description=Periodically retry the WireGuard tunnel
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=60s
+
+[Install]
+WantedBy=timers.target
+`
+	return []string{
+		fmt.Sprintf("printf %q > /etc/systemd/system/vee-wg-retry.service", unit),
+		fmt.Sprintf("printf %q > /etc/systemd/system/vee-wg-retry.timer", timer),
+		"systemctl daemon-reload",
+		"systemctl enable --now vee-wg-retry.timer",
+	}
+}
+
 // nfsBypassRules returns the ufw rules that let the guest reach each NFS
 // server directly. NFS traffic always bypasses the VPN: the server sits on the
 // LAN and is not reachable through the tunnel, so a default-deny outbound
@@ -291,7 +403,14 @@ func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, ssh
 		if nordConf.Country != "" {
 			connectCmd = fmt.Sprintf("nordvpn connect %q", nordConf.Country)
 		}
-		runCmds = append(nordVPNCmds(nordConf.Token, connectCmd, nfsMounts), runCmds...)
+		// Base rules first, NordVPN second. "ufw --force enable" reloads ufw's
+		// tables and inserts its jumps at the head of the builtin chains, so
+		// running it after the daemon has installed its own kill-switch rules
+		// puts ufw's verdict — including its default allow-outgoing on this
+		// path — ahead of them. ufw contributes nothing to the kill-switch here
+		// (the daemon enforces it, see nordVPNCmds), so there is no reason to
+		// let it land second.
+		runCmds = append(runCmds, nordVPNCmds(nordConf.Token, connectCmd, nfsMounts)...)
 
 	case wgConf != nil:
 		writeFiles = append(writeFiles, vm.CloudInitWriteFile{
@@ -299,27 +418,7 @@ func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, ssh
 			Content:     vpn.RenderWireGuardConf(wgConf),
 			Permissions: "0600",
 		})
-		// Kill-switch: default-deny outbound/forward, allow only on wg0 + loopback.
-		wgCmds := []string{
-			"ufw default deny outgoing",
-			"ufw default deny forward",
-			"ufw allow out on wg0",
-			"ufw allow out on lo",
-		}
-		// SSH is the only management path into a kill-switched guest, so its
-		// replies have to survive the deny-outgoing policy above. The inbound
-		// "ufw allow OpenSSH" in the base rules is not enough on its own: the
-		// outbound half of an established SSH connection leaves on the LAN
-		// interface, not wg0, and would otherwise be dropped. Everything else
-		// stays inside the tunnel — vee tunnel forwards services over this SSH
-		// connection rather than exposing their ports.
-		wgCmds = append(wgCmds, "ufw allow out 22/tcp")
-		// The NFS holes must be punched after the deny policy is set (ufw
-		// evaluates in order, so an allow ahead of the policy is overridden)
-		// but before wg-quick brings the tunnel up.
-		wgCmds = append(wgCmds, nfsBypassRules(nfsMounts)...)
-		wgCmds = append(wgCmds, "systemctl enable --now wg-quick@wg0")
-		runCmds = append(wgCmds, runCmds...)
+		runCmds = append(torrentWGKillSwitchCmds(wgConf, nfsMounts), runCmds...)
 		packages = append(packages, "wireguard", "resolvconf")
 
 	default:

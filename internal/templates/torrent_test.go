@@ -3,6 +3,11 @@ package templates
 import (
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
+
+	"github.com/Benehiko/vee/internal/cloudinit"
+	"github.com/Benehiko/vee/internal/vpn"
 )
 
 // TestQbittorrentConfTempPath covers the split between the save path and the
@@ -115,19 +120,28 @@ func TestNFSBypassRules(t *testing.T) {
 	}
 }
 
-// TestWireGuardBypassOrdering pins rule ordering against the kill-switch. ufw
-// evaluates rules in order, so an allow emitted before "default deny outgoing"
-// is overridden by it — and the hole must exist before wg-quick brings the
-// tunnel up.
-func TestWireGuardBypassOrdering(t *testing.T) {
-	wgCmds := []string{
-		"ufw default deny outgoing",
-		"ufw default deny forward",
-		"ufw allow out on wg0",
-		"ufw allow out on lo",
+// testWGConf returns a WireGuard config with a hostname endpoint — the shape
+// that exposes the resolve-before-deny requirement, since a hostname cannot be
+// looked up once the deny policy is active.
+func testWGConf() *vpn.WireGuardConfig {
+	return &vpn.WireGuardConfig{
+		PrivateKey: "cHJpdmF0ZQ==",
+		PublicKey:  "cHVibGlj",
+		Address:    "10.5.0.2/32",
+		DNS:        "10.5.0.1",
+		Endpoint:   "vpn.example.com:51820",
 	}
-	wgCmds = append(wgCmds, nfsBypassRules([]NFSMount{{Server: "192.168.178.76"}})...)
-	wgCmds = append(wgCmds, "systemctl enable --now wg-quick@wg0")
+}
+
+// TestWireGuardBypassOrdering pins rule ordering against the kill-switch. The
+// NFS hole must exist before wg-quick brings the tunnel up, or the mount races
+// the kill-switch.
+//
+// Note this asserts nothing about the hole's position relative to "ufw default
+// deny outgoing": ufw default policies are chain policies applied at the end of
+// evaluation, not ordered rules, so either order yields the same ruleset.
+func TestWireGuardBypassOrdering(t *testing.T) {
+	wgCmds := torrentWGKillSwitchCmds(testWGConf(), []NFSMount{{Server: "192.168.178.76"}})
 
 	idx := func(want string) int {
 		for i, c := range wgCmds {
@@ -139,15 +153,78 @@ func TestWireGuardBypassOrdering(t *testing.T) {
 		return -1
 	}
 
-	deny := idx("ufw default deny outgoing")
 	allow := idx("ufw allow out to 192.168.178.76")
 	tunnel := idx("systemctl enable --now wg-quick@wg0")
 
-	if allow < deny {
-		t.Error("NFS allow must come after the deny policy, or ufw overrides it")
-	}
 	if allow > tunnel {
 		t.Error("NFS allow must come before wg-quick, or the mount races the kill-switch")
+	}
+}
+
+// TestWireGuardHandshakeHoleIsPinned is the security-critical test for the
+// kill-switch. Two things have to hold at once: the handshake must be able to
+// leave (or the tunnel can never come up from behind the deny policy), and the
+// hole that lets it leave must be pinned to the endpoint's own addresses.
+//
+// An unpinned "allow out 51820/udp" would satisfy the first and betray the
+// second: any process could then reach any host listening on that port with the
+// tunnel down, which is a usable covert channel.
+func TestWireGuardHandshakeHoleIsPinned(t *testing.T) {
+	cmds := torrentWGKillSwitchCmds(testWGConf(), nil)
+	joined := strings.Join(cmds, "\n")
+
+	if !strings.Contains(joined, "getent ahostsv4") {
+		t.Error("the endpoint must be resolved before the deny policy; there is no DNS left afterwards")
+	}
+	if !strings.Contains(joined, wgEndpointAddrsFile) {
+		t.Errorf("resolved addresses must be recorded in %s so later boots can reuse them", wgEndpointAddrsFile)
+	}
+	if !strings.Contains(joined, "port 51820 proto udp") {
+		t.Error("no handshake hole: the tunnel can never be established from behind the kill-switch")
+	}
+
+	// The hole must name the resolved addresses, never the port alone.
+	for _, c := range cmds {
+		if !strings.Contains(c, "proto udp") {
+			continue
+		}
+		if !strings.Contains(c, wgEndpointAddrsFile) {
+			t.Errorf("handshake hole is not pinned to the endpoint addresses: %q", c)
+		}
+	}
+
+	// Resolution has to precede the deny policy, or the lookup it depends on is
+	// itself blocked.
+	resolve, deny := -1, -1
+	for i, c := range cmds {
+		switch {
+		case strings.Contains(c, "getent ahostsv4"):
+			resolve = i
+		case c == "ufw default deny outgoing":
+			deny = i
+		}
+	}
+	if resolve < 0 || deny < 0 {
+		t.Fatalf("expected both a resolve step and a deny policy, got %v", cmds)
+	}
+	if resolve > deny {
+		t.Error("the endpoint is resolved after the deny policy lands; DNS would already be blocked")
+	}
+}
+
+// TestWireGuardTunnelRetryPersists covers the reboot path. wg-quick@wg0 is
+// enabled so systemd starts it every boot, but the upstream unit sets no
+// Restart= and ufw restores the deny policy earlier in boot — so a handshake
+// that fails at that moment is never retried and the guest sits firewalled with
+// no tunnel until someone opens a console.
+func TestWireGuardTunnelRetryPersists(t *testing.T) {
+	joined := strings.Join(torrentWGKillSwitchCmds(testWGConf(), nil), "\n")
+
+	if !strings.Contains(joined, "vee-wg-retry.timer") {
+		t.Error("no retry timer: a tunnel that fails at boot never comes back")
+	}
+	if !strings.Contains(joined, "systemctl enable --now vee-wg-retry.timer") {
+		t.Error("the retry timer must be enabled, or it does not survive the reboot it exists for")
 	}
 }
 
@@ -322,30 +399,22 @@ func TestNordVPNWhitelistsSSHOnly(t *testing.T) {
 // outbound half of an established SSH connection leaves on the LAN interface,
 // not wg0, so "default deny outgoing" would drop the replies.
 func TestWireGuardAllowsSSHOutbound(t *testing.T) {
-	// Mirrors the wgConf branch of NewTorrentConfig.
-	wgCmds := []string{
-		"ufw default deny outgoing",
-		"ufw default deny forward",
-		"ufw allow out on wg0",
-		"ufw allow out on lo",
-		"ufw allow out 22/tcp",
-	}
-	wgCmds = append(wgCmds, nfsBypassRules(nil)...)
-	wgCmds = append(wgCmds, "systemctl enable --now wg-quick@wg0")
+	wgCmds := torrentWGKillSwitchCmds(testWGConf(), nil)
 
-	var deny, allowSSH, tunnel int
+	allowSSH, tunnel := -1, -1
 	for i, c := range wgCmds {
 		switch c {
-		case "ufw default deny outgoing":
-			deny = i
 		case "ufw allow out 22/tcp":
 			allowSSH = i
 		case "systemctl enable --now wg-quick@wg0":
 			tunnel = i
 		}
 	}
-	if allowSSH < deny {
-		t.Error("an allow ahead of the deny policy is overridden by it")
+	if allowSSH < 0 {
+		t.Fatal("no outbound SSH hole: the guest becomes unreachable once the policy is active")
+	}
+	if tunnel < 0 {
+		t.Fatal("the tunnel is never brought up")
 	}
 	if allowSSH > tunnel {
 		t.Error("the SSH hole must exist before the tunnel comes up")
@@ -383,5 +452,65 @@ func TestFstabEntryNFSOptions(t *testing.T) {
 	}
 	if strings.Contains(line, "soft") {
 		t.Error("NFS mounts must be hard: soft returns EIO mid-write and errors the torrent")
+	}
+}
+
+// TestTorrentUserDataIsValidYAML renders the template's cloud-init exactly as
+// vm.Manager does and parses it.
+//
+// This is a regression test for a failure that is silent and total. cloud-init
+// renders each single-line runcmd as a bare YAML scalar, so a command starting
+// with "[" — the ordinary shell `[ -f foo ]` test — parses as a flow sequence
+// and invalidates the whole user-data document. cloud-init then discards every
+// module: the guest boots with no packages, no SSH keys, no services, and the
+// only evidence is one "Failed loading yaml blob" line in the serial log.
+//
+// The kill-switch commands are the ones at risk here: they embed shell loops,
+// quoted variables and printf'd unit files with newlines in them.
+func TestTorrentUserDataIsValidYAML(t *testing.T) {
+	nfsMounts := []NFSMount{{
+		Server:    "192.168.178.76",
+		Export:    "/mnt/Data/Movies",
+		GuestPath: "/downloads/movies",
+	}}
+
+	runCmds := torrentWGKillSwitchCmds(testWGConf(), nfsMounts)
+	runCmds = append(runCmds, torrentBaseRunCmds()...)
+	runCmds = append(runCmds, torrentMountAndAppCmds(nil, nfsMounts)...)
+
+	rendered, err := cloudinit.RenderUserData(&cloudinit.Config{
+		Hostname:    "dl",
+		User:        "vee",
+		DefaultUser: "ubuntu",
+		SSHKeys:     []string{"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAtest"},
+		RunCmds:     runCmds,
+		WriteFiles: []cloudinit.WriteFile{
+			{
+				Path:        "/etc/wireguard/wg0.conf",
+				Content:     vpn.RenderWireGuardConf(testWGConf()),
+				Permissions: "0600",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("render user-data: %v", err)
+	}
+
+	var parsed map[string]any
+	if err := yaml.Unmarshal([]byte(rendered), &parsed); err != nil {
+		t.Fatalf("rendered user-data is not valid YAML (cloud-init would discard every module): %v", err)
+	}
+
+	// Every runcmd must survive as a string. A command parsed as a list is the
+	// exact symptom of the bare-"[" bug, and it would reach the guest mangled
+	// even in a document that happened to stay parseable.
+	cmds, ok := parsed["runcmd"].([]any)
+	if !ok {
+		t.Fatal("rendered user-data has no runcmd list")
+	}
+	for i, c := range cmds {
+		if _, ok := c.(string); !ok {
+			t.Errorf("runcmd[%d] parsed as %T, not a string: %v", i, c, c)
+		}
 	}
 }
