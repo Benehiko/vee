@@ -497,3 +497,56 @@ func TestAlpineIPv6PolicyPersists(t *testing.T) {
 		t.Error("the IPv6 policy is saved before it is installed; an empty table would persist")
 	}
 }
+
+// TestAlpineConfWrittenWhereProfileReads pins the config path against
+// qBittorrent's --profile semantics.
+//
+// --profile names a profile *root*: qBittorrent appends "qBittorrent/config/"
+// to it and reads the .conf from there. The Alpine base used to write the file
+// one level up, at "<profile>/qBittorrent/qBittorrent.conf", where qBittorrent
+// never looked. It then started against an empty profile, so
+// WebUI\LocalHostAuth=false never applied and it fell back to password auth —
+// answering every tunnelled request with 401 and printing a temporary admin
+// password into /var/log/qbittorrent.log.
+//
+// The Ubuntu base is unaffected: the packaged qbittorrent-nox@vee systemd unit
+// points qBittorrent at its configuration via HOME, not --profile, so
+// "$HOME/.config/qBittorrent/qBittorrent.conf" is correct there.
+func TestAlpineConfWrittenWhereProfileReads(t *testing.T) {
+	files := torrentAlpineWriteFiles("/share0", nil)
+
+	var confPath string
+	for _, f := range files {
+		if strings.HasSuffix(f.Path, "qBittorrent.conf") {
+			confPath = f.Path
+		}
+	}
+	if confPath == "" {
+		t.Fatal("no qBittorrent.conf is written")
+	}
+
+	want := torrentAlpineConfigDir + "/qBittorrent/config/qBittorrent.conf"
+	if confPath != want {
+		t.Errorf("config written to %q, but --profile=%s makes qBittorrent read %q",
+			confPath, torrentAlpineConfigDir, want)
+	}
+
+	// The OpenRC service must keep naming the profile root this path derives
+	// from; if the two drift apart the config goes unread again.
+	if !strings.Contains(torrentQbittorrentOpenRCService(),
+		"--profile="+torrentAlpineConfigDir) {
+		t.Errorf("the OpenRC service must pass --profile=%s", torrentAlpineConfigDir)
+	}
+}
+
+// TestAlpineCreatesConfDir guards the directory the config lands in. cloud-init
+// writes the .conf and a runcmd chowns the tree to the guest user; if the
+// runcmd creates only the parent, the chown -R misses nothing but the mkdir no
+// longer describes where the file actually goes.
+func TestAlpineCreatesConfDir(t *testing.T) {
+	joined := strings.Join(torrentAlpineRunCmds(nil, nil, nil), "\n")
+
+	if !strings.Contains(joined, "mkdir -p "+torrentAlpineConfigDir+"/qBittorrent/config") {
+		t.Error("the runcmds must create the qBittorrent/config directory the profile resolves to")
+	}
+}
