@@ -56,7 +56,7 @@ vee create bitmagnet --template bitmagnet \
 
 Generate a token at [my.nordaccount.com/dashboard/nordvpn/access-tokens/](https://my.nordaccount.com/dashboard/nordvpn/access-tokens/). `--nordvpn-country` is optional; without it NordVPN recommends a server anywhere. An unknown country name is an error rather than a silent fallback — connecting through a different jurisdiction than the one you asked for is exactly the sort of surprise this template exists to avoid.
 
-vee assembles the `wg0.conf` from two sources: your account's NordLynx private key (authenticated) and a recommended WireGuard server's public key, hostname and port (public, load-aware). The endpoint is recorded as the server's IP address rather than its hostname, because the kill-switch pins its handshake hole to resolved addresses and there is no DNS left once `OUTPUT` is denied.
+vee assembles the `wg0.conf` from two sources: your account's NordLynx private key (authenticated) and a recommended WireGuard server's public key, hostname and port (public, load-aware). The endpoint is recorded as the server's IP address rather than its hostname, because the kill-switch pins its handshake hole to resolved addresses and there is no DNS left once `OUTPUT` is denied. A hostname endpoint works too — see [below](#a-hostname-endpoint-is-re-resolved-when-its-address-changes) — but an IP needs no re-resolution machinery at all.
 
 The chosen endpoint is printed at create time, so the resulting firewall rules are intelligible.
 
@@ -143,6 +143,41 @@ On first boot, cloud-init:
 Step 6 is deliberately last. The steps above it need the network, and the kill-switch closes it; installing the deny policy earlier would leave the package and release downloads racing the tunnel.
 
 The tunnel is also re-established at boot through `/etc/local.d/wg0.start`, because cloud-init `runcmd` steps fire only on first boot. Without it, a rebooted guest would come back with the kill-switch up and no tunnel — reachable over SSH and crawling nothing, which is the correct failure, but a confusing one.
+
+### A hostname endpoint is re-resolved when its address changes
+
+The handshake hole is pinned to the endpoint's resolved addresses, which are
+worked out once — before the deny policy lands, while DNS still works — and
+written to `/etc/wireguard/endpoint-addrs`. Later boots read the answer back
+from that file, because by then there is no DNS left to repeat the lookup with.
+
+Pinning to addresses resolved once would strand the guest the day a provider
+re-addresses its server: `wg-quick` would dial the new IP while the firewall
+still permitted only the old one, and the tunnel would never come back. That
+fails closed — the crawler falls silent rather than announcing your real address
+to the swarm — but it is a silent outage, and it survives reboots.
+
+Guests configured with a hostname therefore carry
+`/usr/local/sbin/vee-wg-refresh-endpoint`, which re-resolves the endpoint,
+re-pins the hole to whatever comes back, and restarts the tunnel so it re-reads
+the address `wg-quick` froze when the interface came up. It runs from the boot
+hook — ahead of `wg-quick up`, so a boot after a rotation re-pins before the
+handshake is attempted — and once a minute from `crond`, which the template
+enables explicitly because the Alpine cloud image ships it stopped.
+
+The refresh fails closed at every step. The lookup needs DNS, which the deny
+policy blocks, so it opens a hole to the configured nameservers on port 53 and
+closes it again immediately — on the failure path too, never leaving it open. If
+resolution fails or returns nothing, the addresses already pinned are left
+exactly as they are: a stale rule keeps a working tunnel working, whereas
+clearing the rules first would leave a window with no kill-switch at all. New
+holes are installed before superseded ones are withdrawn, so the handshake is
+never without a way out. The re-pinned rules are saved, since `iptables` does
+not persist itself and the correction would otherwise be lost on the next boot.
+
+An endpoint given as a literal IP skips all of this — an address that cannot
+change needs no refresh — and remains the simplest choice where your provider
+offers one. That is what the NordVPN path above records.
 
 ## Checking on it
 
