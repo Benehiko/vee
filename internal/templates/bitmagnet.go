@@ -489,6 +489,13 @@ func bitmagnetKillSwitchCmds(opts BitmagnetOptions) []string {
 		"iptables -A INPUT -p tcp --dport 22 -j ACCEPT",
 	}
 
+	// IPv6 is dropped outright, with or without a tunnel: it is never carried
+	// by wg0, and an unfirewalled IPv6 stack is a way out of the kill-switch.
+	// For this template that matters twice over — the DHT crawler would
+	// announce the guest over IPv6 just as readily as over IPv4.
+	// See wgDropIPv6Cmds.
+	cmds = append(cmds, wgDropIPv6Cmds()...)
+
 	if opts.WireGuard != nil {
 		endpointPort := wireGuardEndpointPort(opts.WireGuard)
 
@@ -579,10 +586,13 @@ func bitmagnetKillSwitchCmds(opts BitmagnetOptions) []string {
 		cmds = append(cmds, "rc-update add local default")
 	}
 
-	return append(cmds,
+	cmds = append(cmds,
 		"/etc/init.d/iptables save",
 		"rc-update add iptables default",
 	)
+	// The IPv4 save above does not cover IPv6; without this the IPv6 policy is
+	// lost on reboot and the leak quietly returns.
+	return append(cmds, wgPersistIPv6Cmds()...)
 }
 
 // bitmagnetConfig returns the initial /etc/bitmagnet/config.yml.

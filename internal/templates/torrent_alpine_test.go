@@ -429,3 +429,71 @@ func TestAlpineWGRefreshStartsCrond(t *testing.T) {
 		t.Errorf("%s has no run-parts crontab entry; the stock crontab does not cover it", dir)
 	}
 }
+
+// TestAlpineIPv6IsDropped covers the family the kill-switch used to ignore
+// entirely. The image installs ip6tables but nothing ever gave it a rule, so
+// its policy stayed at the default ACCEPT: on a network advertising IPv6, a
+// guest could reach the internet over IPv6 on the LAN interface while every
+// IPv4 path was correctly denied — the announce leaking the host's real
+// address just as effectively as an IPv4 one would.
+func TestAlpineIPv6IsDropped(t *testing.T) {
+	// Both paths: the tunnel does not carry IPv6 either way, so the drop is not
+	// conditional on a WireGuard config.
+	for _, tc := range []struct {
+		name string
+		conf *vpn.WireGuardConfig
+	}{
+		{"with wireguard", testWGConf()},
+		{"without wireguard", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmds := torrentAlpineKillSwitchCmds(tc.conf, nil)
+
+			for _, want := range []string{
+				"ip6tables -P INPUT DROP",
+				"ip6tables -P OUTPUT DROP",
+				"ip6tables -P FORWARD DROP",
+			} {
+				if indexOf(cmds, want) < 0 {
+					t.Errorf("IPv6 is not denied by default: missing %q", want)
+				}
+			}
+
+			// A distro-shipped ACCEPT rule would sit ahead of the policy and
+			// defeat it, so the chains are flushed — and that has to happen
+			// before the loopback exceptions are added, or it removes them.
+			flush := indexOf(cmds, "ip6tables -F")
+			if flush < 0 {
+				t.Fatal("IPv6 chains are never flushed; a shipped ACCEPT rule would survive")
+			}
+			lo := indexOf(cmds, "ip6tables -A OUTPUT -o lo -j ACCEPT")
+			if lo < 0 {
+				t.Fatal("no IPv6 loopback exception; software binding ::1 would fail confusingly")
+			}
+			if flush > lo {
+				t.Error("the IPv6 flush runs after the loopback exception and would remove it")
+			}
+		})
+	}
+}
+
+// TestAlpineIPv6PolicyPersists is the reboot half. Alpine's iptables service
+// saves the two families separately, so the IPv4 save does not carry IPv6 with
+// it: without an explicit ip6tables save the guest comes back with the IPv4
+// kill-switch intact and IPv6 wide open again.
+func TestAlpineIPv6PolicyPersists(t *testing.T) {
+	cmds := torrentAlpineKillSwitchCmds(testWGConf(), nil)
+
+	if indexOf(cmds, "/etc/init.d/ip6tables save") < 0 {
+		t.Error("IPv6 rules are never saved; the policy is lost on reboot")
+	}
+	if indexOf(cmds, "rc-update add ip6tables default") < 0 {
+		t.Error("the ip6tables service is not enabled; saved IPv6 rules would not be restored")
+	}
+
+	// Saving before the rules are installed would persist an empty table.
+	save := indexOf(cmds, "/etc/init.d/ip6tables save")
+	if drop := indexOf(cmds, "ip6tables -P OUTPUT DROP"); drop > save {
+		t.Error("the IPv6 policy is saved before it is installed; an empty table would persist")
+	}
+}

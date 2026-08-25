@@ -230,3 +230,56 @@ func wgRefreshWriteFile(cfg *vpn.WireGuardConfig, fw wgFirewallCmds) *vm.CloudIn
 		Permissions: "0755",
 	}
 }
+
+// wgDropIPv6Cmds returns the ip6tables rules that drop IPv6 outright.
+//
+// The tunnel is IPv4-only in practice. RenderWireGuardConf writes
+// "AllowedIPs = 0.0.0.0/0, ::/0", but the Address it pairs that with is always
+// an IPv4 /32 — no config path in vee ever assigns the interface an IPv6
+// address, and the vee-managed server peers on an IPv4 /32 too. An interface
+// with no IPv6 address cannot carry IPv6 traffic, so the "::/0" is aspirational
+// rather than load-bearing.
+//
+// That left IPv6 outside the kill-switch entirely. The iptables bases install
+// the ip6tables package but never gave it a rule, so its policy stayed at the
+// default ACCEPT: on a network handing out IPv6 via router advertisements, a
+// guest could reach the internet over IPv6 on the LAN interface while every
+// IPv4 path was correctly denied. For the torrent and bitmagnet templates that
+// is the exact leak the kill-switch exists to prevent — an announce over IPv6
+// publishes the host's real address to the swarm just as effectively.
+//
+// Dropping IPv6 wholesale is the right shape here rather than mirroring the
+// IPv4 holes: there is no IPv6 handshake to permit (the endpoint is resolved
+// with getent ahostsv4), no IPv6 DHCP to keep alive, and SSH reaches the guest
+// over IPv4. A policy of DROP with a loopback exception is therefore complete,
+// and anything that later needs IPv6 has to add its hole deliberately.
+//
+// The loopback exception is not decorative: some software binds ::1 and would
+// otherwise fail in ways that look nothing like a firewall problem.
+func wgDropIPv6Cmds() []string {
+	return []string{
+		"ip6tables -P INPUT DROP",
+		"ip6tables -P OUTPUT DROP",
+		"ip6tables -P FORWARD DROP",
+		// Flush anything the image shipped: a distro-provided ACCEPT rule left
+		// in place would sit ahead of the policy and defeat it.
+		"ip6tables -F",
+		"ip6tables -A INPUT -i lo -j ACCEPT",
+		"ip6tables -A OUTPUT -o lo -j ACCEPT",
+	}
+}
+
+// wgPersistIPv6Cmds returns the commands that make the IPv6 policy survive a
+// reboot.
+//
+// Alpine's iptables OpenRC service saves and restores the two families
+// separately, so "/etc/init.d/iptables save" persists only the IPv4 table. A
+// guest whose IPv6 rules were never saved comes back after a reboot with the
+// IPv4 kill-switch intact and IPv6 wide open again — the leak reappearing
+// silently, which is worse than never having closed it.
+func wgPersistIPv6Cmds() []string {
+	return []string{
+		"/etc/init.d/ip6tables save",
+		"rc-update add ip6tables default",
+	}
+}

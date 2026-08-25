@@ -210,6 +210,11 @@ func torrentAlpineKillSwitchCmds(wgConf *vpn.WireGuardConfig, nfsMounts []NFSMou
 		"iptables -A INPUT -p tcp --dport 22 -j ACCEPT",
 	}
 
+	// IPv6 is dropped outright, with or without a tunnel: it is never carried
+	// by wg0, and an unfirewalled IPv6 stack is a way out of the kill-switch.
+	// See wgDropIPv6Cmds.
+	cmds = append(cmds, wgDropIPv6Cmds()...)
+
 	if wgConf != nil {
 		cmds = append(cmds,
 			// Resolve the endpoint here, before the deny policy lands, and pin
@@ -275,12 +280,15 @@ func torrentAlpineKillSwitchCmds(wgConf *vpn.WireGuardConfig, nfsMounts []NFSMou
 		cmds = append(cmds, alpineWGEndpointRefreshCmds(wgConf)...)
 	}
 
-	return append(cmds,
+	cmds = append(cmds,
 		// iptables does not persist itself the way ufw does; without this the
 		// kill-switch evaporates on reboot.
 		"/etc/init.d/iptables save",
 		"rc-update add iptables default",
 	)
+	// The IPv4 save above does not cover IPv6; without this the IPv6 policy is
+	// lost on reboot and the leak quietly returns.
+	return append(cmds, wgPersistIPv6Cmds()...)
 }
 
 // torrentQbittorrentOpenRCService returns the OpenRC init script supervising

@@ -743,3 +743,87 @@ func TestBitmagnetRefreshScriptShipped(t *testing.T) {
 		t.Error("refresh script never persists the re-pinned rules")
 	}
 }
+
+// TestBitmagnetIPv6IsDropped covers the family the kill-switch used to ignore.
+// The image installs ip6tables but nothing ever gave it a rule, leaving the
+// default ACCEPT policy: on a network advertising IPv6, the DHT crawler could
+// announce the guest over IPv6 on the LAN interface while every IPv4 path was
+// correctly denied. Publishing the host's real address to the swarm is exactly
+// what this template exists to prevent, and the family it happens over makes
+// no difference.
+func TestBitmagnetIPv6IsDropped(t *testing.T) {
+	// Both paths: the tunnel does not carry IPv6 either way.
+	for _, tc := range []struct {
+		name string
+		opts BitmagnetOptions
+	}{
+		{"with wireguard", BitmagnetOptions{WireGuard: testWireGuardConf()}},
+		{"without wireguard", BitmagnetOptions{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmds := bitmagnetKillSwitchCmds(tc.opts)
+
+			for _, want := range []string{
+				"ip6tables -P INPUT DROP",
+				"ip6tables -P OUTPUT DROP",
+				"ip6tables -P FORWARD DROP",
+			} {
+				if indexOf(cmds, want) < 0 {
+					t.Errorf("IPv6 is not denied by default: missing %q", want)
+				}
+			}
+
+			// The flush clears anything the image shipped, and has to precede
+			// the loopback exceptions or it removes them again.
+			flush := indexOf(cmds, "ip6tables -F")
+			if flush < 0 {
+				t.Fatal("IPv6 chains are never flushed; a shipped ACCEPT rule would survive")
+			}
+			lo := indexOf(cmds, "ip6tables -A OUTPUT -o lo -j ACCEPT")
+			if lo < 0 {
+				t.Fatal("no IPv6 loopback exception; software binding ::1 would fail confusingly")
+			}
+			if flush > lo {
+				t.Error("the IPv6 flush runs after the loopback exception and would remove it")
+			}
+		})
+	}
+}
+
+// TestBitmagnetIPv6PolicyPersists is the reboot half: Alpine saves the two
+// families separately, so without an explicit ip6tables save the guest comes
+// back with the IPv4 kill-switch intact and IPv6 open again.
+func TestBitmagnetIPv6PolicyPersists(t *testing.T) {
+	cmds := bitmagnetKillSwitchCmds(BitmagnetOptions{WireGuard: testWireGuardConf()})
+
+	if indexOf(cmds, "/etc/init.d/ip6tables save") < 0 {
+		t.Error("IPv6 rules are never saved; the policy is lost on reboot")
+	}
+	if indexOf(cmds, "rc-update add ip6tables default") < 0 {
+		t.Error("the ip6tables service is not enabled; saved IPv6 rules would not be restored")
+	}
+
+	save := indexOf(cmds, "/etc/init.d/ip6tables save")
+	if drop := indexOf(cmds, "ip6tables -P OUTPUT DROP"); drop > save {
+		t.Error("the IPv6 policy is saved before it is installed; an empty table would persist")
+	}
+}
+
+// TestBitmagnetWebUINeverExposedOverIPv6 pins the inbound half. The UI is
+// reached through `vee tunnel` over SSH and never through a firewall hole; a
+// v6 rule opening it would put an unauthenticated UI on the LAN just as a v4
+// one would.
+func TestBitmagnetWebUINeverExposedOverIPv6(t *testing.T) {
+	for _, opts := range []BitmagnetOptions{
+		{WireGuard: testWireGuardConf()},
+		{},
+	} {
+		cmds := bitmagnetKillSwitchCmds(opts)
+		for _, c := range cmds {
+			if strings.HasPrefix(c, "ip6tables") &&
+				strings.Contains(c, fmt.Sprintf("%d", BitmagnetWebPort)) {
+				t.Errorf("IPv6 rule references the bitmagnet web port: %q", c)
+			}
+		}
+	}
+}
