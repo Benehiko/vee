@@ -537,9 +537,22 @@ func alpineWGEndpointRefreshCmds(cfg *vpn.WireGuardConfig) []string {
 		// hole before the handshake is attempted rather than after it fails.
 		fmt.Sprintf(`printf '#!/bin/sh\n%s\nwg-quick up wg0\n' > /etc/local.d/wg0.start`, wgRefreshScriptPath),
 		"chmod 0755 /etc/local.d/wg0.start",
-		// /etc/periodic/15min is run by Alpine's busybox crond, which the base
-		// image already enables, so this needs no unit or timer of its own.
-		fmt.Sprintf(`printf '#!/bin/sh\n%s\n' > /etc/periodic/15min/vee-wg-refresh`, wgRefreshScriptPath),
-		"chmod 0755 /etc/periodic/15min/vee-wg-refresh",
+		// A rotation that happens while the guest is running needs picking up
+		// without a reboot. /etc/crontabs/root already carries a
+		// "run-parts /etc/periodic/15min" entry, but the Alpine cloud image
+		// ships crond stopped and out of the default runlevel — dropping a
+		// script into that directory alone would never run it. Enable and
+		// start the service explicitly.
+		//
+		// The 1min directory rather than 15min: a stale pin is a total outage,
+		// and the refresh is a no-op resolve when nothing has changed. Its
+		// run-parts entry is added here because the stock crontab has none.
+		"mkdir -p /etc/periodic/1min",
+		fmt.Sprintf(`printf '#!/bin/sh\n%s\n' > /etc/periodic/1min/vee-wg-refresh`, wgRefreshScriptPath),
+		"chmod 0755 /etc/periodic/1min/vee-wg-refresh",
+		`grep -q '/etc/periodic/1min' /etc/crontabs/root || ` +
+			`printf '* * * * * run-parts /etc/periodic/1min\n' >> /etc/crontabs/root`,
+		"rc-update add crond default",
+		"rc-service crond restart",
 	}
 }

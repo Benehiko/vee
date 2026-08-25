@@ -154,7 +154,10 @@ with a hostname therefore carry `/usr/local/sbin/vee-wg-refresh-endpoint`, which
 re-resolves the endpoint, re-pins the hole to whatever comes back, and restarts
 the tunnel so it re-reads the address `wg-quick` froze when the interface came
 up. On the Ubuntu base it runs from the existing retry timer; on Alpine it runs
-from the boot hook and `crond`.
+from the boot hook — ahead of `wg-quick up`, so a boot after a rotation
+re-pins before the handshake is attempted — and once a minute from `crond`,
+which the template enables explicitly because the Alpine cloud image ships it
+stopped.
 
 The refresh fails closed at every step. The lookup needs DNS, which the deny
 policy blocks, so it opens a hole to the configured nameservers on port 53 and

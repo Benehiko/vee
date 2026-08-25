@@ -247,7 +247,22 @@ func providerWithHome(t *testing.T, home string) (provider.Provider, error) {
 	}
 
 	t.Setenv("HOME", home)
-	return provider.New(false)
+	prov, err := provider.New(false)
+	if err != nil {
+		return nil, err
+	}
+
+	// provider.New opens the sqlite state DB and nothing in the Provider API
+	// closes it, so database/sql's connectionOpener goroutine outlives the
+	// test. TestMain runs goleak.VerifyTestMain, which fails the *package* on a
+	// leaked goroutine even when every test passed — so without this the whole
+	// e2e suite reports FAIL after a clean run.
+	t.Cleanup(func() {
+		if db := prov.DB(); db != nil {
+			_ = db.Close()
+		}
+	})
+	return prov, nil
 }
 
 func copyFileExec(src, dst string) error {

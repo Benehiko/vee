@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -72,7 +73,12 @@ func testEndpointRotation(t *testing.T, distro, guestUser, sudo string, wgHostPo
 	}
 	sshPubKey := strings.TrimSpace(string(pubKeyBytes))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Minute)
+	// Sized to fit alongside the rest of the suite under the workflow's
+	// "go test -timeout 20m": this test builds two VMs per base, and both
+	// subtests complete in about 90s on a warm image cache. The ceilings below
+	// exist to fail a stuck run fast rather than to accommodate a slow one —
+	// an over-generous timeout here would burn the whole suite's budget.
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 
 	prov, err := providerWithHome(t, home)
@@ -95,6 +101,16 @@ func testEndpointRotation(t *testing.T, distro, guestUser, sudo string, wgHostPo
 		staleAddr = "192.0.2.77"
 	)
 
+	// Stop anything a previous run left behind before claiming the ports. The
+	// wg-server forward is a fixed host UDP port, so a survivor from an
+	// interrupted run makes every later run fail at "Could not set up host
+	// forwarding rule" — which surfaces only as an immediate QEMU exit. The
+	// self-hosted CI runner is reused between jobs, so this is not theoretical.
+	for _, n := range []string{wgServerName, torrentVMName} {
+		_ = veeCmd(t, home, "stop", n).Run()
+		_ = veeCmd(t, home, "delete", n).Run()
+	}
+
 	t.Cleanup(func() {
 		_ = veeCmd(t, home, "stop", wgServerName).Run()
 		_ = veeCmd(t, home, "stop", torrentVMName).Run()
@@ -113,7 +129,7 @@ func testEndpointRotation(t *testing.T, distro, guestUser, sudo string, wgHostPo
 	if err := mgr.Start(ctx, wgServerName, false); err != nil {
 		t.Fatalf("start wg-server VM: %v", err)
 	}
-	if err := mgr.WaitReady(ctx, wgServerName, 20*time.Minute); err != nil {
+	if err := mgr.WaitReady(ctx, wgServerName, 4*time.Minute); err != nil {
 		t.Fatalf("wg-server VM not ready: %v", err)
 	}
 	t.Log("WireGuard server VM ready")
@@ -155,12 +171,12 @@ func testEndpointRotation(t *testing.T, distro, guestUser, sudo string, wgHostPo
 	if err := mgr.Start(ctx, torrentVMName, false); err != nil {
 		t.Fatalf("start torrent VM: %v", err)
 	}
-	if err := mgr.WaitReady(ctx, torrentVMName, 20*time.Minute); err != nil {
+	if err := mgr.WaitReady(ctx, torrentVMName, 5*time.Minute); err != nil {
 		t.Fatalf("torrent VM not ready: %v", err)
 	}
 
 	torrentSSH := fmt.Sprintf("127.0.0.1:%d", resolveSSHPort(t, home, torrentVMName))
-	waitSSHAuth(t, torrentSSH, guestUser, privKeyPath, 15*time.Minute)
+	waitSSHAuth(t, torrentSSH, guestUser, privKeyPath, 3*time.Minute)
 
 	// SSH answering is not the same as cloud-init having finished: the
 	// kill-switch runcmds, and the endpoint-addrs file they write, land later.
@@ -193,17 +209,24 @@ func testEndpointRotation(t *testing.T, distro, guestUser, sudo string, wgHostPo
 		"%s sed -i 's/^%s /10.0.2.2 /' /etc/hosts && grep %s /etc/hosts",
 		sudo, staleAddr, endpointHost))
 
-	// Give the retry timer several cycles to notice and recover. It fires every
-	// 60s; a guest that re-resolves picks the new address up here.
+	// Give the periodic refresh several cycles to notice and recover. Both
+	// bases run it about once a minute — Ubuntu from vee-wg-retry.timer,
+	// Alpine from crond — so a guest that re-resolves picks the new address up
+	// well inside this window.
 	t.Log("waiting for the guest to recover the tunnel...")
 	var lastState string
-	deadline := time.Now().Add(6 * time.Minute)
+	deadline := time.Now().Add(4 * time.Minute)
 	for time.Now().Before(deadline) {
-		time.Sleep(30 * time.Second)
+		time.Sleep(15 * time.Second)
 		lastState = sshRunLenient(t, torrentSSH, guestUser, privKeyPath,
 			sudo+" wg show wg0 latest-handshakes 2>/dev/null | awk '{print $2}'")
-		if h := strings.TrimSpace(lastState); h != "" && h != "0" {
-			t.Logf("tunnel recovered: latest handshake %s", h)
+		// Parse a timestamp out rather than testing the string for
+		// non-emptiness. sshRunLenient merges stderr into its result and
+		// reports transport failures as ordinary strings ("dial error: ..."),
+		// so a bare != "" check reads sudo's TTY warning, or a dropped
+		// connection, as a successful handshake.
+		if h := latestHandshake(lastState); h > 0 {
+			t.Logf("tunnel recovered: latest handshake %d", h)
 
 			addrs := sshRun(t, torrentSSH, guestUser, privKeyPath, sudo+" cat /etc/wireguard/endpoint-addrs")
 			if strings.Contains(addrs, staleAddr) {
@@ -222,4 +245,24 @@ func testEndpointRotation(t *testing.T, distro, guestUser, sudo string, wgHostPo
 			"echo '--- wg ---'; "+sudo+" wg show")
 	t.Fatalf("tunnel never came up after the endpoint rotated: the handshake hole is still "+
 		"pinned to the old address and nothing re-resolves it.\ndiag:\n%s", diag)
+}
+
+// latestHandshake extracts the newest handshake timestamp from the output of
+// "wg show wg0 latest-handshakes", ignoring anything that is not a number.
+//
+// Zero means no handshake has completed — which is both wg's own "never" value
+// and the right answer for output that carries no timestamp at all, such as an
+// SSH transport error or a warning on stderr.
+func latestHandshake(out string) int64 {
+	var newest int64
+	for _, f := range strings.Fields(out) {
+		n, err := strconv.ParseInt(f, 10, 64)
+		if err != nil {
+			continue
+		}
+		if n > newest {
+			newest = n
+		}
+	}
+	return newest
 }

@@ -400,3 +400,32 @@ func TestAlpineWGRefreshPersistsRules(t *testing.T) {
 			"the handshake would be attempted against a stale hole")
 	}
 }
+
+// TestAlpineWGRefreshStartsCrond guards an assumption that was wrong the first
+// time. Dropping a script into /etc/periodic/<n> only runs if something runs
+// run-parts on it, and the Alpine cloud image ships crond stopped and out of
+// the default runlevel — so the periodic refresh silently never fired and a
+// rotation was only ever picked up by a reboot. Verified on a live guest:
+// "rc-service crond status" reported "stopped" while the script sat in place,
+// executable and never run.
+//
+// The stock /etc/crontabs/root has run-parts entries for 15min and coarser, but
+// none for 1min, so the entry has to be added as well as the service enabled.
+func TestAlpineWGRefreshStartsCrond(t *testing.T) {
+	joined := strings.Join(alpineWGEndpointRefreshCmds(testWGConf()), "\n")
+
+	if !strings.Contains(joined, "rc-update add crond default") {
+		t.Error("crond is not enabled: the Alpine image ships it stopped, so the periodic " +
+			"refresh would never run and a rotation would need a reboot to be noticed")
+	}
+	if !strings.Contains(joined, "rc-service crond") {
+		t.Error("crond is not started in this boot: the refresh would not run until the " +
+			"guest is next rebooted, which is exactly the case it exists to avoid")
+	}
+
+	// A directory with no run-parts entry is a directory nothing reads.
+	dir := "/etc/periodic/1min"
+	if strings.Contains(joined, dir) && !strings.Contains(joined, "run-parts "+dir) {
+		t.Errorf("%s has no run-parts crontab entry; the stock crontab does not cover it", dir)
+	}
+}
