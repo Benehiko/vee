@@ -50,6 +50,12 @@ func torrentAlpineRunCmds(mounts []ShareMount, nfsMounts []NFSMount, wgConf *vpn
 	pkgs := []string{
 		"ca-certificates", "curl", "iptables", "ip6tables",
 		"qbittorrent-nox", "qemu-guest-agent",
+		// bind-tools carries dig, which `vee network` uses to establish where
+		// DNS queries actually exit. Alpine's busybox nslookup cannot ask a
+		// CHAOS TXT question, so without this the dns-egress check reports
+		// unavailable and the one probe that would catch a DNS leak silently
+		// never runs. The Ubuntu base gets dig as a dependency instead.
+		"bind-tools",
 	}
 	if wgConf != nil {
 		pkgs = append(pkgs, "wireguard-tools")
