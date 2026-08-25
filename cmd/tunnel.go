@@ -384,10 +384,7 @@ func runSSHTunnel(vmName string, localPort int, sshHost string, sshPort, remoteP
 	}
 	defer func() { _ = os.Remove(controlPath) }()
 
-	user := ""
-	if cfg.CloudInit != nil && cfg.CloudInit.User != "" {
-		user = cfg.CloudInit.User
-	}
+	user := tunnelSSHUser(cfg)
 	dest := sshHost
 	if user != "" {
 		dest = user + "@" + sshHost
@@ -462,4 +459,27 @@ func completeServiceNames(vmName string) ([]string, cobra.ShellCompDirective) {
 		out = append(out, s.Name+"\t"+string(s.Protocol))
 	}
 	return out, cobra.ShellCompDirectiveNoFileComp
+}
+
+// tunnelSSHUser resolves the account the tunnel logs in as, matching vee ssh.
+//
+// Reading cfg.CloudInit.User directly is not enough, and getting this wrong is
+// not a visible error: it misses the explicit ssh_user override, and it misses
+// templates that create no user of their own and inject the SSH keys into the
+// image's default account instead (docker, dns-sink, bitmagnet — the Alpine
+// image ships no bash for useradd). For those CloudInit.User is empty, so
+// ssh(1) substitutes the host username and the tunnel fails with "Permission
+// denied (publickey)" against an account that never existed in the guest.
+//
+// Returns "" when the config carries no account at all (e.g. macOS guests), in
+// which case ssh's own default applies.
+func tunnelSSHUser(cfg *vm.VMConfig) string {
+	if user := cfg.SSHUsername(); user != "" {
+		return user
+	}
+	// TrueNAS stores its admin account separately from cloud-init.
+	if cfg.Template == "truenas" {
+		return cfg.TrueNASUser
+	}
+	return ""
 }

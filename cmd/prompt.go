@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -168,7 +169,7 @@ func parseNFSMounts(specs []string) ([]templates.NFSMount, error) {
 
 // promptVPN interactively asks whether to configure a VPN for the torrent VM.
 // Returns (nordConf, wgConf, providerName, error). At most one of nordConf/wgConf is non-nil.
-func promptVPN() (*vpn.NordVPNConfig, *vpn.WireGuardConfig, string, error) {
+func promptVPN(ctx context.Context) (*vpn.NordVPNConfig, *vpn.WireGuardConfig, string, error) {
 	stdin := bufio.NewReader(os.Stdin)
 
 	fmt.Fprint(os.Stderr, "Configure VPN? [y/N]: ")
@@ -186,7 +187,7 @@ func promptVPN() (*vpn.NordVPNConfig, *vpn.WireGuardConfig, string, error) {
 
 	switch choice {
 	case "", "1":
-		nord, err := promptNordVPN(stdin)
+		nord, err := promptNordVPN(ctx, stdin)
 		return nord, nil, "nordvpn", err
 	case "2":
 		wg, err := promptGenericWireGuard()
@@ -196,7 +197,7 @@ func promptVPN() (*vpn.NordVPNConfig, *vpn.WireGuardConfig, string, error) {
 	}
 }
 
-func promptNordVPN(stdin *bufio.Reader) (*vpn.NordVPNConfig, error) {
+func promptNordVPN(ctx context.Context, stdin *bufio.Reader) (*vpn.NordVPNConfig, error) {
 	fmt.Fprintln(os.Stderr, "Generate a token at: my.nordaccount.com/dashboard/nordvpn/access-tokens/")
 	fmt.Fprint(os.Stderr, "NordVPN access token: ")
 	token, _ := stdin.ReadString('\n')
@@ -206,12 +207,12 @@ func promptNordVPN(stdin *bufio.Reader) (*vpn.NordVPNConfig, error) {
 	}
 
 	fmt.Fprintln(os.Stderr, "Validating token...")
-	if err := vpn.ValidateToken(token); err != nil {
+	if err := vpn.ValidateToken(ctx, token); err != nil {
 		return nil, err
 	}
 
 	fmt.Fprintln(os.Stderr, "Fetching countries...")
-	countries, err := vpn.Countries()
+	countries, err := vpn.Countries(ctx)
 	if err != nil {
 		// Non-fatal: fall back to plain text prompt.
 		fmt.Fprint(os.Stderr, "Country to connect to (leave blank for auto): ")

@@ -24,6 +24,7 @@ import (
 	"github.com/Benehiko/vee/internal/backend"
 	"github.com/Benehiko/vee/internal/journal"
 	"github.com/Benehiko/vee/internal/media"
+	"github.com/Benehiko/vee/internal/platform"
 	"github.com/Benehiko/vee/internal/qemu"
 	"github.com/Benehiko/vee/internal/qemubin"
 	"github.com/Benehiko/vee/internal/runnersetup"
@@ -248,6 +249,7 @@ var templateCatalog = []templateInfo{
 	{Name: "torrent", Description: "qbittorrent-nox with optional VPN kill-switch", Params: "share_mounts, and nordvpn_token/nordvpn_country or wireguard_conf for the kill-switch"},
 	{Name: "jellyfin", Description: "Jellyfin media server with NFS/SMB/host-dir media mounts; requires nic_mode=bridge", Params: "media (spec strings), media_secrets"},
 	{Name: "dns-sink", Description: "Alpine + AdGuard Home DNS sinkhole blocking ad and malware domains LAN-wide; requires nic_mode=bridge", Params: "dns_admin_user, dns_admin_password_hash (bcrypt)"},
+	{Name: "bitmagnet", Description: "Alpine + bitmagnet BitTorrent DHT crawler and PostgreSQL behind a WireGuard kill-switch; the web UI is never exposed, reach it with vee tunnel; without wireguard_conf the DHT crawler is disabled so the guest cannot announce its address to the swarm", Params: "wireguard_conf, or nordvpn_token/nordvpn_country to fetch a NordLynx config automatically; pg_data_dir (host directory holding the crawled index)"},
 	{Name: "github-runner", Description: "Self-hosted GitHub Actions runner", Params: "requires runner_url; runner_token unless a credential snapshot exists; runner_labels, runner_ssh_key"},
 }
 
@@ -334,8 +336,8 @@ type vmCreateIn struct {
 	// torrent template.
 	ShareMounts    []shareMountIn `json:"share_mounts,omitempty" jsonschema:"host directories shared into the torrent VM via virtiofs"`
 	NFSMounts      []nfsMountIn   `json:"nfs_mounts,omitempty" jsonschema:"NFS exports mounted directly by the torrent guest; requires nic_mode=bridge"`
-	NordVPNToken   string         `json:"nordvpn_token,omitempty" jsonschema:"NordVPN access token for the VPN kill-switch"`
-	NordVPNCountry string         `json:"nordvpn_country,omitempty" jsonschema:"NordVPN country to connect to; empty for auto"`
+	NordVPNToken   string         `json:"nordvpn_token,omitempty" jsonschema:"NordVPN access token for the VPN kill-switch; the bitmagnet template exchanges it for a NordLynx WireGuard config"`
+	NordVPNCountry string         `json:"nordvpn_country,omitempty" jsonschema:"NordVPN country to connect to, e.g. Netherlands; empty for auto"`
 	WireGuardConf  string         `json:"wireguard_conf,omitempty" jsonschema:"path to a WireGuard config file for a generic VPN kill-switch"`
 
 	// jellyfin template.
@@ -345,6 +347,10 @@ type vmCreateIn struct {
 	// dns-sink template.
 	DNSAdminUser         string `json:"dns_admin_user,omitempty" jsonschema:"AdGuard Home web UI username (default admin)"`
 	DNSAdminPasswordHash string `json:"dns_admin_password_hash,omitempty" jsonschema:"bcrypt hash of the AdGuard Home web UI password; empty leaves the UI without a login (LAN-restricted by the guest firewall)"`
+
+	// bitmagnet template. The kill-switch is configured through the shared
+	// wireguard_conf field above.
+	PGDataDir string `json:"pg_data_dir,omitempty" jsonschema:"absolute host directory bind-mounted over virtiofs as PostgreSQL's data directory, so the crawled index outlives the VM; empty keeps the database on the VM's own disk"`
 }
 
 type vmCreateOut struct {
@@ -358,7 +364,7 @@ type vmCreateOut struct {
 
 // templateExtras validates template-specific parameters and assembles the
 // extras structs that the CLI collects via terminal prompts.
-func (s *server) templateExtras(in vmCreateIn, opts *build.Opts) (runnerPubKey string, err error) {
+func (s *server) templateExtras(ctx context.Context, in vmCreateIn, opts *build.Opts) (runnerPubKey string, err error) {
 	switch in.Template {
 	case "passthrough":
 		if in.NVMeDev == "" || in.OVMFVars == "" {
@@ -389,7 +395,7 @@ func (s *server) templateExtras(in vmCreateIn, opts *build.Opts) (runnerPubKey s
 		}
 		switch {
 		case in.NordVPNToken != "":
-			if err := vpn.ValidateToken(in.NordVPNToken); err != nil {
+			if err := vpn.ValidateToken(ctx, in.NordVPNToken); err != nil {
 				return "", fmt.Errorf("validate NordVPN token: %w", err)
 			}
 			extras.NordConf = &vpn.NordVPNConfig{Token: in.NordVPNToken, Country: in.NordVPNCountry}
@@ -455,6 +461,67 @@ func (s *server) templateExtras(in vmCreateIn, opts *build.Opts) (runnerPubKey s
 			AdminUser:    in.DNSAdminUser,
 			PasswordHash: in.DNSAdminPasswordHash,
 		}
+
+	case "bitmagnet":
+		extras := &build.BitmagnetExtras{}
+		// The password is generated rather than accepted as a parameter: it is
+		// never typed by a human, and a plaintext value passed here would be
+		// recorded in the tool-call transcript.
+		password, pwErr := templates.GeneratePGPassword()
+		if pwErr != nil {
+			return "", pwErr
+		}
+		extras.PGPassword = password
+
+		switch {
+		case in.WireGuardConf != "":
+			content, readErr := os.ReadFile(in.WireGuardConf) //nolint:gosec // path supplied by the operating user via the MCP client
+			if readErr != nil {
+				return "", fmt.Errorf("read WireGuard config: %w", readErr)
+			}
+			wg, parseErr := vpn.ParseWireGuardConf(string(content))
+			if parseErr != nil {
+				return "", fmt.Errorf("parse WireGuard config: %w", parseErr)
+			}
+			extras.WireGuard = wg
+			extras.VPNProvider = "wireguard"
+
+		case in.NordVPNToken != "":
+			// NordLynx is WireGuard, so a Nord account yields a complete
+			// wg0.conf without the operator exporting one by hand.
+			wg, fetchErr := vpn.NordLynxConfig(ctx, in.NordVPNToken, in.NordVPNCountry)
+			if fetchErr != nil {
+				return "", fetchErr
+			}
+			extras.WireGuard = wg
+			extras.VPNProvider = "nordlynx"
+		}
+
+		if in.PGDataDir != "" {
+			if !filepath.IsAbs(in.PGDataDir) {
+				return "", fmt.Errorf("pg_data_dir must be an absolute host path, got %q", in.PGDataDir)
+			}
+			if mkErr := os.MkdirAll(in.PGDataDir, 0o700); mkErr != nil {
+				return "", fmt.Errorf("create PostgreSQL data directory: %w", mkErr)
+			}
+			// The guest's postgres account is renumbered to the host owner of
+			// the share; virtiofs will not let the guest chown it. See
+			// templates.BitmagnetOptions.
+			if fs := platform.NetworkFilesystemName(in.PGDataDir); fs != "" {
+				return "", fmt.Errorf(
+					"pg_data_dir %s is on %s; PostgreSQL cannot run its data directory over a network "+
+						"filesystem (initdb would stall indefinitely). Use a directory on local storage",
+					in.PGDataDir, fs)
+			}
+			uid, gid, statErr := dirOwner(in.PGDataDir)
+			if statErr != nil {
+				return "", statErr
+			}
+			extras.PGDataHostDir = in.PGDataDir
+			extras.PGDataHostUID = uid
+			extras.PGDataHostGID = gid
+		}
+		opts.BitmagnetExtras = extras
 
 	case "github-runner":
 		prepared, prepErr := runnersetup.Prepare(in.Name, in.RunnerURL, in.RunnerLabels, in.RunnerSSHKey, func() (string, error) {
@@ -538,7 +605,7 @@ func (s *server) vmCreate(ctx context.Context, _ *mcp.CallToolRequest, in vmCrea
 		Nested:        in.Nested,
 		NoAutoInstall: in.NoAutoInstall,
 	}
-	runnerPubKey, err := s.templateExtras(in, &opts) //nolint:contextcheck // vpn.ValidateToken's HTTP call takes no context, same as the CLI prompt path
+	runnerPubKey, err := s.templateExtras(ctx, in, &opts)
 	if err != nil {
 		return nil, vmCreateOut{}, err
 	}

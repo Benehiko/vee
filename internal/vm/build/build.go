@@ -126,10 +126,11 @@ type Opts struct {
 
 	// Interactive-only fields. Populated by the CLI/TUI surface before
 	// calling Build; Build itself does no prompting.
-	TorrentExtras  *TorrentExtras
-	JellyfinExtras *JellyfinExtras
-	DNSSinkExtras  *DNSSinkExtras
-	RunnerExtras   *RunnerExtras
+	TorrentExtras   *TorrentExtras
+	JellyfinExtras  *JellyfinExtras
+	DNSSinkExtras   *DNSSinkExtras
+	BitmagnetExtras *BitmagnetExtras
+	RunnerExtras    *RunnerExtras
 
 	// MacOSExtras selects the macOS guest's image source (vz backend).
 	MacOSExtras *MacOSExtras
@@ -170,6 +171,29 @@ type JellyfinExtras struct {
 type DNSSinkExtras struct {
 	AdminUser    string
 	PasswordHash string
+}
+
+// BitmagnetExtras carries the values the bitmagnet template needs that are
+// normally collected from interactive prompts: the WireGuard config that backs
+// the kill-switch, the generated PostgreSQL password, and the host directory
+// bind-mounted as the database's data directory.
+type BitmagnetExtras struct {
+	// PGDataHostDir is an absolute host path used as PostgreSQL's data
+	// directory over virtiofs. Empty keeps the database on the VM's own disk.
+	PGDataHostDir string
+	// PGDataHostUID and PGDataHostGID own PGDataHostDir on the host. The guest's
+	// postgres account is renumbered to match, because virtiofs will not let the
+	// guest chown the share. See templates.BitmagnetOptions.
+	PGDataHostUID int
+	PGDataHostGID int
+	// PGPassword is the password for the bitmagnet database role. It is
+	// generated per-VM rather than supplied by the operator.
+	PGPassword string
+	// WireGuard, when nil, disables the VPN entirely — a deliberate and
+	// warned-about choice, since the DHT crawler otherwise announces the
+	// guest's real address to the swarm.
+	WireGuard   *vpn.WireGuardConfig
+	VPNProvider string
 }
 
 // RunnerExtras carries the GitHub Actions runner registration data collected
@@ -299,6 +323,7 @@ var KnownTemplates = []string{
 	"torrent",
 	"jellyfin",
 	"dns-sink",
+	"bitmagnet",
 	"github-runner",
 	"windows",
 	"truenas",
@@ -423,6 +448,20 @@ func configFromTemplate(ctx context.Context, prov provider.Provider, opts Opts, 
 			passwordHash = opts.DNSSinkExtras.PasswordHash
 		}
 		return templates.NewDNSSinkConfig(ctx, prov, opts.Name, sshKeys, opts.NICBridge, adminUser, passwordHash)
+	case "bitmagnet":
+		if opts.BitmagnetExtras == nil {
+			return nil, fmt.Errorf("bitmagnet template requires interactive prompts (VPN, database password); collect them and pass via Opts.BitmagnetExtras")
+		}
+		return templates.NewBitmagnetConfig(ctx, prov, opts.Name, sshKeys, templates.BitmagnetOptions{
+			PGDataHostDir: opts.BitmagnetExtras.PGDataHostDir,
+			PGDataHostUID: opts.BitmagnetExtras.PGDataHostUID,
+			PGDataHostGID: opts.BitmagnetExtras.PGDataHostGID,
+			PGPassword:    opts.BitmagnetExtras.PGPassword,
+			WireGuard:     opts.BitmagnetExtras.WireGuard,
+			VPNProvider:   opts.BitmagnetExtras.VPNProvider,
+			Bridge:        opts.NICBridge,
+			DiskSize:      opts.Disk,
+		})
 	case "ubuntu-server":
 		version := images.UbuntuVersion(opts.DistroVersion)
 		if opts.DistroVersion == "" || opts.DistroVersion == "latest" {
