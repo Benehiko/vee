@@ -29,6 +29,17 @@ As a second layer, bitmagnet's own traffic is rejected outright on any interface
 
 If `wg0` fails to come up on first boot, or drops months later, the crawler cannot fall back to the LAN interface — it simply stops talking.
 
+**IPv6 is dropped outright.** The tunnel is IPv4-only in practice: the rendered
+`wg0.conf` says `AllowedIPs = 0.0.0.0/0, ::/0`, but the address paired with it
+is always an IPv4 `/32`, and an interface with no IPv6 address cannot carry
+IPv6 traffic. That left the whole family outside the kill-switch — `ip6tables`
+was installed but never given a rule, so its policy stayed at the default
+`ACCEPT`, and on a network advertising IPv6 the crawler could announce the
+guest over IPv6 on the LAN interface while every IPv4 path was correctly
+denied. The `INPUT`, `OUTPUT` and `FORWARD` policies are now all `DROP`, with
+loopback the only exception, and the rules are saved separately from the IPv4
+table so they survive a reboot.
+
 Failing closed is the entire point. A VM that has quietly stopped indexing is a recoverable problem; a VM that has quietly started announcing your home address to the swarm is not.
 
 ## Create

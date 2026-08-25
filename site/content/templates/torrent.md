@@ -139,6 +139,18 @@ applies the same policy with iptables, and narrows two of them further (see
 
 Everything else stays inside the tunnel. qBittorrent's own port is never opened.
 
+**IPv6 is dropped outright on the Alpine base.** The tunnel is IPv4-only in
+practice: the rendered `wg0.conf` says `AllowedIPs = 0.0.0.0/0, ::/0`, but the
+address paired with it is always an IPv4 `/32`, and an interface with no IPv6
+address cannot carry IPv6 traffic. On the Alpine base that left the whole
+family outside the kill-switch — `ip6tables` was installed but never given a
+rule, so its policy stayed at the default `ACCEPT`, and on a network
+advertising IPv6 a guest could announce over IPv6 on the LAN interface while
+every IPv4 path was correctly denied. The `INPUT`, `OUTPUT` and `FORWARD`
+policies are now all `DROP`, with loopback the only exception, and the rules
+are saved separately from the IPv4 table so they survive a reboot. The Ubuntu
+base was never affected: `ufw default deny outgoing` applies to both families.
+
 **The endpoint is resolved before the deny policy takes effect** and the
 addresses are written to `/etc/wireguard/endpoint-addrs`. This matters because
 once outbound traffic is denied there is no DNS left to resolve a hostname
