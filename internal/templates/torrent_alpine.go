@@ -269,6 +269,10 @@ func torrentAlpineKillSwitchCmds(wgConf *vpn.WireGuardConfig, nfsMounts []NFSMou
 			"chmod 0755 /etc/local.d/wg0.start",
 			"rc-update add local default",
 		)
+		// A hostname endpoint can be re-addressed by the provider, stranding a
+		// guest whose pinned hole still names the old IP. Refresh it before the
+		// tunnel comes up on each boot, and periodically after that.
+		cmds = append(cmds, alpineWGEndpointRefreshCmds(wgConf)...)
 	}
 
 	return append(cmds,
@@ -351,6 +355,9 @@ func torrentAlpineWriteFiles(savePath string, wgConf *vpn.WireGuardConfig) []vm.
 			Content:     vpn.RenderWireGuardConf(wgConf),
 			Permissions: "0600",
 		})
+		if wf := wgRefreshWriteFile(wgConf, alpineFirewallCmds(wgConf)); wf != nil {
+			files = append(files, *wf)
+		}
 	}
 	return files
 }
@@ -488,4 +495,51 @@ func NewTorrentAlpineConfig(
 		},
 		CreatedAt: time.Now(),
 	}, nil
+}
+
+// alpineFirewallCmds renders the endpoint-refresh script's firewall fragments
+// for the iptables base.
+//
+// "-D" withdraws exactly the rule "-A" added, so a superseded address can be
+// retired without disturbing the rest of the chain. The rules are also saved
+// after a change: iptables does not persist itself, and without the save the
+// re-pinned hole would be lost on the next boot — putting the guest straight
+// back into the outage this refresh exists to end.
+func alpineFirewallCmds(cfg *vpn.WireGuardConfig) wgFirewallCmds {
+	port := wireGuardEndpointPort(cfg)
+	return wgFirewallCmds{
+		allowDNS:      `iptables -I OUTPUT -d "$ns" -p udp --dport 53 -j ACCEPT 2>/dev/null || true`,
+		denyDNS:       `iptables -D OUTPUT -d "$ns" -p udp --dport 53 -j ACCEPT 2>/dev/null || true`,
+		allowEndpoint: fmt.Sprintf(`iptables -A OUTPUT -d "$ip" -p udp --dport %d -j ACCEPT 2>/dev/null || true`, port),
+		denyEndpoint:  fmt.Sprintf(`iptables -D OUTPUT -d "$ip" -p udp --dport %d -j ACCEPT 2>/dev/null || true`, port),
+		restartTunnel: "/etc/init.d/iptables save >/dev/null 2>&1 || true\nwg-quick down wg0 >/dev/null 2>&1 || true\nwg-quick up wg0 >/dev/null 2>&1 || true",
+	}
+}
+
+// alpineWGEndpointRefreshCmds installs the endpoint-refresh script and runs it
+// on every boot, before the tunnel is brought up.
+//
+// Alpine has no retry timer — the boot hook is enough there because re-running
+// it is harmless — so the refresh is wired into that same hook, ahead of
+// "wg-quick up", plus a periodic cron entry so a rotation that happens while the
+// guest is running is picked up without a reboot.
+//
+// Returns nothing for a literal-IP endpoint, which cannot rotate.
+func alpineWGEndpointRefreshCmds(cfg *vpn.WireGuardConfig) []string {
+	if wgEndpointIsLiteralIP(cfg) {
+		return nil
+	}
+
+	// The script itself arrives as a cloud-init write-file (see
+	// wgRefreshWriteFile); only the wiring belongs here.
+	return []string{
+		// Ahead of "wg-quick up wg0", so a boot after a rotation re-pins the
+		// hole before the handshake is attempted rather than after it fails.
+		fmt.Sprintf(`printf '#!/bin/sh\n%s\nwg-quick up wg0\n' > /etc/local.d/wg0.start`, wgRefreshScriptPath),
+		"chmod 0755 /etc/local.d/wg0.start",
+		// /etc/periodic/15min is run by Alpine's busybox crond, which the base
+		// image already enables, so this needs no unit or timer of its own.
+		fmt.Sprintf(`printf '#!/bin/sh\n%s\n' > /etc/periodic/15min/vee-wg-refresh`, wgRefreshScriptPath),
+		"chmod 0755 /etc/periodic/15min/vee-wg-refresh",
+	}
 }
