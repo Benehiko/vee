@@ -286,8 +286,66 @@ func torrentWGKillSwitchCmds(wgConf *vpn.WireGuardConfig, nfsMounts []NFSMount) 
 	// until someone intervenes. This timer re-attempts it, so a transient
 	// failure heals itself.
 	wgCmds = append(wgCmds, torrentWGRetryCmds()...)
+	// A hostname endpoint can be re-addressed by the provider, which would
+	// otherwise strand the guest: the pinned hole still names the old IP while
+	// wg-quick dials the new one. Install the refresh script and run it from
+	// the retry timer. An IP literal cannot rotate, so it gets none of this.
+	wgCmds = append(wgCmds, torrentWGEndpointRefreshCmds(wgConf)...)
 
 	return wgCmds
+}
+
+// ufwFirewallCmds renders the endpoint-refresh script's firewall fragments for
+// the ufw base.
+//
+// "ufw delete allow ..." withdraws exactly the rule the matching "allow" added,
+// so the script can retire a superseded address without touching anything else.
+// Both are quiet: the script runs unattended from a timer, and a delete for a
+// rule that is already gone is not an error worth logging.
+func ufwFirewallCmds(cfg *vpn.WireGuardConfig) wgFirewallCmds {
+	port := wireGuardEndpointPort(cfg)
+	return wgFirewallCmds{
+		allowDNS:      `ufw allow out to "$ns" port 53 >/dev/null 2>&1 || true`,
+		denyDNS:       `ufw delete allow out to "$ns" port 53 >/dev/null 2>&1 || true`,
+		allowEndpoint: fmt.Sprintf(`ufw allow out to "$ip" port %d proto udp >/dev/null 2>&1 || true`, port),
+		denyEndpoint:  fmt.Sprintf(`ufw delete allow out to "$ip" port %d proto udp >/dev/null 2>&1 || true`, port),
+		restartTunnel: "systemctl restart wg-quick@wg0 >/dev/null 2>&1 || true",
+	}
+}
+
+// torrentWGEndpointRefreshCmds installs the endpoint-refresh script and wires it
+// into the existing retry timer.
+//
+// The timer already fires every 60s to recover a tunnel that failed at boot, so
+// it is the natural place to hook this: no second timer, and the refresh runs on
+// exactly the cadence that already exists for tunnel recovery. The service is
+// rewritten to run the refresh first and then apply the original "is wg0 up"
+// recovery, because a rotated address has to be re-pinned before a restart can
+// succeed.
+//
+// Returns nothing for a literal-IP endpoint: an address that cannot change needs
+// neither the script nor the extra work on every timer tick.
+func torrentWGEndpointRefreshCmds(cfg *vpn.WireGuardConfig) []string {
+	if wgEndpointIsLiteralIP(cfg) {
+		return nil
+	}
+
+	const unit = `[Unit]
+Description=Retry the WireGuard tunnel until it comes up
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=` + wgRefreshScriptPath + `
+ExecStart=/bin/sh -c 'wg show wg0 >/dev/null 2>&1 || systemctl restart wg-quick@wg0'
+`
+
+	// The script itself arrives as a cloud-init write-file (see
+	// wgRefreshWriteFile); only the unit rewrite belongs here.
+	return []string{
+		fmt.Sprintf("printf %q > /etc/systemd/system/vee-wg-retry.service", unit),
+		"systemctl daemon-reload",
+	}
 }
 
 // torrentWGRetryCmds installs a systemd timer that re-attempts the WireGuard
@@ -450,6 +508,9 @@ func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, ssh
 			Content:     vpn.RenderWireGuardConf(wgConf),
 			Permissions: "0600",
 		})
+		if wf := wgRefreshWriteFile(wgConf, ufwFirewallCmds(wgConf)); wf != nil {
+			writeFiles = append(writeFiles, *wf)
+		}
 		runCmds = append(torrentWGKillSwitchCmds(wgConf, nfsMounts), runCmds...)
 		// No resolvconf package: wg-quick shells out to a resolvconf(8)
 		// *command* to honour the "DNS =" directive, and on Ubuntu 24.04

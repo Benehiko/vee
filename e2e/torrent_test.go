@@ -224,8 +224,45 @@ func providerWithHome(t *testing.T, home string) (provider.Provider, error) {
 		}
 	}
 
+	// Link the managed QEMU and any compat symlinks next to it into the test
+	// home. Without this the test home has no managed binary, vee falls back to
+	// resolving "qemu-system-x86_64" on PATH, and on a host where that resolves
+	// to the managed build the loader fails: that binary carries no rpath and
+	// needs the Debian-soname compat symlinks (libaio.so.1t64 -> libaio.so.1)
+	// that live in its own directory, which qemuEnv puts on LD_LIBRARY_PATH by
+	// deriving the directory from the binary path. See internal/qemu.qemuEnv
+	// and issue #40.
+	realBinDir := filepath.Join(realHome, ".vee", "bin")
+	if entries, err := os.ReadDir(realBinDir); err == nil {
+		dstDir := filepath.Join(home, ".vee", "bin")
+		if err := os.MkdirAll(dstDir, 0o755); err == nil {
+			for _, e := range entries {
+				name := e.Name()
+				if name == "virtiofsd" || !strings.HasPrefix(name, "qemu-") && !strings.Contains(name, ".so") {
+					continue
+				}
+				_ = os.Symlink(filepath.Join(realBinDir, name), filepath.Join(dstDir, name))
+			}
+		}
+	}
+
 	t.Setenv("HOME", home)
-	return provider.New(false)
+	prov, err := provider.New(false)
+	if err != nil {
+		return nil, err
+	}
+
+	// provider.New opens the sqlite state DB and nothing in the Provider API
+	// closes it, so database/sql's connectionOpener goroutine outlives the
+	// test. TestMain runs goleak.VerifyTestMain, which fails the *package* on a
+	// leaked goroutine even when every test passed — so without this the whole
+	// e2e suite reports FAIL after a clean run.
+	t.Cleanup(func() {
+		if db := prov.DB(); db != nil {
+			_ = db.Close()
+		}
+	})
+	return prov, nil
 }
 
 func copyFileExec(src, dst string) error {

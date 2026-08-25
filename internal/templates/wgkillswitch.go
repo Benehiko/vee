@@ -1,9 +1,12 @@
 package templates
 
 import (
+	"encoding/base64"
 	"fmt"
+	"net"
 	"strings"
 
+	"github.com/Benehiko/vee/internal/vm"
 	"github.com/Benehiko/vee/internal/vpn"
 )
 
@@ -74,4 +77,156 @@ func wgResolveEndpointCmd(cfg *vpn.WireGuardConfig) string {
 		"mkdir -p /etc/wireguard && getent ahostsv4 %q | awk '{print $1}' | sort -u > %s",
 		wireGuardEndpointHost(cfg), wgEndpointAddrsFile,
 	)
+}
+
+// wgEndpointIsLiteralIP reports whether the endpoint names an IP address rather
+// than a hostname. A literal cannot rotate, so guests configured with one need
+// no refresh machinery at all.
+func wgEndpointIsLiteralIP(cfg *vpn.WireGuardConfig) bool {
+	return net.ParseIP(wireGuardEndpointHost(cfg)) != nil
+}
+
+// wgRefreshScriptPath is the endpoint-refresh script installed in guests whose
+// endpoint is a hostname.
+const wgRefreshScriptPath = "/usr/local/sbin/vee-wg-refresh-endpoint"
+
+// wgRefreshEndpointScript returns a script that re-resolves a hostname endpoint
+// and re-pins the handshake hole to the addresses that come back.
+//
+// The problem it solves: the handshake hole is pinned to the addresses resolved
+// once, at build time, and written to wgEndpointAddrsFile. Nothing recomputed
+// them. A provider that re-addresses its server therefore left wg-quick dialling
+// the new IP while the firewall still permitted only the old one — the handshake
+// was dropped, the tunnel never came back, and it stayed that way across
+// reboots. That fails closed, so nothing leaked, but it is a silent permanent
+// outage of the same class the pinning itself was introduced to prevent.
+//
+// Two details make this harder than "resolve again on boot":
+//
+//   - There is no DNS behind the kill-switch. Once the deny policy is up, a
+//     lookup has nowhere to go, which is why the original resolve happens at
+//     build time while ufw is still inactive. The script therefore opens a
+//     hole to the configured nameservers for the duration of the lookup and
+//     closes it again immediately, whatever the outcome. The hole is pinned to
+//     those nameservers on port 53 rather than opened to the internet.
+//   - wg-quick freezes the peer's address when it brings the interface up. Even
+//     with the firewall corrected, an already-up interface keeps dialling the
+//     old address, and the retry timer's "is wg0 up" guard sees a live
+//     interface and does nothing. So a changed address must also force the
+//     tunnel to re-read its own config.
+//
+// It fails closed at every step: if resolution fails, or returns nothing, the
+// old pinned rules are left exactly as they were. A stale rule keeps a tunnel
+// that was working working, whereas tearing the rules down first would open a
+// window with no kill-switch at all.
+//
+// fw renders the firewall fragments for the base in use, so the same logic
+// serves both ufw and iptables.
+func wgRefreshEndpointScript(cfg *vpn.WireGuardConfig, fw wgFirewallCmds) string {
+	return fmt.Sprintf(`#!/bin/sh
+# Re-resolve the WireGuard endpoint and re-pin the handshake hole.
+#
+# Installed only for hostname endpoints. Managed by vee; edits are not preserved
+# when the VM is recreated.
+set -u
+
+HOST=%q
+PORT=%d
+ADDRS=%q
+
+# Nameservers to consult. Resolution has to survive the deny policy, so the
+# lookup gets a temporary, narrowly-scoped hole rather than an always-open one.
+nameservers() {
+	resolvectl status 2>/dev/null | sed -n 's/.*DNS Servers: //p' | tr ' ' '\n'
+	sed -n 's/^nameserver[[:space:]]*//p' /etc/resolv.conf 2>/dev/null
+}
+
+NS=$(nameservers | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | grep -v '^127\.' | sort -u)
+
+for ns in $NS; do
+	%s
+done
+
+NEW=$(getent ahostsv4 "$HOST" | awk '{print $1}' | sort -u)
+
+for ns in $NS; do
+	%s
+done
+
+# Fail closed: no answer means keep the addresses already pinned. A stale rule
+# keeps a working tunnel working; dropping the rules would leave no kill-switch.
+if [ -z "$NEW" ]; then
+	exit 0
+fi
+
+OLD=$(cat "$ADDRS" 2>/dev/null || true)
+if [ "$NEW" = "$OLD" ]; then
+	exit 0
+fi
+
+# Install the new holes before withdrawing the old ones, so there is never a
+# moment where the handshake has no way out.
+for ip in $NEW; do
+	%s
+done
+
+printf '%%s\n' "$NEW" > "$ADDRS"
+
+for ip in $OLD; do
+	if ! printf '%%s\n' "$NEW" | grep -qx "$ip"; then
+		%s
+	fi
+done
+
+# wg-quick pins the peer address when the interface comes up, so a corrected
+# firewall is not enough on its own — the tunnel has to re-read its config.
+%s
+`,
+		wireGuardEndpointHost(cfg),
+		wireGuardEndpointPort(cfg),
+		wgEndpointAddrsFile,
+		fw.allowDNS,
+		fw.denyDNS,
+		fw.allowEndpoint,
+		fw.denyEndpoint,
+		fw.restartTunnel,
+	)
+}
+
+// wgFirewallCmds renders the base-specific shell fragments the endpoint-refresh
+// script is assembled from. ufw and iptables differ in how a rule is added and
+// withdrawn, but the ordering the script depends on — open before withdraw,
+// fail closed on a failed lookup — is identical, so only these fragments vary.
+type wgFirewallCmds struct {
+	// allowDNS opens a hole to "$ns" on port 53 for the lookup.
+	allowDNS string
+	// denyDNS withdraws it again.
+	denyDNS string
+	// allowEndpoint pins the handshake hole to "$ip".
+	allowEndpoint string
+	// denyEndpoint withdraws the hole for a no-longer-current "$ip".
+	denyEndpoint string
+	// restartTunnel forces wg-quick to re-read the endpoint.
+	restartTunnel string
+}
+
+// wgRefreshWriteFile returns the cloud-init write-file carrying the
+// endpoint-refresh script, or nil for an endpoint that cannot rotate.
+//
+// The script is shipped as a write-file rather than a "printf ... > file"
+// runcmd because its content is a multi-line shell program full of quotes and
+// backslashes. Squeezing that through a runcmd renders a YAML scalar that
+// cloud-init parses as a mapping and discards the whole document — the exact
+// failure TestTorrentUserDataIsValidYAML guards against. Base64 sidesteps
+// quoting entirely.
+func wgRefreshWriteFile(cfg *vpn.WireGuardConfig, fw wgFirewallCmds) *vm.CloudInitWriteFile {
+	if wgEndpointIsLiteralIP(cfg) {
+		return nil
+	}
+	return &vm.CloudInitWriteFile{
+		Path:        wgRefreshScriptPath,
+		Content:     base64.StdEncoding.EncodeToString([]byte(wgRefreshEndpointScript(cfg, fw))),
+		Encoding:    "b64",
+		Permissions: "0755",
+	}
 }

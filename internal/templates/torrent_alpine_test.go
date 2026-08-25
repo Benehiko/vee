@@ -65,7 +65,11 @@ func TestAlpineHandshakeHoleIsPinned(t *testing.T) {
 	resolve, deny := -1, -1
 	for i, c := range cmds {
 		switch {
-		case strings.Contains(c, "getent ahostsv4"):
+		// The build-time resolve, not the endpoint-refresh script: that
+		// script embeds the same command text but is installed after the
+		// deny policy on purpose, since it runs later with a DNS hole of
+		// its own.
+		case strings.Contains(c, "getent ahostsv4") && !strings.Contains(c, wgRefreshScriptPath):
 			resolve = i
 		case c == "iptables -P OUTPUT DROP":
 			deny = i
@@ -331,5 +335,97 @@ func TestAlpineUserDataIsValidYAML(t *testing.T) {
 	// are written and locks SSH out of the guest entirely.
 	if _, hasUsers := parsed["users"]; hasUsers {
 		t.Error("the Alpine base must not declare a users: block; useradd fails without bash and SSH is lost")
+	}
+}
+
+// TestAlpineWGRefreshWiringIsSingleLine guards the runcmd rendering. Every
+// runcmd must be one line: cloud-init renders them as YAML scalars, and an
+// embedded literal newline turns the document into something the parser reads
+// as a mapping and discards wholesale — taking every module with it.
+//
+// The trap is specific. These entries build shell scripts whose content is
+// "#!/bin/sh\n...", and a Go interpreted string literal turns that \n into a
+// real newline before printf ever sees it. It has to stay a backslash-n so the
+// escape reaches printf in the guest.
+func TestAlpineWGRefreshWiringIsSingleLine(t *testing.T) {
+	cfg := testWGConf()
+	for _, c := range alpineWGEndpointRefreshCmds(cfg) {
+		if strings.Contains(c, "\n") {
+			t.Errorf("runcmd contains a literal newline and would break the cloud-init "+
+				"document; use a raw string so \\n reaches printf: %q", c)
+		}
+	}
+}
+
+// TestAlpineWGRefreshOnlyForHostnames mirrors the Ubuntu guard: a literal-IP
+// endpoint cannot rotate, so it gets none of the refresh machinery.
+func TestAlpineWGRefreshOnlyForHostnames(t *testing.T) {
+	literal := &vpn.WireGuardConfig{
+		PrivateKey: "k", PublicKey: "p", Endpoint: "192.0.2.10:51820",
+	}
+	if got := alpineWGEndpointRefreshCmds(literal); got != nil {
+		t.Errorf("a literal-IP endpoint needs no refresh machinery, got %v", got)
+	}
+	if got := alpineWGEndpointRefreshCmds(testWGConf()); got == nil {
+		t.Error("a hostname endpoint must get the refresh machinery")
+	}
+}
+
+// TestAlpineWGRefreshPersistsRules covers the Alpine-specific half of the fix.
+// iptables does not persist itself, so a re-pinned hole that is never saved is
+// lost on the next boot — dropping the guest straight back into the outage the
+// refresh exists to end.
+func TestAlpineWGRefreshPersistsRules(t *testing.T) {
+	cfg := testWGConf()
+	script := wgRefreshEndpointScript(cfg, alpineFirewallCmds(cfg))
+
+	if !strings.Contains(script, "/etc/init.d/iptables save") {
+		t.Error("the re-pinned rules are never saved; they would not survive a reboot")
+	}
+	// The refresh must run before the tunnel comes up at boot, not after: a
+	// handshake attempted against a stale hole just fails.
+	wiring := strings.Join(alpineWGEndpointRefreshCmds(cfg), "\n")
+	hook := strings.Index(wiring, "/etc/local.d/wg0.start")
+	if hook < 0 {
+		t.Fatal("the boot hook must be rewritten to run the refresh")
+	}
+	line := wiring[strings.LastIndex(wiring[:hook], "printf"):hook]
+	refresh := strings.Index(line, wgRefreshScriptPath)
+	up := strings.Index(line, "wg-quick up wg0")
+	if refresh < 0 || up < 0 {
+		t.Fatalf("the boot hook must both refresh and bring the tunnel up: %q", line)
+	}
+	if refresh > up {
+		t.Error("the boot hook brings the tunnel up before refreshing the endpoint; " +
+			"the handshake would be attempted against a stale hole")
+	}
+}
+
+// TestAlpineWGRefreshStartsCrond guards an assumption that was wrong the first
+// time. Dropping a script into /etc/periodic/<n> only runs if something runs
+// run-parts on it, and the Alpine cloud image ships crond stopped and out of
+// the default runlevel — so the periodic refresh silently never fired and a
+// rotation was only ever picked up by a reboot. Verified on a live guest:
+// "rc-service crond status" reported "stopped" while the script sat in place,
+// executable and never run.
+//
+// The stock /etc/crontabs/root has run-parts entries for 15min and coarser, but
+// none for 1min, so the entry has to be added as well as the service enabled.
+func TestAlpineWGRefreshStartsCrond(t *testing.T) {
+	joined := strings.Join(alpineWGEndpointRefreshCmds(testWGConf()), "\n")
+
+	if !strings.Contains(joined, "rc-update add crond default") {
+		t.Error("crond is not enabled: the Alpine image ships it stopped, so the periodic " +
+			"refresh would never run and a rotation would need a reboot to be noticed")
+	}
+	if !strings.Contains(joined, "rc-service crond") {
+		t.Error("crond is not started in this boot: the refresh would not run until the " +
+			"guest is next rebooted, which is exactly the case it exists to avoid")
+	}
+
+	// A directory with no run-parts entry is a directory nothing reads.
+	dir := "/etc/periodic/1min"
+	if strings.Contains(joined, dir) && !strings.Contains(joined, "run-parts "+dir) {
+		t.Errorf("%s has no run-parts crontab entry; the stock crontab does not cover it", dir)
 	}
 }

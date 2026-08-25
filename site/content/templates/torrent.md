@@ -143,9 +143,34 @@ Everything else stays inside the tunnel. qBittorrent's own port is never opened.
 addresses are written to `/etc/wireguard/endpoint-addrs`. This matters because
 once outbound traffic is denied there is no DNS left to resolve a hostname
 endpoint with — so the lookup happens while it still can, and later boots read
-the answer back from disk. A config naming a hostname works as a result, but an
-endpoint given as a literal IP is still the more robust choice: a baked address
-goes stale if your provider re-addresses the server.
+the answer back from disk.
+
+**A hostname endpoint is re-resolved when its address changes.** Pinning the
+hole to addresses resolved once would strand the guest the day a provider
+re-addresses its server: `wg-quick` would dial the new IP while the firewall
+still permitted only the old one, and the tunnel would never come back — failing
+closed, so nothing leaks, but silently and across reboots. Guests configured
+with a hostname therefore carry `/usr/local/sbin/vee-wg-refresh-endpoint`, which
+re-resolves the endpoint, re-pins the hole to whatever comes back, and restarts
+the tunnel so it re-reads the address `wg-quick` froze when the interface came
+up. On the Ubuntu base it runs from the existing retry timer; on Alpine it runs
+from the boot hook — ahead of `wg-quick up`, so a boot after a rotation
+re-pins before the handshake is attempted — and once a minute from `crond`,
+which the template enables explicitly because the Alpine cloud image ships it
+stopped.
+
+The refresh fails closed at every step. The lookup needs DNS, which the deny
+policy blocks, so it opens a hole to the configured nameservers on port 53 and
+closes it again immediately — on the failure path too, never leaving it open. If
+resolution fails or returns nothing, the addresses already pinned are left
+exactly as they are: a stale rule keeps a working tunnel working, whereas
+clearing the rules first would leave a window with no kill-switch at all. New
+holes are installed before superseded ones are withdrawn, so the handshake is
+never without a way out.
+
+An endpoint given as a literal IP skips all of this — an address that cannot
+change needs no refresh — and remains the simplest choice where your provider
+offers one.
 
 **A tunnel that fails at boot retries itself.** `wg-quick@wg0` is enabled, so
 systemd starts it on every boot, but the upstream unit sets no `Restart=` and

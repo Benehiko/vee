@@ -199,7 +199,11 @@ func TestWireGuardHandshakeHoleIsPinned(t *testing.T) {
 	resolve, deny := -1, -1
 	for i, c := range cmds {
 		switch {
-		case strings.Contains(c, "getent ahostsv4"):
+		// The build-time resolve, not the endpoint-refresh script: that
+		// script embeds the same command text but is installed after the
+		// deny policy on purpose, since it runs later with a DNS hole of
+		// its own.
+		case strings.Contains(c, "getent ahostsv4") && !strings.Contains(c, wgRefreshScriptPath):
 			resolve = i
 		case c == "ufw default deny outgoing":
 			deny = i
@@ -610,5 +614,108 @@ func TestWebUIStaysTunnellable(t *testing.T) {
 	if !strings.Contains(s, `"tcp:127.0.0.1:8080-:8080"`) {
 		t.Error("the host forward must stay bound to 127.0.0.1: it is the tunnel's path in, " +
 			"and guest loopback is what qBittorrent's LocalHostAuth bypass keys on")
+	}
+}
+
+// TestWGEndpointRefreshOnlyForHostnames pins the refresh machinery to the case
+// that needs it. An IP-literal endpoint cannot be re-addressed, so installing a
+// script, rewriting the retry unit and re-resolving on every tick would be pure
+// overhead — and overhead that touches the firewall.
+func TestWGEndpointRefreshOnlyForHostnames(t *testing.T) {
+	literal := &vpn.WireGuardConfig{
+		PrivateKey: "k", PublicKey: "p", Endpoint: "192.0.2.10:51820",
+	}
+	if got := torrentWGEndpointRefreshCmds(literal); got != nil {
+		t.Errorf("a literal-IP endpoint needs no refresh machinery, got %v", got)
+	}
+	if wf := wgRefreshWriteFile(literal, ufwFirewallCmds(literal)); wf != nil {
+		t.Errorf("a literal-IP endpoint needs no refresh script, got %+v", wf)
+	}
+
+	// IPv6 literals are literals too.
+	v6 := &vpn.WireGuardConfig{
+		PrivateKey: "k", PublicKey: "p", Endpoint: "[2001:db8::1]:51820",
+	}
+	if got := torrentWGEndpointRefreshCmds(v6); got != nil {
+		t.Errorf("a literal IPv6 endpoint needs no refresh machinery, got %v", got)
+	}
+
+	if got := torrentWGEndpointRefreshCmds(testWGConf()); got == nil {
+		t.Error("a hostname endpoint must get the refresh machinery: the pinned hole " +
+			"would otherwise name the old address forever after the provider re-addresses")
+	}
+	if wf := wgRefreshWriteFile(testWGConf(), ufwFirewallCmds(testWGConf())); wf == nil {
+		t.Error("a hostname endpoint must get the refresh script")
+	}
+}
+
+// TestWGRefreshScriptFailsClosed pins the properties that make the refresh safe
+// to run unattended from a timer. Each one, if broken, converts a silent outage
+// into either a leak or a worse outage.
+func TestWGRefreshScriptFailsClosed(t *testing.T) {
+	cfg := testWGConf()
+	script := wgRefreshEndpointScript(cfg, ufwFirewallCmds(cfg))
+
+	// An empty answer must leave the existing pins alone. Clearing them would
+	// strand a guest whose tunnel was working, and rewriting them from an empty
+	// result would drop the handshake hole entirely.
+	if !strings.Contains(script, `if [ -z "$NEW" ]`) {
+		t.Error("no guard on an empty resolve result: a failed lookup must keep the old pins")
+	}
+
+	// The DNS hole must be withdrawn on every path, including the one where the
+	// lookup failed — otherwise a resolver outage leaves port 53 open to the
+	// nameservers indefinitely.
+	allowIdx := strings.Index(script, "ufw allow out to \"$ns\" port 53")
+	denyIdx := strings.Index(script, "ufw delete allow out to \"$ns\" port 53")
+	guardIdx := strings.Index(script, `if [ -z "$NEW" ]`)
+	switch {
+	case allowIdx < 0 || denyIdx < 0:
+		t.Fatal("the lookup needs a DNS hole and must close it again")
+	case denyIdx < allowIdx:
+		t.Error("the DNS hole is closed before it is opened")
+	case denyIdx > guardIdx:
+		t.Error("the DNS hole is closed only after the empty-result guard: a failed " +
+			"lookup would leave port 53 open")
+	}
+
+	// The DNS hole is pinned to specific nameservers, never opened wholesale.
+	if strings.Contains(script, "ufw allow out 53") {
+		t.Error("an unpinned DNS hole is a covert channel; pin it to the nameservers")
+	}
+
+	// New holes go in before old ones come out, so the handshake is never
+	// without a way through.
+	newIdx := strings.Index(script, "for ip in $NEW; do")
+	oldIdx := strings.Index(script, "for ip in $OLD; do")
+	if newIdx < 0 || oldIdx < 0 {
+		t.Fatal("the script must both install new holes and withdraw superseded ones")
+	}
+	if oldIdx < newIdx {
+		t.Error("old holes are withdrawn before the new ones are installed, leaving a gap")
+	}
+
+	// A corrected firewall alone is not enough: wg-quick freezes the peer
+	// address at "up" time, so the tunnel has to re-read its config.
+	if !strings.Contains(script, "systemctl restart wg-quick@wg0") {
+		t.Error("nothing forces wg-quick to re-read the endpoint; the firewall would be " +
+			"correct while the tunnel kept dialling the old address")
+	}
+}
+
+// TestWGRefreshRunsBeforeTunnelRecovery covers the ordering inside the retry
+// unit. The refresh has to run first: restarting the tunnel against a hole that
+// still names the old address just fails again.
+func TestWGRefreshRunsBeforeTunnelRecovery(t *testing.T) {
+	joined := strings.Join(torrentWGEndpointRefreshCmds(testWGConf()), "\n")
+
+	refresh := strings.Index(joined, wgRefreshScriptPath)
+	recover := strings.Index(joined, "wg show wg0")
+	if refresh < 0 || recover < 0 {
+		t.Fatalf("the retry unit must both refresh the endpoint and recover the tunnel:\n%s", joined)
+	}
+	if refresh > recover {
+		t.Error("the tunnel is restarted before the endpoint is re-resolved; the restart " +
+			"would race a firewall hole that still names the old address")
 	}
 }
