@@ -91,7 +91,9 @@ Templates apply sane defaults automatically:
   gaming-bazzite  Bazzite (Fedora Atomic) gaming ISO, 16G / 8 CPUs, KDE Plasma pre-installed
   gaming          Legacy alias for gaming-arch with passthrough
   passthrough     Raw NVMe boot + GPU passthrough, 8G / 6 CPUs, SPICE, virtiofs Games
-  torrent         Lightweight 4G / 2 CPUs, SPICE, qbittorrent-nox via cloud-init
+  torrent         Lightweight qbittorrent-nox via cloud-init, optional VPN kill-switch
+                  (supports --distro: ubuntu default, alpine — smaller, iptables
+                  kill-switch, WireGuard only)
   devbox          8G / 4 CPUs, Docker + zsh via cloud-init (supports --distro)
   server          8G / 2 CPUs, openssh + ufw + fail2ban via cloud-init (supports --distro)
   desktop         8G / 4 CPUs, GNOME + Mesa via cloud-init, accelerated virtio-gpu
@@ -136,6 +138,7 @@ Templates apply sane defaults automatically:
                   Pass --skip-first-boot to leave the guest at Setup Assistant.
 
 Supported distros for devbox/server: ubuntu, arch, fedora
+Supported distros for torrent: ubuntu (default), alpine
 Supported distros for desktop: fedora (default), ubuntu
 Use --distro-version latest (default) or a specific version string.
 
@@ -634,7 +637,7 @@ func init() {
 	createCmd.Flags().BoolVar(&createVsock, "vsock", false, "Attach a virtio-vsock device for a private host<->guest channel")
 	createCmd.Flags().BoolVar(&createHeadless, "headless", false, "Run VM headless (no display window); SSH-only access")
 	createCmd.Flags().IntVar(&createSSHPort, "ssh-port", 0, "Host port forwarded to VM port 22 (user-mode NAT; most templates default to a stable per-name port). Change later with `vee config <name> --ssh-port`")
-	createCmd.Flags().StringVar(&createDistro, "distro", "ubuntu", "Base OS distro for devbox/server templates: ubuntu, arch, fedora")
+	createCmd.Flags().StringVar(&createDistro, "distro", "ubuntu", "Base OS distro for devbox/server/torrent templates: ubuntu, arch, fedora, alpine (torrent: ubuntu or alpine)")
 	createCmd.Flags().StringVar(&createDistroVersion, "distro-version", "latest", "ISO version for the selected distro (e.g. 24.04, 2025.05.01, 42) or 'latest'")
 	createCmd.Flags().StringVar(&createIPSW, "ipsw", "", "macos template: restore image — 'latest', an https URL, or a local .ipsw path")
 	createCmd.Flags().StringVar(&createMacosvmDir, "macosvm-dir", "", "macos template: import an existing macosvm bundle directory instead of restoring")

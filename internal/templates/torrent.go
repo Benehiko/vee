@@ -353,7 +353,18 @@ func appendFstab(line, target string) string {
 // wgConf, if non-nil, injects a generic WireGuard config with a ufw kill-switch.
 // vpnProvider records the provider name (e.g. "nordvpn", "generic") for display/monitoring.
 // Only one of nordConf or wgConf should be set; nordConf takes precedence.
-func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, sshKeys []string, mounts []ShareMount, nfsMounts []NFSMount, nordConf *vpn.NordVPNConfig, wgConf *vpn.WireGuardConfig, vpnProvider string, spicePort int) (*vm.VMConfig, error) {
+//
+// distro selects the base OS. "" and "ubuntu" give the default Ubuntu base,
+// which enforces the kill-switch with ufw and runs qBittorrent under systemd.
+// "alpine" gives a much smaller guest that enforces the same policy with
+// iptables under OpenRC — see NewTorrentAlpineConfig for what that costs.
+func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, sshKeys []string, mounts []ShareMount, nfsMounts []NFSMount, nordConf *vpn.NordVPNConfig, wgConf *vpn.WireGuardConfig, vpnProvider string, spicePort int, distro string) (*vm.VMConfig, error) {
+	if distro == images.DistroAlpine {
+		return NewTorrentAlpineConfig(ctx, p, name, sshKeys, mounts, nfsMounts, nordConf, wgConf, vpnProvider)
+	}
+	if distro != "" && distro != images.DistroUbuntu {
+		return nil, fmt.Errorf("torrent template supports --distro ubuntu or alpine, got %q", distro)
+	}
 	conf := p.Config()
 	// port 0 → manager assigns a random free port at create time
 	_ = spicePort
