@@ -61,6 +61,45 @@ only the completed file is moved to the save path — this keeps the random smal
 writes of an active download off the network. Size the VM's disk to fit the largest
 set of torrents you expect to have downloading at once.
 
+## Base OS
+
+The default base is Ubuntu: qBittorrent runs as a systemd unit and the
+kill-switch is enforced with `ufw`.
+
+`--distro alpine` selects a much smaller Alpine guest that enforces the same
+policy with iptables under OpenRC:
+
+```sh
+vee create dl --template torrent --distro alpine
+```
+
+The Alpine base is the better-hardened of the two. Its inbound policy is
+default-drop rather than rule-by-rule, and two of the outbound holes are
+narrower than ufw's rule vocabulary can express — the SSH hole is restricted to
+connections that are already established (a bare source-port rule would let any
+process open new connections to the internet with the tunnel down), and DHCP
+renewal is pinned to the broadcast address.
+
+It costs two things:
+
+| | Ubuntu (default) | Alpine (`--distro alpine`) |
+|---|---|---|
+| Architecture | x86_64 and arm64 | x86_64 only |
+| SPICE display | Yes | No — headless; the web UI is reached over `vee tunnel` |
+| Memory | 2G | 1G |
+| Firewall | `ufw` | `iptables` |
+| NordVPN | NordVPN client (daemon kill-switch) | NordLynx config (firewall kill-switch) |
+
+**A NordVPN account works on both bases.** The NordVPN client is a snap and
+Alpine has no snapd, but NordLynx is WireGuard: on the Alpine base your account
+token is exchanged for a NordLynx `wg0.conf` and drives the same firewall
+kill-switch as any other WireGuard config. The prompt is identical either way.
+The difference is only in who enforces the kill-switch — the NordVPN daemon on
+Ubuntu, the firewall on Alpine.
+
+Existing Ubuntu VMs are unaffected — the base is chosen at create time and
+nothing migrates.
+
 ## VPN and the kill-switch
 
 A VPN is optional but is the reason most people run this template in a VM. Two
@@ -85,7 +124,10 @@ Choose option 2 and give the path to an existing `wg0.conf` from your provider.
 The guest gets a `ufw` kill-switch: the default outbound policy is deny, and the
 only unrestricted egress is the tunnel device itself.
 
-The exceptions punched through the deny policy are deliberately narrow:
+The exceptions punched through the deny policy are deliberately narrow. The
+table below names the `ufw` rules of the default Ubuntu base; the Alpine base
+applies the same policy with iptables, and narrows two of them further (see
+[Base OS](#base-os)):
 
 | Hole | Scope | Why |
 |------|-------|-----|
@@ -117,11 +159,18 @@ the VM looks healthy while downloading nothing. Check it with `vee network dl`.
 
 ### NordVPN
 
-Choose option 1 and supply an access token (and optionally a country). The
-template installs the NordVPN snap and connects over NordLynx. Here the
-kill-switch is enforced by the NordVPN daemon rather than by `ufw`, so the
-exceptions above do not apply — NFS servers and port 22 are registered with
-`nordvpn whitelist` instead.
+Choose option 1 and supply an access token (and optionally a country).
+
+On the default Ubuntu base the template installs the NordVPN snap and connects
+over NordLynx. The kill-switch is enforced by the NordVPN daemon rather than by
+`ufw`, so the exceptions above do not apply — NFS servers and port 22 are
+registered with `nordvpn whitelist` instead.
+
+On the Alpine base the token is exchanged for a NordLynx WireGuard config up
+front, and from there it is an ordinary WireGuard tunnel behind the firewall
+kill-switch — the exception table above applies unchanged. `vee network` reports
+the provider as `nordlynx`, since what the guest actually runs is a `wg0`
+interface rather than the NordVPN daemon.
 
 ### Verifying
 
@@ -130,6 +179,9 @@ egress IP. The egress IP is the one that matters: if it equals your home
 address, traffic is leaving outside the tunnel.
 
 ## Defaults
+
+Values for the default Ubuntu base; see [Base OS](#base-os) for where the
+Alpine base differs.
 
 | Setting | Value |
 |---------|-------|

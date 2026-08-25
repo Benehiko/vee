@@ -110,10 +110,12 @@ func TestVMTorrentWireGuard(t *testing.T) {
 			{HostDir: moviesDir, GuestPath: "/movies"},
 			{HostDir: showsDir, GuestPath: "/shows"},
 		},
+		nil, // no NFS mounts
 		nil, // no NordVPN
 		clientWGConf,
 		"wireguard",
 		0,
+		"", // default Ubuntu base
 	)
 	if err != nil {
 		t.Fatalf("NewTorrentConfig: %v", err)

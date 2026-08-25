@@ -376,7 +376,7 @@ func configFromTemplate(ctx context.Context, prov provider.Provider, opts Opts, 
 		}
 		return templates.NewTorrentConfig(ctx, prov, opts.Name, sshKeys,
 			opts.TorrentExtras.Mounts, opts.TorrentExtras.NFSMounts, opts.TorrentExtras.NordConf,
-			opts.TorrentExtras.WireGuard, opts.TorrentExtras.VPNProvider, spicePort)
+			opts.TorrentExtras.WireGuard, opts.TorrentExtras.VPNProvider, spicePort, opts.Distro)
 	case "devbox":
 		return templates.NewDevboxConfig(ctx, prov, opts.Name, sshKeys, opts.Distro, opts.DistroVersion)
 	case "server":

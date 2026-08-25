@@ -17,7 +17,7 @@ vee ships with built-in templates that configure QEMU arguments, cloud-init, net
 | [`gaming`]({{< relref "gaming" >}}) | Legacy alias for `gaming-arch` |
 | [`passthrough`]({{< relref "passthrough" >}}) | Raw NVMe boot + GPU passthrough, SPICE, virtiofs |
 | [`truenas`]({{< relref "truenas" >}}) | TrueNAS SCALE, AHCI OS disk, bridge NIC, SPICE |
-| [`torrent`]({{< relref "torrent" >}}) | Lightweight qbittorrent-nox, optional VPN kill-switch |
+| [`torrent`]({{< relref "torrent" >}}) | Lightweight qbittorrent-nox, optional VPN kill-switch, `--distro` ubuntu/alpine |
 | [`jellyfin`]({{< relref "jellyfin" >}}) | Jellyfin, NFS/SMB/host-dir/block/USB media, mDNS |
 | [`dns-sink`]({{< relref "dns-sink" >}}) | Alpine + AdGuard Home DNS sinkhole, LAN-wide ad and malware blocking |
 | [`windows`]({{< relref "windows" >}}) | Windows, UEFI; secure boot + TPM 2.0 on x86_64, NVMe + ramfb on arm64 |
