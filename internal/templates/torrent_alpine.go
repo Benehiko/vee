@@ -39,6 +39,17 @@ const torrentAlpineUser = "alpine"
 // directory is named explicitly via --profile instead.
 const torrentAlpineConfigDir = "/home/" + torrentAlpineUser + "/.config"
 
+// torrentAlpineConfPath is where qBittorrent actually reads its configuration
+// from, given --profile=torrentAlpineConfigDir.
+//
+// --profile names a *profile root*, not the directory holding the .conf:
+// qBittorrent appends "qBittorrent/config/" to it. Writing the file one level
+// up at "qBittorrent/qBittorrent.conf" leaves it silently unread — qBittorrent
+// starts against an empty profile, so WebUI\LocalHostAuth=false never applies
+// and it falls back to password auth, answering every tunnelled request with
+// 401 while printing a temporary admin password to its log.
+const torrentAlpineConfPath = torrentAlpineConfigDir + "/qBittorrent/config/qBittorrent.conf"
+
 // torrentAlpineRunCmds returns the ordered first-boot commands for the Alpine
 // base.
 //
@@ -177,7 +188,10 @@ func torrentAlpineMountCmds(mounts []ShareMount, nfsMounts []NFSMount) []string 
 	}
 
 	return append(cmds,
-		fmt.Sprintf("mkdir -p %s/qBittorrent", torrentAlpineConfigDir),
+		// The full "qBittorrent/config" path, not just its parent: that is the
+		// directory --profile resolves the .conf inside, and cloud-init writes the
+		// file before this runcmd chowns the tree.
+		fmt.Sprintf("mkdir -p %s/qBittorrent/config", torrentAlpineConfigDir),
 		fmt.Sprintf("chown -R %s:%s %s", torrentAlpineUser, torrentAlpineUser, torrentAlpineConfigDir),
 		// Incomplete torrents live on the VM's own disk, not on a share: the
 		// random small writes of an in-progress torrent are pathological over a
@@ -347,7 +361,7 @@ start_pre() {
 func torrentAlpineWriteFiles(savePath string, wgConf *vpn.WireGuardConfig) []vm.CloudInitWriteFile {
 	files := []vm.CloudInitWriteFile{
 		{
-			Path:        torrentAlpineConfigDir + "/qBittorrent/qBittorrent.conf",
+			Path:        torrentAlpineConfPath,
 			Content:     qbittorrentConf(savePath, incompletePath),
 			Permissions: "0600",
 		},
