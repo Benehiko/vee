@@ -359,10 +359,20 @@ start_pre() {
 // the Alpine base, and getting it wrong leaves qBittorrent unable to read its
 // own configuration.
 func torrentAlpineWriteFiles(savePath string, wgConf *vpn.WireGuardConfig) []vm.CloudInitWriteFile {
+	// Bind qBittorrent's peer traffic to the tunnel. The Alpine base has one
+	// tunnel interface for every provider — a NordVPN token is exchanged for a
+	// NordLynx WireGuard config before this is called, so there is no
+	// "nordlynx" interface here the way there is on the Ubuntu base. Without a
+	// VPN there is nothing to bind to.
+	bindIface := ""
+	if wgConf != nil {
+		bindIface = "wg0"
+	}
+
 	files := []vm.CloudInitWriteFile{
 		{
 			Path:        torrentAlpineConfPath,
-			Content:     qbittorrentConf(savePath, incompletePath),
+			Content:     qbittorrentConf(savePath, incompletePath, bindIface),
 			Permissions: "0600",
 		},
 		{
