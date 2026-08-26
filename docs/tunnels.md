@@ -71,7 +71,17 @@ The daemon reconciles this registry on every poll tick (every 5 seconds):
 
 The guest's address is resolved once per incoming connection rather than once
 when the tunnel starts, so a DHCP renewal that moves the guest is picked up
-without restarting anything. Existing connections are unaffected — a browser
+without restarting anything.
+
+Some services do not answer at the guest's own address at all. qBittorrent
+binds its web UI to guest loopback so a kill-switched guest cannot leak it to
+the LAN, and a user-mode NAT guest holds a `10.0.2.x` address that means
+nothing outside QEMU's network stack. For these, the daemon falls back to
+forwarding the connection over SSH to the guest's loopback — the one path that
+always lands inside the guest. The fallback is tried only after a direct dial
+fails, and once it succeeds the tunnel remembers it, so later requests do not
+pay the failed dial again. The daemon logs `routing this tunnel over ssh` the
+first time it happens. Existing connections are unaffected — a browser
 holding a keep-alive connection stays pinned to the old address until it opens
 a new one.
 

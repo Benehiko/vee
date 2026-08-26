@@ -158,8 +158,11 @@ func qbittorrentConf(savePath, tempPath, iface string) string {
 
 		// Web UI on guest loopback only, port 8080.
 		//
-		// vee tunnel is the only access path: HostFwds binds 127.0.0.1 on the
-		// host and the request reaches qBittorrent over guest loopback. A
+		// vee tunnel is the only access path. Under user-mode networking a
+		// hostfwd binds 127.0.0.1 on the host and the request reaches
+		// qBittorrent over guest loopback; on a bridge there is no hostfwd,
+		// so the daemon's tunnel forwards over SSH to guest loopback
+		// instead (see docs/tunnels.md). A
 		// wildcard bind gains nothing — LocalHostAuth=false skips
 		// authentication for loopback only, so a LAN client is answered 403 —
 		// and in bridge mode the guest holds a real LAN address, where the

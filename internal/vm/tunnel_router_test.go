@@ -35,7 +35,7 @@ func TestStartGuestProxyForwards(t *testing.T) {
 	defer cancel()
 
 	resolve := func(context.Context) (string, error) { return "127.0.0.1", nil }
-	p, err := startGuestProxy(ctx, "testvm", BindLoopback, 0, upstreamPort, resolve, zap.NewNop())
+	p, err := startGuestProxy(ctx, "testvm", BindLoopback, 0, upstreamPort, resolve, nil, zap.NewNop())
 	if err != nil {
 		t.Fatalf("startGuestProxy: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestStartGuestProxyEmptyBindDefaultsLoopback(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	resolve := func(context.Context) (string, error) { return "127.0.0.1", nil }
-	p, err := startGuestProxy(ctx, "testvm", "", 0, 9, resolve, zap.NewNop())
+	p, err := startGuestProxy(ctx, "testvm", "", 0, 9, resolve, nil, zap.NewNop())
 	if err != nil {
 		t.Fatalf("startGuestProxy: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestTunnelRouterRoutesByHost(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	resolve := func(context.Context) (string, error) { return "127.0.0.1", nil }
-	proxy, err := startGuestProxy(ctx, "media", BindLoopback, 0, upstreamPort, resolve, zap.NewNop())
+	proxy, err := startGuestProxy(ctx, "media", BindLoopback, 0, upstreamPort, resolve, nil, zap.NewNop())
 	if err != nil {
 		t.Fatalf("startGuestProxy: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestTunnelRouterUnknownHostServesIndex(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	resolve := func(context.Context) (string, error) { return "127.0.0.1", nil }
-	proxy, err := startGuestProxy(ctx, "media", BindLoopback, 0, 9, resolve, zap.NewNop())
+	proxy, err := startGuestProxy(ctx, "media", BindLoopback, 0, 9, resolve, nil, zap.NewNop())
 	if err != nil {
 		t.Fatalf("startGuestProxy: %v", err)
 	}
@@ -212,3 +212,57 @@ func TestActiveRoutesDuplicateLabelIsStable(t *testing.T) {
 func fmtSscan(s string, v *int) (int, error) { return fmt.Sscanf(s, "%d", v) }
 
 func itoa(i int) string { return strconv.Itoa(i) }
+
+// TestGuestProxyFallsBackWhenGuestAddressUnreachable covers the case that
+// broke background tunnels to qBittorrent and bitmagnet: the service does not
+// answer at the guest's own address, either because it is bound to guest
+// loopback or because the guest is on user-mode NAT. The proxy must not hang
+// on the refused dial — it must reach the service through the fallback.
+func TestGuestProxyFallsBackWhenGuestAddressUnreachable(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "reached via fallback")
+	}))
+	defer upstream.Close()
+
+	_, portStr, err := net.SplitHostPort(strings.TrimPrefix(upstream.URL, "http://"))
+	if err != nil {
+		t.Fatalf("parse upstream addr: %v", err)
+	}
+	var upstreamPort int
+	if _, err := fmtSscan(portStr, &upstreamPort); err != nil {
+		t.Fatalf("parse upstream port: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// 192.0.2.1 is TEST-NET-1 (RFC 5737): guaranteed not to answer, standing
+	// in for a guest address the service is not bound to.
+	resolve := func(context.Context) (string, error) { return "192.0.2.1", nil }
+
+	var fallbackCalls int
+	fallback := func(ctx context.Context, _ string, targetPort int) (net.Conn, error) {
+		fallbackCalls++
+		var d net.Dialer
+		return d.DialContext(ctx, "tcp", net.JoinHostPort("127.0.0.1", itoa(targetPort)))
+	}
+
+	p, err := startGuestProxy(ctx, "torrents", BindLoopback, 0, upstreamPort, resolve, fallback, zap.NewNop())
+	if err != nil {
+		t.Fatalf("startGuestProxy: %v", err)
+	}
+	defer p.Close()
+
+	resp, err := http.Get("http://127.0.0.1:" + itoa(p.Port()) + "/") //nolint:noctx // short-lived test request
+	if err != nil {
+		t.Fatalf("GET through proxy: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != "reached via fallback" {
+		t.Fatalf("proxied body = %q, want the fallback upstream", body)
+	}
+	if fallbackCalls == 0 {
+		t.Fatal("fallback was never used; the proxy only tried the guest address")
+	}
+}
