@@ -19,7 +19,15 @@ import (
 	"github.com/Benehiko/vee/internal/vm"
 )
 
-var tunnelSerialRaw bool
+var (
+	tunnelSerialRaw        bool
+	tunnelBindHost         bool
+	tunnelBackground       bool
+	tunnelList             bool
+	tunnelStop             bool
+	tunnelHostnameOverride string
+	tunnelYes              bool
+)
 
 // ansiEscape matches ANSI/VT100 escape sequences and lone CR used for cursor
 // control by bootloaders and terminal UIs (e.g. GRUB, UEFI shell). Covers:
@@ -41,11 +49,43 @@ TCP services print the forwarded address.
 For bridge-mode VMs, opens a direct TCP proxy — no SSH needed. If the guest
 firewall blocks the port from the LAN (e.g. a VPN kill-switch), falls back to
 an SSH -L tunnel.
-For user-mode VMs, opens an SSH -L tunnel.`,
-	Args:              cobra.RangeArgs(1, 2),
+For user-mode VMs, opens an SSH -L tunnel.
+
+Tunnels bind to localhost by default. Pass --host to bind 0.0.0.0 so devices
+on the LAN can reach the service; vee adds no authentication, so the guest
+application's own login is the only protection.
+
+Pass --background to hand the tunnel to the vee daemon, which keeps it up for
+as long as the VM runs and re-establishes it automatically on host boot once
+the guest comes back. HTTP services published with --host are also routed by
+name as http://<service>.<hostname>/.
+
+  vee tunnel --list                 show all background tunnels
+  vee tunnel <vm> <svc> --background --host   publish and persist a tunnel
+  vee tunnel <vm> <svc> --stop      remove a background tunnel`,
+	Args:              cobra.RangeArgs(0, 2),
 	ValidArgsFunction: completeTunnelArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// --list is VM-independent: it reports every registered background
+		// tunnel across all VMs.
+		if tunnelList {
+			statuses, daemonUp, err := tunnelListStatuses(cmd.Context(), false)
+			if err != nil && daemonUp {
+				return err
+			}
+			return printTunnelList(statuses, daemonUp, err)
+		}
+		if len(args) == 0 {
+			return fmt.Errorf("a VM name is required (or pass --list to show background tunnels)")
+		}
 		name := args[0]
+
+		if tunnelStop {
+			if len(args) != 2 {
+				return fmt.Errorf("--stop needs both a VM and a service: vee tunnel <vm> <service> --stop")
+			}
+			return unregisterBackgroundTunnel(cmd.Context(), name, args[1])
+		}
 
 		// serial is a built-in pseudo-service backed by a local log file.
 		// It works regardless of whether the VM is running.
@@ -66,9 +106,13 @@ For user-mode VMs, opens an SSH -L tunnel.`,
 
 		svcName := args[1]
 		for _, s := range services {
-			if s.Name == svcName {
-				return connectService(cmd, cfg, state, s)
+			if s.Name != svcName {
+				continue
 			}
+			if tunnelBackground {
+				return backgroundService(cmd, cfg, s)
+			}
+			return connectService(cmd, cfg, state, s)
 		}
 		return fmt.Errorf("unknown service %q — run 'vee tunnel %s' to list available services", svcName, name)
 	},
@@ -128,6 +172,18 @@ func tunnelSerial(cmd *cobra.Command, name string) error {
 
 func init() {
 	tunnelCmd.Flags().BoolVar(&tunnelSerialRaw, "raw", false, "Stream serial output without stripping ANSI escape codes")
+	tunnelCmd.Flags().BoolVar(&tunnelBindHost, "host", false,
+		"Bind 0.0.0.0 instead of localhost, exposing the service to the LAN (no authentication is added)")
+	tunnelCmd.Flags().BoolVar(&tunnelBackground, "background", false,
+		"Hand the tunnel to the vee daemon, which keeps it up and restores it on host boot")
+	tunnelCmd.Flags().BoolVar(&tunnelList, "list", false,
+		"List all background tunnels and exit")
+	tunnelCmd.Flags().BoolVar(&tunnelStop, "stop", false,
+		"Remove a background tunnel: vee tunnel <vm> <service> --stop")
+	tunnelCmd.Flags().StringVar(&tunnelHostnameOverride, "hostname", "",
+		"Name to publish an HTTP tunnel under (default: the service name)")
+	tunnelCmd.Flags().BoolVarP(&tunnelYes, "yes", "y", false,
+		"Skip the --host exposure confirmation prompt; use for scripting")
 }
 
 // serialWriter returns a writer that strips ANSI escape codes unless --raw.
@@ -156,6 +212,12 @@ func serviceURL(cfg *vm.VMConfig, s resolvedService) string {
 }
 
 func connectService(cmd *cobra.Command, cfg *vm.VMConfig, state *vm.VMState, s resolvedService) error {
+	// SPICE is bound by QEMU itself, so --host cannot change how it is
+	// exposed; warn only on the paths where vee owns the listener.
+	if tunnelBindHost && s.Protocol != vm.ServiceSPICE && !confirmHostBind(cfg.Name, s, tunnelYes) {
+		return fmt.Errorf("aborted")
+	}
+
 	localPort, err := freeLocalPort()
 	if err != nil {
 		return fmt.Errorf("find free local port: %w", err)
@@ -228,16 +290,36 @@ func findHostFwd(fwds []string, guestPort int) int {
 	return vm.FindHostFwd(fwds, guestPort)
 }
 
+// tunnelBindAddr is the address foreground tunnels listen on: loopback by
+// default, 0.0.0.0 under --host.
+func tunnelBindAddr() string {
+	if tunnelBindHost {
+		return vm.BindHost
+	}
+	return vm.BindLoopback
+}
+
+// tunnelURLHost is the host to print in a tunnel URL. Under --host the
+// listener is reachable across the LAN, so the machine's own name is more
+// useful than "localhost" — it is the address other devices can use.
+func tunnelURLHost() string {
+	if tunnelBindHost {
+		return tunnelHostname()
+	}
+	return "localhost"
+}
+
 func localServiceURL(s resolvedService, localPort int) string {
+	host := tunnelURLHost()
 	switch s.Protocol {
 	case vm.ServiceHTTP:
-		return fmt.Sprintf("http://localhost:%d", localPort)
+		return fmt.Sprintf("http://%s:%d", host, localPort)
 	case vm.ServiceHTTPS:
-		return fmt.Sprintf("https://localhost:%d", localPort)
+		return fmt.Sprintf("https://%s:%d", host, localPort)
 	case vm.ServiceSPICE:
-		return fmt.Sprintf("spice://localhost:%d", localPort)
+		return fmt.Sprintf("spice://%s:%d", host, localPort)
 	default:
-		return fmt.Sprintf("localhost:%d", localPort)
+		return fmt.Sprintf("%s:%d", host, localPort)
 	}
 }
 
@@ -355,7 +437,7 @@ func tunnelResolveIP(ctx context.Context, cfg *vm.VMConfig, state *vm.VMState) (
 // Blocks until Ctrl+C.
 func runTCPProxy(ctx context.Context, vmName string, localPort int, vmIP string, remotePort int) error {
 	var lc net.ListenConfig
-	ln, err := lc.Listen(ctx, "tcp", fmt.Sprintf("127.0.0.1:%d", localPort))
+	ln, err := lc.Listen(ctx, "tcp", net.JoinHostPort(tunnelBindAddr(), strconv.Itoa(localPort)))
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
@@ -419,7 +501,13 @@ func runSSHTunnel(vmName string, localPort int, sshHost string, sshPort, remoteP
 		"-i", identity,
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "UserKnownHostsFile=/dev/null",
-		"-L", fmt.Sprintf("%d:localhost:%d", localPort, remotePort),
+		// An -L spec without a bind address binds loopback only. Naming
+		// 0.0.0.0 explicitly is what --host needs; GatewayPorts=yes is
+		// required alongside it or ssh silently ignores the bind address.
+		"-L", fmt.Sprintf("%s:%d:localhost:%d", tunnelBindAddr(), localPort, remotePort),
+	}
+	if tunnelBindHost {
+		sshArgs = append(sshArgs, "-o", "GatewayPorts=yes")
 	}
 	if sshPort != 22 {
 		sshArgs = append(sshArgs, "-p", strconv.Itoa(sshPort))

@@ -58,3 +58,35 @@ vee tunnel myvm serial
 ```
 
 Pass `--raw` to stream serial output without stripping ANSI escape codes.
+
+## Binding to the LAN
+
+Tunnels bind `localhost` by default. `--host` binds `0.0.0.0` instead, so other
+devices on the network can reach the service:
+
+```sh
+vee tunnel media jellyfin --host
+```
+
+vee adds no authentication — the guest application's own login is the only
+protection — so the command warns and asks for confirmation before binding.
+Pass `--yes` to skip the prompt in scripts.
+
+## Background tunnels
+
+`--background` hands the tunnel to the vee daemon instead of holding it in the
+foreground. The daemon keeps it up for as long as the VM runs and re-establishes
+it automatically after a host reboot.
+
+```sh
+vee tunnel media jellyfin --host --background   # publish and persist
+vee tunnel --list                               # show all background tunnels
+vee tunnel media jellyfin --stop                # remove one
+```
+
+An HTTP service published this way is also routed by name on port 80, as
+`http://<service>.<hostname>/` — for example `http://jellyfin.benehiko-desktop/`.
+Use `--hostname` to publish under a different label.
+
+See [background tunnels](../../advanced/tunnels/) for the routing details, the
+DNS setup the names need, and how the registry persists across reboots.
