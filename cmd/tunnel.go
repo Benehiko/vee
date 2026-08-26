@@ -194,13 +194,17 @@ func connectService(cmd *cobra.Command, cfg *vm.VMConfig, state *vm.VMState, s r
 		}
 		// Kill-switched guests (e.g. the torrent template) accept only SSH
 		// from the LAN, so a direct proxy would hang on every connection.
-		if !tcpReachable(cmd.Context(), vmIP, s.Port) && state.SSHPort > 0 {
+		if !tcpReachable(cmd.Context(), vmIP, s.Port) {
+			sshHost, sshPort := tunnelSSHEndpoint(cmd.Context(), vmIP, state)
+			if sshPort == 0 {
+				return fmt.Errorf("%s:%d is not reachable from the host (guest firewall?) and no SSH endpoint is available to tunnel over", vmIP, s.Port)
+			}
 			fmt.Printf("%s:%d not reachable directly (guest firewall?) — tunnelling over SSH\n", vmIP, s.Port)
 			url := localServiceURL(s, localPort)
 			fmt.Printf("tunnelling localhost:%d → %s:%d\n", localPort, cfg.Name, s.Port)
 			fmt.Println(url)
 			maybeBrowser(s, url)
-			return runSSHTunnel(cfg.Name, localPort, "127.0.0.1", state.SSHPort, s.Port, cfg)
+			return runSSHTunnel(cfg.Name, localPort, sshHost, sshPort, s.Port, cfg)
 		}
 		url := localServiceURL(s, localPort)
 		fmt.Printf("tunnelling localhost:%d → %s:%d\n", localPort, cfg.Name, s.Port)
@@ -313,6 +317,26 @@ func tcpReachable(ctx context.Context, host string, port int) bool {
 	}
 	_ = conn.Close()
 	return true
+}
+
+// tunnelSSHEndpoint picks the host:port to run the SSH fallback over, mirroring
+// the dispatch in vee ssh so both commands reach a guest the same way.
+//
+// state.SSHPort is only recorded for user-mode NAT guests: Manager deliberately
+// leaves it zero on a bridge, where there is no hostfwd to record. Gating the
+// fallback on it therefore disabled the fallback on exactly the VMs that need
+// it — a bridged guest behind a VPN kill-switch, which drops every LAN port but
+// 22. Such a guest is still reachable at its own address on 22, so prefer the
+// recorded loopback port when something really answers there (the daemon's
+// bridge proxy, or QEMU hostfwd) and fall back to the guest IP otherwise.
+func tunnelSSHEndpoint(ctx context.Context, vmIP string, state *vm.VMState) (string, int) {
+	if state.SSHPort > 0 && loopbackSSHAlive(ctx, state.SSHPort) {
+		return "127.0.0.1", state.SSHPort
+	}
+	if vmIP != "" {
+		return vmIP, 22
+	}
+	return "", 0
 }
 
 func tunnelResolveIP(ctx context.Context, cfg *vm.VMConfig, state *vm.VMState) (string, error) {
