@@ -112,7 +112,7 @@ func (m *Manager) handleControlConn(ctx context.Context, conn net.Conn) {
 }
 
 // dispatchControl routes a control request to its handler.
-func (m *Manager) dispatchControl(_ context.Context, req controlRequest) controlResponse {
+func (m *Manager) dispatchControl(ctx context.Context, req controlRequest) controlResponse {
 	switch req.Op {
 	case "qmp":
 		if req.VM == "" || req.Execute == "" {
@@ -130,6 +130,30 @@ func (m *Manager) dispatchControl(_ context.Context, req controlRequest) control
 				}
 			}
 			return controlResponse{Error: err.Error()}
+		}
+		return controlResponse{Return: raw}
+	case "tunnel.list":
+		statuses, err := m.TunnelStatuses()
+		if err != nil {
+			return controlResponse{Error: err.Error()}
+		}
+		raw, err := json.Marshal(statuses)
+		if err != nil {
+			return controlResponse{Error: fmt.Sprintf("marshal tunnel statuses: %v", err)}
+		}
+		return controlResponse{Return: raw}
+	case "tunnel.reload":
+		// The CLI writes the registry directly, then asks the daemon to
+		// reconcile immediately rather than waiting out the poll interval —
+		// so `--background` prints a URL that already works.
+		m.reconcileTunnels(ctx)
+		statuses, err := m.TunnelStatuses()
+		if err != nil {
+			return controlResponse{Error: err.Error()}
+		}
+		raw, err := json.Marshal(statuses)
+		if err != nil {
+			return controlResponse{Error: fmt.Sprintf("marshal tunnel statuses: %v", err)}
 		}
 		return controlResponse{Return: raw}
 	case "ping":
@@ -195,6 +219,80 @@ func (m *Manager) QMPViaDaemon(ctx context.Context, vmName, execute string, args
 	// are still running with the old error-only reply.
 	if resp.NotOwned || strings.Contains(resp.Error, "does not own a QMP connection") {
 		return nil, true, errQMPNotOwned
+	}
+	if resp.Error != "" {
+		return nil, true, fmt.Errorf("%s", resp.Error)
+	}
+	return resp.Return, true, nil
+}
+
+// TunnelsViaDaemon asks the daemon for the live state of every registered
+// background tunnel. The bool reports whether a daemon answered *and*
+// understands the tunnel ops: false means none is running, or the one that is
+// predates background tunnels. Either way the caller falls back to reporting
+// the registry alone (registered, but nothing serving them).
+func (m *Manager) TunnelsViaDaemon(ctx context.Context, reload bool) ([]TunnelStatus, bool, error) {
+	op := "tunnel.list"
+	if reload {
+		op = "tunnel.reload"
+	}
+	raw, reachable, err := m.controlCall(ctx, controlRequest{Op: op})
+	if err != nil {
+		// A daemon from before background tunnels rejects the op outright.
+		// Treat it as "no capable daemon" rather than a hard error, so the
+		// CLI degrades to the registry view and tells the user to restart
+		// the daemon instead of failing with a protocol error.
+		if strings.Contains(err.Error(), "unknown op") {
+			return nil, false, ErrDaemonTooOld
+		}
+		return nil, reachable, err
+	}
+	var statuses []TunnelStatus
+	if err := json.Unmarshal(raw, &statuses); err != nil {
+		return nil, true, fmt.Errorf("parse tunnel statuses: %w", err)
+	}
+	return statuses, true, nil
+}
+
+// ErrDaemonTooOld reports that a daemon is running but predates the background
+// tunnel control ops. Callers treat it like "no daemon" for fallback purposes
+// while telling the user to restart the daemon rather than start one.
+var ErrDaemonTooOld = errors.New("the running vee daemon predates background tunnels; restart it to pick them up")
+
+// controlCall performs one request/response round trip on the daemon control
+// socket. Shared by the tunnel ops; QMPViaDaemon keeps its own copy because it
+// additionally interprets the not-owned sentinel.
+func (m *Manager) controlCall(ctx context.Context, req controlRequest) (json.RawMessage, bool, error) {
+	var dialer net.Dialer
+	dctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	conn, err := dialer.DialContext(dctx, "unix", m.DaemonSocketPath())
+	if err != nil {
+		return nil, false, err
+	}
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
+
+	data, err := json.Marshal(req)
+	if err != nil {
+		return nil, true, err
+	}
+	data = append(data, '\n')
+	if _, err := conn.Write(data); err != nil {
+		return nil, true, fmt.Errorf("write control request: %w", err)
+	}
+
+	scanner := bufio.NewScanner(conn)
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	if !scanner.Scan() {
+		if scanErr := scanner.Err(); scanErr != nil {
+			return nil, true, fmt.Errorf("read control response: %w", scanErr)
+		}
+		return nil, true, fmt.Errorf("daemon closed control connection without responding")
+	}
+	var resp controlResponse
+	if err := json.Unmarshal(scanner.Bytes(), &resp); err != nil {
+		return nil, true, fmt.Errorf("parse control response: %w", err)
 	}
 	if resp.Error != "" {
 		return nil, true, fmt.Errorf("%s", resp.Error)
