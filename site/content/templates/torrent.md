@@ -226,6 +226,71 @@ Alpine base differs.
 | CPUs | 1 |
 | Network | User-mode NAT |
 | Incomplete downloads | `/var/lib/qbittorrent/incomplete` (local disk) |
+| Peer traffic bound to | the VPN interface (`wg0`, or `nordlynx` on Ubuntu + NordVPN) |
+| Incoming listen port | 6881, fixed |
+| IPv6 | disabled |
+
+## qBittorrent client configuration
+
+Beyond the save paths, the generated `qBittorrent.conf` is tuned for two things:
+keeping traffic inside the tunnel, and finding peers aggressively.
+
+### Interface binding
+
+qBittorrent binds all peer traffic to the VPN interface by name. This is a
+second layer *underneath* the kill-switch, not a replacement for it — the
+kill-switch is a firewall policy and the binding is an address selection, so
+they fail in different ways. Two cases the firewall alone does not cover:
+
+- **The boot race.** qBittorrent can start before the tunnel is up. An unbound
+  session announces the guest's LAN address to trackers in that window. A bound
+  session has no interface to announce from and simply fails until the tunnel
+  arrives.
+- **A dead VPN daemon.** On the Ubuntu + NordVPN combination the kill-switch
+  lives inside the NordVPN daemon rather than in `ufw`, so a daemon that dies
+  takes the policy with it. The binding outlives it.
+
+Only the interface *name* is bound, never an address. The tunnel address is
+assigned by the provider at connect time and rotates on reconnect; libtorrent
+resolves the name to the current address itself and follows it across a
+re-address, which a hard-coded address could not do.
+
+The interface differs by base and provider. The Ubuntu base with a NordVPN
+account runs the NordVPN client, which creates a `nordlynx` interface; every
+other combination — including NordVPN on the Alpine base, where the token is
+exchanged for a NordLynx WireGuard config — runs `wg0`. With no VPN configured
+the session is left unbound, because there is no tunnel interface to bind to and
+the guest routes over the LAN by design.
+
+### IPv6
+
+Disabled in the session, matching the kill-switch. The firewall drops IPv6
+outright, so every v6 peer and announce the session attempted was a connection
+that could never complete — wasted connection slots and announce timeouts rather
+than a leak. Both layers now say the same thing.
+
+### Listen port
+
+Fixed at 6881. qBittorrent randomises the listen port on every start unless one
+is pinned, which makes behaviour irreproducible across reboots and defeats any
+port forward a VPN provider hands out. NordLynx forwards no port, so nothing can
+reach this listener there and the fixed value only buys reproducibility; on a
+WireGuard provider that does forward a port, 6881 is the one to forward.
+
+### Anonymous mode is deliberately off
+
+qBittorrent's anonymous mode strips the client fingerprint from the peer ID and
+drops the user-agent on tracker announces — but it also disables DHT, PeX and
+LSD, which is the peer discovery this template is tuned for. It hides *which
+client* you are, not *where* you are, and where you are is already the tunnel's
+job. The trade is real peer discovery for cosmetic fingerprint hiding, so it
+stays off.
+
+### Peer settings
+
+Encryption is forced (no unencrypted peer connections), DHT/PeX/LSD are all
+enabled, announces go to all trackers on every tier, and HTTPS tracker
+certificates are validated. Bandwidth is unlimited; seeding stops at ratio 3.0.
 
 ## Access
 
@@ -245,3 +310,10 @@ for loopback connections only; a request arriving from the LAN would be answered
 with `403` even if the firewall let it through. Reaching the UI therefore means
 having SSH access to the guest, which is the intended access model — the same
 one the Alpine base and the [bitmagnet]({{< relref "bitmagnet" >}}) template use.
+
+The listener itself is bound to guest loopback (`WebUI\Address=127.0.0.1`)
+rather than to every interface. On a bridged VM the guest holds a real LAN
+address, and a wildcard bind would leave the kill-switch as the only thing
+standing between the LAN and a listener that bypasses authentication. Binding
+narrowly means the firewall does not have to cover for it. The tunnel is
+unaffected, since it reaches qBittorrent over guest loopback either way.

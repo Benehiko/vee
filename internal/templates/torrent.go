@@ -470,10 +470,23 @@ func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, ssh
 		savePath = nfsMounts[0].GuestPath
 	}
 
+	// The interface qBittorrent binds its peer traffic to, decided by which
+	// VPN branch runs below. The NordVPN client brings up a "nordlynx"
+	// interface; a WireGuard config becomes "wg0". Without a VPN there is
+	// nothing to bind to and the session stays unbound, which is what routing
+	// over the LAN by design means.
+	bindIface := ""
+	switch {
+	case nordConf != nil:
+		bindIface = "nordlynx"
+	case wgConf != nil:
+		bindIface = "wg0"
+	}
+
 	writeFiles := []vm.CloudInitWriteFile{
 		{
 			Path:        "/home/vee/.config/qBittorrent/qBittorrent.conf",
-			Content:     qbittorrentConf(savePath, incompletePath),
+			Content:     qbittorrentConf(savePath, incompletePath, bindIface),
 			Permissions: "0600",
 			// Owner is the user only: cloudinit renders the vee account with
 			// no_user_group, so there is no "vee" group to chown to and

@@ -550,3 +550,53 @@ func TestAlpineCreatesConfDir(t *testing.T) {
 		t.Error("the runcmds must create the qBittorrent/config directory the profile resolves to")
 	}
 }
+
+// TestAlpineBindsQbittorrentToWG0 covers the Alpine base's binding. It has one
+// tunnel interface for every provider: a NordVPN token is exchanged for a
+// NordLynx WireGuard config before the write files are built, so there is no
+// "nordlynx" interface here the way there is on the Ubuntu base. Binding to
+// that name would name an interface that never appears.
+func TestAlpineBindsQbittorrentToWG0(t *testing.T) {
+	wgConf := &vpn.WireGuardConfig{
+		PrivateKey: "k", PublicKey: "p", Endpoint: "192.0.2.10:51820",
+	}
+
+	var conf string
+	for _, f := range torrentAlpineWriteFiles("/downloads", wgConf) {
+		if f.Path == torrentAlpineConfPath {
+			conf = f.Content
+		}
+	}
+	if conf == "" {
+		t.Fatal("no qBittorrent.conf is written")
+	}
+
+	for _, want := range []string{
+		"Session\\Interface=wg0",
+		"Session\\InterfaceName=wg0",
+	} {
+		if !strings.Contains(conf, want) {
+			t.Errorf("the Alpine base must bind qBittorrent to wg0: missing %q\ngot:\n%s", want, conf)
+		}
+	}
+	if strings.Contains(conf, "nordlynx") {
+		t.Error("the Alpine base runs no nordlynx interface: NordLynx arrives as a wg0 config")
+	}
+}
+
+// TestAlpineUnboundWithoutVPN pins the no-VPN case: nothing to bind to, and
+// binding to an interface that never appears would stop the session talking.
+func TestAlpineUnboundWithoutVPN(t *testing.T) {
+	var conf string
+	for _, f := range torrentAlpineWriteFiles("/downloads", nil) {
+		if f.Path == torrentAlpineConfPath {
+			conf = f.Content
+		}
+	}
+	if conf == "" {
+		t.Fatal("no qBittorrent.conf is written")
+	}
+	if strings.Contains(conf, "Session\\InterfaceName=") {
+		t.Errorf("no VPN means no interface to bind to\ngot:\n%s", conf)
+	}
+}

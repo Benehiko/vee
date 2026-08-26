@@ -2,6 +2,7 @@ package templates
 
 import (
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -16,7 +17,7 @@ import (
 // small writes of an in-progress torrent never cross a network filesystem;
 // only the completed file is moved to the save path.
 func TestQbittorrentConfTempPath(t *testing.T) {
-	conf := qbittorrentConf("/downloads/movies", incompletePath)
+	conf := qbittorrentConf("/downloads/movies", incompletePath, "wg0")
 
 	for _, want := range []string{
 		"Session\\DefaultSavePath=/downloads/movies",
@@ -40,7 +41,7 @@ func TestQbittorrentConfTempPath(t *testing.T) {
 // header ("localhost:42903") never matches the WebUI port — qBittorrent's
 // host header validation 401s every such request.
 func TestQbittorrentConfWebUIThroughTunnel(t *testing.T) {
-	conf := qbittorrentConf("/downloads", "")
+	conf := qbittorrentConf("/downloads", "", "wg0")
 	if !strings.Contains(conf, "WebUI\\HostHeaderValidation=false") {
 		t.Errorf("host header validation must be off, or tunnelled requests get 401:\n%s", conf)
 	}
@@ -49,7 +50,7 @@ func TestQbittorrentConfWebUIThroughTunnel(t *testing.T) {
 // TestQbittorrentConfTempPathFallback checks that an empty tempPath keeps the
 // pre-split behaviour rather than producing a bare "incomplete" relative path.
 func TestQbittorrentConfTempPathFallback(t *testing.T) {
-	conf := qbittorrentConf("/downloads", "")
+	conf := qbittorrentConf("/downloads", "", "wg0")
 	if !strings.Contains(conf, "Session\\TempPath=/downloads/incomplete") {
 		t.Errorf("empty tempPath should fall back to <savePath>/incomplete\ngot:\n%s", conf)
 	}
@@ -717,5 +718,148 @@ func TestWGRefreshRunsBeforeTunnelRecovery(t *testing.T) {
 	if refresh > recover {
 		t.Error("the tunnel is restarted before the endpoint is re-resolved; the restart " +
 			"would race a firewall hole that still names the old address")
+	}
+}
+
+// TestQbittorrentConfBindsToTunnel covers the interface binding, the second
+// layer under the kill-switch. The firewall is a policy and the binding is an
+// address selection, so they fail differently: qBittorrent can start before the
+// tunnel is up, and on the Ubuntu base the NordVPN daemon enforces its
+// kill-switch itself rather than through ufw, so a dead daemon takes the policy
+// with it. In both cases an unbound session announces the guest's LAN address.
+func TestQbittorrentConfBindsToTunnel(t *testing.T) {
+	for _, iface := range []string{"wg0", "nordlynx"} {
+		conf := qbittorrentConf("/downloads", incompletePath, iface)
+
+		for _, want := range []string{
+			"Session\\Interface=" + iface,
+			"Session\\InterfaceName=" + iface,
+		} {
+			if !strings.Contains(conf, want) {
+				t.Errorf("qbittorrentConf(%q) missing %q\ngot:\n%s", iface, want, conf)
+			}
+		}
+
+		// Never an address. The tunnel address is assigned at connect time and
+		// rotates on reconnect; libtorrent resolves the name to the current
+		// address itself, which a baked-in address could not follow.
+		if strings.Contains(conf, "Session\\InterfaceAddress=") {
+			t.Errorf("binding must be by name only: an address cannot follow a reconnect\ngot:\n%s", conf)
+		}
+	}
+}
+
+// TestQbittorrentConfUnboundWithoutVPN pins the no-VPN case. There is no tunnel
+// interface to bind to, and binding to one that never appears would stop the
+// session talking at all — the guest routes over the LAN there by design.
+func TestQbittorrentConfUnboundWithoutVPN(t *testing.T) {
+	conf := qbittorrentConf("/downloads", incompletePath, "")
+
+	for _, unwanted := range []string{
+		"Session\\Interface=",
+		"Session\\InterfaceName=",
+	} {
+		if strings.Contains(conf, unwanted) {
+			t.Errorf("no VPN means no interface to bind to, but found %q\ngot:\n%s", unwanted, conf)
+		}
+	}
+}
+
+// TestQbittorrentConfMatchesKillSwitchOnIPv6 keeps the session and the firewall
+// saying the same thing. The kill-switch drops IPv6 outright, so every v6 peer
+// and announce the session attempts is a connection that cannot complete —
+// wasted connection slots and announce timeouts rather than a leak.
+func TestQbittorrentConfMatchesKillSwitchOnIPv6(t *testing.T) {
+	conf := qbittorrentConf("/downloads", incompletePath, "wg0")
+	if !strings.Contains(conf, "Session\\IPv6Enabled=false") {
+		t.Errorf("IPv6 must be off to match the kill-switch\ngot:\n%s", conf)
+	}
+}
+
+// TestQbittorrentConfFixedListenPort covers reproducibility across reboots.
+// qBittorrent randomises the listen port on every start unless one is pinned,
+// which also defeats any port forward a VPN provider hands out.
+func TestQbittorrentConfFixedListenPort(t *testing.T) {
+	conf := qbittorrentConf("/downloads", incompletePath, "wg0")
+
+	for _, want := range []string{
+		"Session\\Port=" + strconv.Itoa(qbittorrentListenPort),
+		"Session\\UseRandomPort=false",
+	} {
+		if !strings.Contains(conf, want) {
+			t.Errorf("qbittorrentConf() missing %q\ngot:\n%s", want, conf)
+		}
+	}
+}
+
+// TestQbittorrentConfWebUIBindsLoopback pins the WebUI to guest loopback.
+//
+// A wildcard bind gained nothing: LocalHostAuth=false skips authentication for
+// loopback only, so a LAN client is answered 403, and no WebUI\Password is ever
+// set. But in bridge mode the guest holds a real LAN address, where the only
+// thing keeping 8080 unreachable is the kill-switch. Binding narrowly means the
+// firewall is not the sole thing standing between the LAN and an
+// authentication-bypassing listener.
+//
+// The tunnel is unaffected: HostFwds binds 127.0.0.1 on the host and the
+// request reaches qBittorrent over guest loopback, which is exactly what both
+// this bind and the LocalHostAuth bypass key on.
+func TestQbittorrentConfWebUIBindsLoopback(t *testing.T) {
+	conf := qbittorrentConf("/downloads", incompletePath, "wg0")
+
+	if !strings.Contains(conf, "WebUI\\Address=127.0.0.1") {
+		t.Errorf("the WebUI must bind guest loopback, not the LAN\ngot:\n%s", conf)
+	}
+	if strings.Contains(conf, "WebUI\\Address=*") {
+		t.Error("a wildcard bind puts an auth-bypassing listener on the LAN in bridge mode")
+	}
+	// The tunnel's half of it must survive the narrowing.
+	if !strings.Contains(conf, "WebUI\\LocalHostAuth=false") {
+		t.Error("the loopback auth bypass is what makes the tunnelled UI usable")
+	}
+}
+
+// TestQbittorrentConfAnonymousModeOff pins a deliberate omission. Anonymous
+// mode strips the client fingerprint from the peer ID and the tracker
+// user-agent, but it also disables DHT, PeX and LSD — the exact peer discovery
+// this config is tuned for. It hides which client you are, not where you are,
+// and where you are is the tunnel's job.
+func TestQbittorrentConfAnonymousModeOff(t *testing.T) {
+	conf := qbittorrentConf("/downloads", incompletePath, "wg0")
+
+	if strings.Contains(conf, "Session\\AnonymousModeEnabled=true") {
+		t.Error("anonymous mode disables DHT/PeX/LSD, which this config deliberately enables")
+	}
+	for _, want := range []string{
+		"Session\\DHTEnabled=true",
+		"Session\\PeXEnabled=true",
+		"Session\\LSDEnabled=true",
+	} {
+		if !strings.Contains(conf, want) {
+			t.Errorf("peer discovery must stay on: missing %q\ngot:\n%s", want, conf)
+		}
+	}
+}
+
+// TestTorrentUbuntuBindsPerVPNBranch checks the wiring rather than the renderer:
+// the Ubuntu base picks the interface name from whichever VPN branch it takes.
+// The NordVPN client brings up "nordlynx"; a WireGuard config brings up "wg0".
+// Getting this backwards binds the session to an interface that never appears,
+// which stops it talking entirely.
+func TestTorrentUbuntuBindsPerVPNBranch(t *testing.T) {
+	src, err := os.ReadFile("torrent.go")
+	if err != nil {
+		t.Fatalf("read torrent.go: %v", err)
+	}
+	s := string(src)
+
+	if !strings.Contains(s, `bindIface = "nordlynx"`) {
+		t.Error("the NordVPN branch must bind to nordlynx: that is the interface its client creates")
+	}
+	if !strings.Contains(s, `bindIface = "wg0"`) {
+		t.Error("the WireGuard branch must bind to wg0")
+	}
+	if !strings.Contains(s, "qbittorrentConf(savePath, incompletePath, bindIface)") {
+		t.Error("the rendered config must receive the branch's interface name")
 	}
 }
