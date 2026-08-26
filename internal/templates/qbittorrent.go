@@ -96,15 +96,27 @@ func qbittorrentConf(savePath, tempPath, iface string) string {
 		"Session\\CoalesceReadWrite=true",
 
 		// DHT, PeX, LSD for maximum peer discovery.
-		//
-		// This is also why anonymous mode stays off. Beyond stripping the
-		// client fingerprint from the peer ID and the tracker user-agent, it
-		// disables all three of these, which is the opposite of what this
-		// file is tuned for. It hides which client you are, not where you
-		// are — and where you are is the tunnel's job, already done.
 		"Session\\DHTEnabled=true",
 		"Session\\PeXEnabled=true",
 		"Session\\LSDEnabled=true",
+
+		// Anonymous mode. Strips the client fingerprint from the peer ID,
+		// sends a generic user-agent to trackers, withholds the configured
+		// IP address, and omits the client version from the peer extension
+		// handshake.
+		//
+		// On qBittorrent 2.9.0-3.2.5 (libtorrent < 1.0.0) this also killed
+		// DHT, LSD and UPnP/NAT-PMP, which would have gutted the peer
+		// discovery above. That behaviour moved to the separate "disable
+		// connections not supported by proxies" option in 3.3.0, and every
+		// base here installs 4.x or newer from the distro repos, so the two
+		// settings no longer conflict: discovery stays on and the
+		// fingerprint still goes away.
+		//
+		// This is defence in depth, not the primary control. The tunnel
+		// binding and the kill-switch cover where you are; this covers who
+		// you look like, which is what a tracker or peer logs alongside it.
+		"Session\\AnonymousModeEnabled=true",
 
 		// Announce to all trackers on each tier
 		"Session\\AnnounceToAllTrackers=true",

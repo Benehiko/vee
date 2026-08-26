@@ -819,24 +819,25 @@ func TestQbittorrentConfWebUIBindsLoopback(t *testing.T) {
 	}
 }
 
-// TestQbittorrentConfAnonymousModeOff pins a deliberate omission. Anonymous
-// mode strips the client fingerprint from the peer ID and the tracker
-// user-agent, but it also disables DHT, PeX and LSD — the exact peer discovery
-// this config is tuned for. It hides which client you are, not where you are,
-// and where you are is the tunnel's job.
-func TestQbittorrentConfAnonymousModeOff(t *testing.T) {
+// TestQbittorrentConfAnonymousModeOn pins anonymous mode together with the peer
+// discovery it once excluded. On qBittorrent 2.9.0-3.2.5 the two were mutually
+// exclusive: anonymous mode disabled DHT, LSD and UPnP/NAT-PMP outright. 3.3.0
+// moved that to the separate "disable connections not supported by proxies"
+// option, and every base installs 4.x or newer, so both must now hold at once.
+// If a future base ever pins an ancient qBittorrent, this test still passes
+// while the guest silently loses discovery — the version floor is the real
+// guard, and this pins the intent.
+func TestQbittorrentConfAnonymousModeOn(t *testing.T) {
 	conf := qbittorrentConf("/downloads", incompletePath, "wg0")
 
-	if strings.Contains(conf, "Session\\AnonymousModeEnabled=true") {
-		t.Error("anonymous mode disables DHT/PeX/LSD, which this config deliberately enables")
-	}
 	for _, want := range []string{
+		"Session\\AnonymousModeEnabled=true",
 		"Session\\DHTEnabled=true",
 		"Session\\PeXEnabled=true",
 		"Session\\LSDEnabled=true",
 	} {
 		if !strings.Contains(conf, want) {
-			t.Errorf("peer discovery must stay on: missing %q\ngot:\n%s", want, conf)
+			t.Errorf("anonymous mode and peer discovery must both stay on: missing %q\ngot:\n%s", want, conf)
 		}
 	}
 }
