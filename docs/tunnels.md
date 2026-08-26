@@ -117,22 +117,42 @@ returns an index of the published names.
 
 ### Making the names resolve
 
-The router matches on the `Host` header; it does not create DNS records. For
-`jellyfin.benehiko-desktop` to resolve on other devices, one of the following
-has to publish it:
+Reaching a published name takes two steps, and vee only performs the second:
 
-- **A wildcard record in your DNS server.** If you run the `dns-sink` template,
-  add a wildcard A record for `*.benehiko-desktop` pointing at the host's LAN
-  address. This is the least per-service work: new tunnels resolve without any
-  DNS change.
-- **Per-host records.** Add an A record per published name, pointing at the
-  host's address.
-- **`/etc/hosts` on each client.** Workable for one or two devices, tedious
-  beyond that.
+| Step | Question | Handled by |
+| --- | --- | --- |
+| Resolution | What address is `jellyfin.benehiko-desktop`? | your DNS — see below |
+| Routing | Which tunnel serves this request? | the vee router |
 
-Note that mDNS (`.local`) does not cover this case on its own: Avahi publishes
-the host's own name, not arbitrary subdomains of it, so a wildcard DNS entry is
-the practical route.
+The router matches on the `Host` header of a request that has already arrived.
+It publishes no DNS records, and it does not care what resolved the name — a
+wildcard record, a single A record, and a line in `/etc/hosts` all reach the
+same router. Until something resolves the name, though, the client fails before
+a request is ever sent, and the router never sees it.
+
+This split is deliberate. Name resolution is a property of your network, not of
+the VM manager, so vee leaves it to whatever already runs DNS for you.
+
+Any of these work:
+
+- **A wildcard record**, `*.benehiko-desktop` pointing at the host's LAN
+  address. The least ongoing work: new tunnels resolve without further DNS
+  changes.
+- **One record per name**, each pointing at the host's address. More explicit,
+  and keeps unpublished names unresolvable.
+- **`/etc/hosts` on each client.** No DNS server needed. Fine for one or two
+  devices, tedious beyond that.
+
+Where you add a record depends on what serves DNS on your network — a router,
+a Pi-hole, an AdGuard Home instance, or a VM running the `dns-sink` template.
+On AdGuard Home (which `dns-sink` runs), a wildcard goes under
+**Filters → DNS rewrites** as `*.benehiko-desktop` answering the host's LAN
+address. That is runtime state in the VM, so recreating it from the template
+does not carry the rewrite over.
+
+mDNS (`.local`) does not cover this case on its own: Avahi publishes the host's
+own name, not arbitrary subdomains of it, so a DNS entry of some kind is
+required either way.
 
 ### Port 80 and capabilities
 
