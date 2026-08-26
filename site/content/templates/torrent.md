@@ -277,14 +277,24 @@ port forward a VPN provider hands out. NordLynx forwards no port, so nothing can
 reach this listener there and the fixed value only buys reproducibility; on a
 WireGuard provider that does forward a port, 6881 is the one to forward.
 
-### Anonymous mode is deliberately off
+### Anonymous mode
 
-qBittorrent's anonymous mode strips the client fingerprint from the peer ID and
-drops the user-agent on tracker announces — but it also disables DHT, PeX and
-LSD, which is the peer discovery this template is tuned for. It hides *which
-client* you are, not *where* you are, and where you are is already the tunnel's
-job. The trade is real peer discovery for cosmetic fingerprint hiding, so it
-stays off.
+Enabled. qBittorrent's anonymous mode strips the client fingerprint from the
+peer ID, sends a generic user-agent on tracker announces, withholds the
+configured IP address from trackers, and omits the client version from the peer
+extension handshake.
+
+It is not a substitute for the tunnel. It hides *which client* you are, not
+*where* you are — where you are is the interface binding and the kill-switch.
+It is enabled as a second layer, because the client fingerprint is what a
+tracker or peer records next to your address.
+
+Peer discovery is unaffected. On qBittorrent 2.9.0–3.2.5 (libtorrent below
+1.0.0) anonymous mode also disabled DHT, LSD and UPnP/NAT-PMP, which would have
+conflicted with the discovery settings below. That behaviour moved to the
+separate "disable connections not supported by proxies" option in 3.3.0, and
+every base image installs 4.x or newer from its distro repositories, so DHT,
+PeX and LSD all stay on alongside it.
 
 ### Peer settings
 
