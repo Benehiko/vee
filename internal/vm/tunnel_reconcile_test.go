@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -147,8 +148,12 @@ func TestGuestProxyReresolvesPerConnection(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	current := "127.0.0.1"
-	resolve := func(context.Context) (string, error) { return current, nil }
+	// The resolver is called from the proxy's own goroutine, so the address
+	// the test swaps mid-run has to be published atomically.
+	var current atomic.Pointer[string]
+	first := "127.0.0.1"
+	current.Store(&first)
+	resolve := func(context.Context) (string, error) { return *current.Load(), nil }
 
 	p, err := startGuestProxy(ctx, "media", BindLoopback, 0, port, resolve, testLogger())
 	if err != nil {
@@ -162,7 +167,8 @@ func TestGuestProxyReresolvesPerConnection(t *testing.T) {
 
 	// The guest "moves" to a new address. The listener is untouched: only a
 	// per-connection resolve can pick this up.
-	current = "127.0.0.2"
+	second := "127.0.0.2"
+	current.Store(&second)
 	if got := getBody(t, p.Port()); got != "second" {
 		t.Fatalf("after the guest address changed, body = %q, want %q", got, "second")
 	}
