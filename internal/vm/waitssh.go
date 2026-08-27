@@ -113,6 +113,42 @@ func (m *Manager) WaitSSHReady(ctx context.Context, name string, timeout time.Du
 	}
 }
 
+// authProbeSpec reports the account and exec command the readiness probe can
+// use to prove a guest is actually usable over SSH. Only guests vee's key is
+// known to log into qualify: cloud-init-provisioned templates (which always
+// inject the vee key). Imported disks carry no account, and truenas uses a
+// password admin until backup injects the key — both stay on the weaker
+// reachability floor.
+func authProbeSpec(cfg *VMConfig) (user, cmd string, ok bool) {
+	if cfg == nil || cfg.Template == "truenas" {
+		return "", "", false
+	}
+	user = cfg.SSHUsername()
+	if user == "" {
+		return "", "", false
+	}
+	cmd = "true"
+	if cfg.WindowsGuest() {
+		cmd = "ver"
+	}
+	return user, cmd, true
+}
+
+// sshExecProbe reports whether one authenticated SSH exec round-trip to addr
+// succeeds. Budgets are per-tick: the caller polls, so a slow guest just
+// fails this attempt and is probed again.
+func (m *Manager) sshExecProbe(ctx context.Context, addr, user string, key []byte, cmd string) bool {
+	client, err := dialSSH(ctx, addr, user, key, 4*time.Second)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = client.Close() }()
+	runCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	_, _, err = client.Run(runCtx, cmd)
+	return err == nil
+}
+
 // waitCloudInitDone runs `cloud-init status --wait` on an established
 // connection, bounded by the caller's remaining time. Exit status 2 means
 // done with recoverable errors — still done; 127 means the guest has no

@@ -18,12 +18,11 @@ var waitCmd = &cobra.Command{
 	Use:   "wait <name>",
 	Short: "Block until a running VM is usable over SSH",
 	Long: `Blocks until an authenticated SSH command round-trip to the guest succeeds,
-then exits 0. This is a stronger signal than the boot-time spinner, whose
-readiness probe only checks that something accepts on the SSH port — which can
-happen before the guest's authorized keys are in place.
-
-With --cloud-init it additionally waits for the guest's first-boot
-provisioning to finish (cloud-init status --wait; POSIX guests only).
+then exits 0. vee start's boot wait uses the same probe for provisioned
+guests; wait covers the cases start cannot: a VM that is already running
+(started earlier, by the daemon, or from another terminal), and gating on
+first-boot provisioning with --cloud-init (cloud-init status --wait; POSIX
+guests only).
 
 Exits non-zero when the timeout passes or the VM's process exits.
 

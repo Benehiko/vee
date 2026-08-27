@@ -783,7 +783,34 @@ func (m *Manager) WaitReadyWithPhases(ctx context.Context, name string, timeout 
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 
+		// Tiered probe: for guests vee's key can log into, ready means an
+		// authenticated SSH exec round-trip succeeds — a bare port-accept can
+		// flip before cloud-init has written authorized_keys (or, on Windows,
+		// before the first-logon script ACLs them), leaving a "ready" VM that
+		// vee ssh cannot enter. Guests without a known account (imported
+		// disks, truenas) keep the reachability floor: TCP accept or QGA ping.
+		var probeUser, probeCmd string
+		var probeKey []byte
+		cfg, cfgErr := m.loadConfig(name)
+		if cfgErr == nil {
+			if user, cmd, ok := authProbeSpec(cfg); ok {
+				if home, herr := os.UserHomeDir(); herr == nil {
+					if key, kerr := readVeePrivateKey(filepath.Join(home, ".vee", "ssh", "id_ed25519")); kerr == nil {
+						probeUser, probeCmd, probeKey = user, cmd, key
+					}
+				}
+			}
+		}
+		authTier := probeKey != nil
+
 		probe := func() bool {
+			if authTier {
+				host, port, endpointErr := m.guestSSHEndpoint(watchCtx, cfg, state)
+				if endpointErr != nil {
+					return false
+				}
+				return m.sshExecProbe(watchCtx, fmt.Sprintf("%s:%d", host, port), probeUser, probeKey, probeCmd)
+			}
 			if state.SSHPort > 0 {
 				addr := fmt.Sprintf("127.0.0.1:%d", state.SSHPort)
 				dialer := net.Dialer{Timeout: 2 * time.Second}
@@ -832,6 +859,10 @@ func (m *Manager) WaitReadyWithPhases(ctx context.Context, name string, timeout 
 					return
 				}
 				if t.After(deadline) {
+					if authTier {
+						errCh <- fmt.Errorf("VM %q did not answer an authenticated SSH probe as %q within %s — check: vee logs %s", name, probeUser, timeout, name)
+						return
+					}
 					errCh <- fmt.Errorf("VM %q did not become ready within %s", name, timeout)
 					return
 				}
