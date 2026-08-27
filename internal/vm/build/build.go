@@ -228,6 +228,10 @@ func Build(ctx context.Context, prov provider.Provider, opts Opts) (*vm.VMConfig
 		return nil, fmt.Errorf("template is required")
 	}
 
+	if err := validateVirtiofsRequest(opts.VirtiofsDir, platform.SupportsVirtiofsd()); err != nil {
+		return nil, err
+	}
+
 	sshKeys, err := loadSSHKeys(opts.SSHKeyFile)
 	if err != nil {
 		return nil, err
@@ -319,6 +323,17 @@ func loadSSHKeys(path string) ([]string, error) {
 	}
 	keys = append(keys, veePubKey)
 	return keys, nil
+}
+
+// validateVirtiofsRequest refuses an explicit virtiofs share on hosts without
+// virtiofsd (Linux-only). Refusing at create beats the alternative: the
+// manager drops unsupported mounts at start with only a log-file warning, so
+// the VM would come up silently missing its share.
+func validateVirtiofsRequest(dir string, supported bool) error {
+	if dir == "" || supported {
+		return nil
+	}
+	return fmt.Errorf("virtiofs shares need virtiofsd, which is Linux-only (host: %s) — drop --virtiofs-dir and copy files with vee cp, or use an NFS mount", platform.HostOS())
 }
 
 // KnownTemplates is the canonical list of template names — exactly the case

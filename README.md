@@ -235,7 +235,9 @@ See [docs/gpu-passthrough-gaming.md](docs/gpu-passthrough-gaming.md) for Sunshin
 | `vee stop <name>` | Graceful shutdown |
 | `vee list` | List all VMs and status |
 | `vee status <name>` | Show detailed status of a VM |
+| `vee wait <name>` | Block until a running VM answers an authenticated SSH round-trip (`--cloud-init` also waits for first-boot provisioning) |
 | `vee ssh <name>` | Open a shell |
+| `vee cp <src> <dst>` | Copy files between the host and a running VM (`<vm>:<path>` on one side) |
 | `vee ssh-share <name>` | Share host SSH agent into the VM via AF_VSOCK |
 | `vee tunnel <name> [service]` | List VM services, or open/connect to one (`--host` binds the LAN, `--background` hands it to the daemon, `--list` shows background tunnels) |
 | `vee ports <name>` | List bound TCP ports and process names in a running VM |

@@ -45,6 +45,8 @@ var CLICoverage = map[string]Coverage{
 	"check":      {Tools: []string{"vm_check"}},
 	"network":    {Tools: []string{"vm_network"}},
 	"backup":     {Tools: []string{"vm_backup", "vm_backup_list"}, Note: "the interactive directory picker stays CLI-only; pass dirs explicitly"},
+	"cp":         {Tools: []string{"vm_cp"}},
+	"wait":       {Tools: []string{"vm_wait"}, Note: "vm_start also waits at boot; vm_wait gates on an authenticated SSH round-trip"},
 	"autostart": {
 		Tools: []string{"vm_autostart"},
 	},

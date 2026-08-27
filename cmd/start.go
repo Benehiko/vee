@@ -80,6 +80,10 @@ var startCmd = &cobra.Command{
 			}
 		}
 
+		if cfg, cfgErr := mgr.LoadConfig(name); cfgErr == nil {
+			warnUnsupportedVirtiofs(cfg)
+		}
+
 		wasInstalling := isInstalling(mgr, name)
 		if startForeground {
 			if recoveryNote != "" {

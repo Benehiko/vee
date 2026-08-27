@@ -1,13 +1,11 @@
 package cmd
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
-	"slices"
 	"strings"
 	"time"
 
@@ -164,7 +162,7 @@ Examples:
 			veeKnownHosts = home + "/.vee/ssh/known_hosts"
 		}
 		if veeKnownHosts != "" {
-			scrubKnownHost(veeKnownHosts, host, port)
+			vm.ScrubKnownHost(veeKnownHosts, host, port)
 		}
 
 		sshArgs := buildSSHArgs(user, host, port, sshIdentity, veeKnownHosts, remoteCmd, sshExtraFlags, cfg.WindowsGuest())
@@ -388,44 +386,4 @@ func init() {
 			panic(err) // only fails for a flag that was not just registered
 		}
 	}
-}
-
-// scrubKnownHost removes all lines matching host (and [host]:port for non-22
-// ports) from the vee-managed known_hosts file. Called before every connect so
-// a reinstalled VM with the same IP never blocks with a host-key-changed error.
-func scrubKnownHost(knownHostsPath, host string, port int) {
-	data, err := os.ReadFile(knownHostsPath) //nolint:gosec // knownHostsPath is the fixed vee-managed ~/.vee/ssh/known_hosts.
-	if err != nil {
-		return
-	}
-
-	// Build the key patterns we want to drop: bare host for port 22,
-	// bracketed [host]:port for any other port.
-	drop := host
-	if port != 22 {
-		drop = fmt.Sprintf("[%s]:%d", host, port)
-	}
-
-	var kept []string
-	scanner := bufio.NewScanner(strings.NewReader(string(data)))
-	for scanner.Scan() {
-		line := scanner.Text()
-		// Each known_hosts line starts with the host pattern (possibly
-		// comma-separated), then a space, then the key type and key.
-		fields := strings.Fields(line)
-		if len(fields) == 0 {
-			kept = append(kept, line)
-			continue
-		}
-		if !slices.Contains(strings.Split(fields[0], ","), drop) {
-			kept = append(kept, line)
-		}
-	}
-
-	out := strings.Join(kept, "\n")
-	if len(kept) > 0 {
-		out += "\n"
-	}
-	//nolint:gosec // knownHostsPath is the fixed vee-managed ~/.vee/ssh/known_hosts.
-	_ = os.WriteFile(knownHostsPath, []byte(out), 0o600)
 }

@@ -87,6 +87,8 @@ switch, each link guarded by a test.
 | `image_pull` | mutating | Download/build a base image into the cache (long-running for large images) |
 | `vm_backup` | mutating | rsync guest directories to the host over SSH; `dirs` are explicit guest paths |
 | `vm_backup_list` | read-only | Past and in-progress backup runs |
+| `vm_cp` | mutating | Copy a file/directory between host and guest over scp (`direction`: `to_guest`/`from_guest`) |
+| `vm_wait` | read-only | Block until the guest answers an authenticated SSH round-trip (`cloud_init` also waits for first-boot provisioning) |
 | `gpu_list` | read-only | PCI devices by IOMMU group with drivers (Linux) |
 | `gpu_status` | read-only | VFIO passthrough pre-flight for one device |
 | `runner_key` | mutating | A GitHub runner's SSH public key (generates the global key on first use) |
