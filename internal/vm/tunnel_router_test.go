@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"go.uber.org/zap"
@@ -240,9 +241,11 @@ func TestGuestProxyFallsBackWhenGuestAddressUnreachable(t *testing.T) {
 	// in for a guest address the service is not bound to.
 	resolve := func(context.Context) (string, error) { return "192.0.2.1", nil }
 
-	var fallbackCalls int
+	// Counted atomically: the fallback runs on the proxy's forward goroutine,
+	// which can outlive the HTTP exchange the test goroutine observes.
+	var fallbackCalls atomic.Int64
 	fallback := func(ctx context.Context, _ string, targetPort int) (net.Conn, error) {
-		fallbackCalls++
+		fallbackCalls.Add(1)
 		var d net.Dialer
 		return d.DialContext(ctx, "tcp", net.JoinHostPort("127.0.0.1", itoa(targetPort)))
 	}
@@ -262,7 +265,7 @@ func TestGuestProxyFallsBackWhenGuestAddressUnreachable(t *testing.T) {
 	if string(body) != "reached via fallback" {
 		t.Fatalf("proxied body = %q, want the fallback upstream", body)
 	}
-	if fallbackCalls == 0 {
+	if fallbackCalls.Load() == 0 {
 		t.Fatal("fallback was never used; the proxy only tried the guest address")
 	}
 }
