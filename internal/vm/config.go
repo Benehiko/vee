@@ -115,6 +115,12 @@ type GPUConfig struct {
 	// HostMem sizes the host memory window for blob resources used by Venus
 	// (e.g. "8G"). Only relevant when Venus is true.
 	HostMem string `yaml:"host_mem,omitempty" json:"host_mem,omitempty"`
+	// disableGL forces the plain 2D adapter for one boot; set by the
+	// start-time GL-crash retry when the resolved QEMU's windowed display
+	// backend was built without OpenGL. Unexported so it never persists —
+	// the limitation belongs to the QEMU binary, not the VM, and a future
+	// GL-capable QEMU should pick GL back up.
+	disableGL bool
 }
 
 // MacOSConfig carries the artifacts a macOS guest needs, in backend-neutral
