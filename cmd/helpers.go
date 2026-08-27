@@ -4,11 +4,25 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"time"
 
+	"github.com/Benehiko/vee/internal/platform"
 	"github.com/Benehiko/vee/internal/qemu"
 	"github.com/Benehiko/vee/internal/vm"
 )
+
+// warnUnsupportedVirtiofs surfaces to the terminal what the manager only
+// writes to the log file: on hosts without virtiofsd the VM's virtiofs shares
+// are skipped at start. Pre-existing configs still boot (create refuses new
+// explicit shares on such hosts), so the boot must say the share is missing.
+func warnUnsupportedVirtiofs(cfg *vm.VMConfig) {
+	if cfg == nil || len(cfg.VirtiofsMounts) == 0 || platform.SupportsVirtiofsd() {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "Warning: skipping %d virtiofs share(s) for %q — virtiofsd is Linux-only; copy files with vee cp instead\n",
+		len(cfg.VirtiofsMounts), cfg.Name)
+}
 
 // loadRunningVM looks up a VM by name and returns its config and state.
 // Returns an error if the VM is not found or not running.

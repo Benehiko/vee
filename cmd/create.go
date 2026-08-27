@@ -207,11 +207,11 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
 			if len(nfsMounts) > 0 && opts.NICMode == "user" {
 				return fmt.Errorf("--nfs-mount requires --nic-mode=bridge (user-mode NAT cannot reach an NFS server on the LAN)")
 			}
-			// Only prompt for virtiofs shares when no NFS mount was given:
-			// otherwise a fully flag-driven invocation would still block on a
-			// prompt.
+			// Only prompt for virtiofs shares when no NFS mount was given
+			// (otherwise a fully flag-driven invocation would still block on
+			// a prompt) and the host can actually back them.
 			var mounts []templates.ShareMount
-			if len(nfsMounts) == 0 {
+			if len(nfsMounts) == 0 && platform.SupportsVirtiofsd() {
 				var mountErr error
 				mounts, mountErr = promptShareMounts(opts.VirtiofsDir)
 				if mountErr != nil {
@@ -352,6 +352,7 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
 				line, err := stdinReader.ReadString('\n')
 				return strings.TrimRight(line, "\r\n"), err
 			}
+			warnUnsupportedVirtiofs(cfg)
 			wasInstalling := isInstalling(mgr, name)
 			if err := mgr.Start(cmd.Context(), name, false); err != nil {
 				if strings.Contains(err.Error(), "already running") {
@@ -642,7 +643,7 @@ func init() {
 	createCmd.Flags().StringVar(&createGPUMode, "gpu-mode", "none", "GPU mode: none, virtio, passthrough")
 	createCmd.Flags().StringVar(&createGPUPCI, "gpu-pci", "", "PCI address for GPU passthrough (e.g. 08:00.0)")
 	createCmd.Flags().BoolVar(&createAntiDetect, "anti-detect", false, "Apply anti-hypervisor-detection CPU flags (gaming passthrough)")
-	createCmd.Flags().StringVar(&createVirtiofsDir, "virtiofs-dir", "", "Host directory to share via virtiofsd")
+	createCmd.Flags().StringVar(&createVirtiofsDir, "virtiofs-dir", "", "Host directory to share via virtiofsd (Linux hosts only)")
 	createCmd.Flags().StringVar(&createVirtiofsTag, "virtiofs-tag", "share", "Mount tag for the virtiofs share")
 	createCmd.Flags().StringArrayVar(&createNFSMounts, "nfs-mount", nil, "NFS export mounted inside the guest as SERVER:EXPORT:GUESTPATH (repeatable; torrent template; requires --nic-mode=bridge)")
 	createCmd.Flags().StringVar(&createSSHKeyFile, "ssh-keys", "", "Path to file containing SSH public keys (one per line)")

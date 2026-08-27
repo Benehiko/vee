@@ -9,7 +9,7 @@ Start a VM in the background and wait until it is ready.
 vee start <name>
 ```
 
-vee spawns QEMU as a background process, then polls until the VM is reachable via SSH or the guest agent confirms it is up. Progress is shown as a spinner; the command exits when the VM is ready.
+vee spawns QEMU as a background process, then polls until the VM is ready. For provisioned guests (any cloud-init template — vee's SSH key is injected there), ready means an authenticated SSH command round-trip succeeds, so `vee ssh` works the moment start returns. Guests vee cannot log into (imported disks, truenas) fall back to a reachability probe: the SSH port accepts, or the guest agent answers. Progress is shown as a spinner; the command exits when the VM is ready.
 
 If stdout is not a TTY (e.g. in a script), the spinner is skipped and a plain message is printed when the VM is ready.
 

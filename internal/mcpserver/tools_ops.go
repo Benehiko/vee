@@ -8,12 +8,15 @@ package mcpserver
 // cmd's TestMCPCoversCLI.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -118,6 +121,19 @@ func (s *server) registerOps(srv *mcp.Server) []string {
 		Description: "Back up directories from a running VM to the host via rsync over SSH. dirs are absolute guest paths. " +
 			"Long-running for large directories.",
 	}, s.vmBackup)
+
+	addTool(srv, &names, &mcp.Tool{
+		Name: "vm_cp",
+		Description: "Copy a file or directory between the host and a running VM over scp. " +
+			"direction is to_guest or from_guest; an empty guest_path means the login user's home directory.",
+	}, s.vmCp)
+
+	addTool(srv, &names, &mcp.Tool{
+		Name: "vm_wait",
+		Description: "Block until a running VM answers an authenticated SSH command round-trip (a stronger signal than vm_start's boot wait, " +
+			"whose probe only checks the SSH port accepts). Set cloud_init=true to also wait for first-boot provisioning (POSIX guests).",
+		Annotations: readOnly,
+	}, s.vmWait)
 
 	addTool(srv, &names, &mcp.Tool{
 		Name:        "image_catalog",
@@ -657,6 +673,79 @@ func (s *server) vmBackup(_ context.Context, _ *mcp.CallToolRequest, in vmBackup
 		return nil, vmBackupOut{RunID: runID, Dest: dest, Status: string(backup.StatusFailed), Dirs: in.Dirs}, err
 	}
 	return nil, vmBackupOut{RunID: runID, Dest: dest, Status: string(backup.StatusDone), Dirs: in.Dirs}, nil
+}
+
+// ---- vm_cp ----
+
+type vmCpIn struct {
+	Name      string `json:"name" jsonschema:"name of the VM"`
+	GuestPath string `json:"guest_path,omitempty" jsonschema:"path inside the guest; empty = the login user's home directory"`
+	HostPath  string `json:"host_path" jsonschema:"path on the host"`
+	Direction string `json:"direction" jsonschema:"to_guest (host→guest) or from_guest (guest→host)"`
+	Recursive bool   `json:"recursive,omitempty" jsonschema:"copy directories recursively"`
+}
+
+type vmCpOut struct {
+	Name      string `json:"name"`
+	GuestPath string `json:"guest_path"`
+	HostPath  string `json:"host_path"`
+	Direction string `json:"direction"`
+}
+
+func (s *server) vmCp(ctx context.Context, _ *mcp.CallToolRequest, in vmCpIn) (*mcp.CallToolResult, vmCpOut, error) {
+	var toGuest bool
+	switch in.Direction {
+	case "to_guest":
+		toGuest = true
+	case "from_guest":
+	default:
+		return nil, vmCpOut{}, fmt.Errorf("direction must be to_guest or from_guest, got %q", in.Direction)
+	}
+	if in.HostPath == "" {
+		return nil, vmCpOut{}, fmt.Errorf("host_path is required")
+	}
+
+	// scp's terminal output is progress-meter noise here; keep stderr for
+	// error context only.
+	var errBuf bytes.Buffer
+	spec := vm.CopySpec{
+		VMName:    in.Name,
+		GuestPath: in.GuestPath,
+		HostPath:  in.HostPath,
+		ToGuest:   toGuest,
+		Recursive: in.Recursive,
+	}
+	if err := s.mgr.CopyPath(ctx, spec, io.Discard, &errBuf); err != nil {
+		if msg := strings.TrimSpace(errBuf.String()); msg != "" {
+			return nil, vmCpOut{}, fmt.Errorf("%w: %s", err, msg)
+		}
+		return nil, vmCpOut{}, err
+	}
+	return nil, vmCpOut{Name: in.Name, GuestPath: in.GuestPath, HostPath: in.HostPath, Direction: in.Direction}, nil
+}
+
+// ---- vm_wait ----
+
+type vmWaitIn struct {
+	Name           string `json:"name" jsonschema:"name of the VM"`
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty" jsonschema:"give up after this long; default 300"`
+	CloudInit      bool   `json:"cloud_init,omitempty" jsonschema:"also wait for cloud-init to finish (POSIX guests)"`
+}
+
+type vmWaitOut struct {
+	Name  string `json:"name"`
+	Ready bool   `json:"ready"`
+}
+
+func (s *server) vmWait(ctx context.Context, _ *mcp.CallToolRequest, in vmWaitIn) (*mcp.CallToolResult, vmWaitOut, error) {
+	timeout := 300 * time.Second
+	if in.TimeoutSeconds > 0 {
+		timeout = time.Duration(in.TimeoutSeconds) * time.Second
+	}
+	if err := s.mgr.WaitSSHReady(ctx, in.Name, timeout, in.CloudInit); err != nil {
+		return nil, vmWaitOut{Name: in.Name}, err
+	}
+	return nil, vmWaitOut{Name: in.Name, Ready: true}, nil
 }
 
 // backupSSHConn resolves the SSH connection for a backup like the CLI does,

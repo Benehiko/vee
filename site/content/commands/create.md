@@ -27,7 +27,7 @@ vee create <name> [flags]
 | `--ovmf-vars` | Custom OVMF_VARS.fd for UEFI |
 | `--gpu-pci` | GPU PCI address for passthrough, e.g. `08:00.0` |
 | `--nic-mode` | Networking mode: `user` or `bridge` |
-| `--virtiofs-dir` | Host directory to share into the VM |
+| `--virtiofs-dir` | Host directory to share into the VM (Linux hosts only) |
 | `--nested` | Expose nested virtualization (EL2) so the guest can run KVM — arm64 QEMU guests only; under HVF needs QEMU ≥ 11.1 plus an M3+ Mac on macOS 15+ |
 
 ## Extra disks
