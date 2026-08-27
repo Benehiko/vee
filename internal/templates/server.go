@@ -15,12 +15,19 @@ import (
 // NewServerConfig returns a VMConfig for a minimal server VM.
 // distro selects the base OS (ubuntu, arch, fedora); version selects the ISO version ("latest" for newest).
 // sshKeys are injected into the default user's authorized_keys.
-func NewServerConfig(ctx context.Context, p provider.Provider, name string, sshKeys []string, distro, version string) (*vm.VMConfig, error) {
+// emulate opts into TCG emulation when the distro's image does not support
+// the host architecture (the Arch bootstrap image is x86_64-only).
+func NewServerConfig(ctx context.Context, p provider.Provider, name string, sshKeys []string, distro, version string, emulate bool) (*vm.VMConfig, error) {
 	if distro == "" {
 		distro = images.DistroUbuntu
 	}
 	if version == "" {
 		version = "latest"
+	}
+
+	guestArch, err := guestArchFor(distro, emulate)
+	if err != nil {
+		return nil, err
 	}
 
 	img, err := images.NewImage(p, distro, version)
@@ -45,6 +52,7 @@ func NewServerConfig(ctx context.Context, p provider.Provider, name string, sshK
 	cfg := &vm.VMConfig{
 		Name:     name,
 		Template: "server",
+		Arch:     guestArch,
 		Memory:   "8G",
 		CPUs:     2,
 		Sockets:  1,

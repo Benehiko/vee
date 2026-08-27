@@ -30,7 +30,16 @@ func firstExisting(fallback string, candidates ...string) string {
 // QEMU, UTM, or the vee-managed bundle. Paths are best-effort defaults; the
 // firmware is resolved/installed for real in the qemubin layer.
 func defaultFirmware(home string) (code, vars, secboot string) {
-	if platform.DefaultGuestArch() == "aarch64" {
+	return FirmwareForArch(home, platform.DefaultGuestArch())
+}
+
+// FirmwareForArch returns the UEFI code/vars/secboot firmware paths for a
+// specific guest architecture ("aarch64" or "x86_64"). The config's default
+// paths cover the host-native arch; cross-arch (TCG-emulated) guests resolve
+// their firmware through this instead — e.g. an x86_64 guest on an Apple
+// Silicon host needs edk2-x86_64 code, not AAVMF.
+func FirmwareForArch(home, guestArch string) (code, vars, secboot string) {
+	if guestArch == "aarch64" || guestArch == "arm64" {
 		veeCode := filepath.Join(home, ".vee", "share", "qemu", "edk2-aarch64-code.fd")
 		veeVars := filepath.Join(home, ".vee", "share", "qemu", "edk2-arm-vars.fd")
 		code = firstExisting(veeCode,

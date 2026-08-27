@@ -238,7 +238,7 @@ var templateCatalog = []templateInfo{
 	{Name: "devbox", Description: "Docker + zsh via cloud-init", Params: "distro (ubuntu|arch|fedora|omarchy), distro_version"},
 	{Name: "server", Description: "openssh + ufw + fail2ban via cloud-init", Params: "distro (ubuntu|arch|fedora), distro_version"},
 	{Name: "desktop", Description: "GNOME + Mesa, accelerated virtio-gpu (virgl)", Params: "distro (fedora|ubuntu|omarchy)"},
-	{Name: "omarchy", Description: "Omarchy (Arch + Hyprland) desktop, unattended ISO install seeded with user + SSH keys (sshd enabled), accelerated virtio-gpu (virgl)", Params: "distro_version, user, password"},
+	{Name: "omarchy", Description: "Omarchy (Arch + Hyprland) desktop, unattended ISO install seeded with user + SSH keys (sshd enabled), accelerated virtio-gpu (virgl); x86_64-only — non-x86_64 hosts need emulate=true (TCG, slow)", Params: "distro_version, user, password, emulate"},
 	{Name: "docker", Description: "Alpine Linux with the Docker daemon on tcp://localhost:2375"},
 	{Name: "gaming-arch", Description: "Arch Linux + KDE Plasma + Steam, 16G / 8 CPUs", Params: "gpu_mode, gpu_pci, gpu_vendor (amd|nvidia|virtio)"},
 	{Name: "gaming-bazzite", Description: "Bazzite (Fedora Atomic) gaming ISO, 16G / 8 CPUs", Params: "gpu_mode, gpu_pci, gpu_vendor"},
@@ -286,6 +286,7 @@ type vmCreateIn struct {
 	User          string `json:"user,omitempty" jsonschema:"guest login username (honoured by gaming-arch, omarchy and macos)"`
 	Password      string `json:"password,omitempty" jsonschema:"guest login password; empty means SSH key-only"`
 	Nested        bool   `json:"nested,omitempty" jsonschema:"expose hardware virtualization to the guest (arm64 QEMU guests only)"`
+	Emulate       bool   `json:"emulate,omitempty" jsonschema:"run a guest whose image does not support the host CPU architecture under TCG emulation (x86_64-only images on Apple Silicon); slow but functional"`
 	NoAutoInstall bool   `json:"no_auto_install,omitempty" jsonschema:"skip the install pass; boot the primary disk as already installed"`
 	Reinstall     bool   `json:"reinstall,omitempty" jsonschema:"stop, delete, and recreate the VM if it already exists"`
 	Start         bool   `json:"start,omitempty" jsonschema:"boot the VM right after creating it (equivalent to vm_start with defaults)"`
@@ -604,6 +605,7 @@ func (s *server) vmCreate(ctx context.Context, _ *mcp.CallToolRequest, in vmCrea
 		NVMeDev:       in.NVMeDev,
 		OVMFVars:      in.OVMFVars,
 		Nested:        in.Nested,
+		Emulate:       in.Emulate,
 		NoAutoInstall: in.NoAutoInstall,
 	}
 	runnerPubKey, err := s.templateExtras(ctx, in, &opts)

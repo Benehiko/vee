@@ -99,6 +99,10 @@ type BitmagnetOptions struct {
 	// DiskSize overrides the VM's own disk size. The database does not live
 	// here when PGDataHostDir is set, so the default is modest.
 	DiskSize string
+
+	// Emulate opts into TCG emulation on hosts the x86_64-only Alpine image
+	// does not support natively.
+	Emulate bool
 }
 
 // NewBitmagnetConfig returns a VMConfig for a minimal Alpine Linux VM running
@@ -132,6 +136,11 @@ func NewBitmagnetConfig(
 ) (*vm.VMConfig, error) {
 	if opts.PGPassword == "" {
 		return nil, fmt.Errorf("bitmagnet template requires a PostgreSQL password")
+	}
+
+	guestArch, err := guestArchFor(images.DistroAlpine, opts.Emulate)
+	if err != nil {
+		return nil, err
 	}
 
 	img, err := images.NewImage(p, images.DistroAlpine, "latest")
@@ -201,6 +210,7 @@ func NewBitmagnetConfig(
 	return &vm.VMConfig{
 		Name:     name,
 		Template: "bitmagnet",
+		Arch:     guestArch,
 		Memory:   "2G",
 		CPUs:     2,
 		Sockets:  1,

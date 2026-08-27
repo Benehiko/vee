@@ -24,9 +24,17 @@ const (
 // Connect the host docker CLI with:
 //
 //	export DOCKER_HOST=tcp://localhost:2375
-func NewDockerConfig(ctx context.Context, p provider.Provider, name string, sshKeys []string, alpineVersion string) (*vm.VMConfig, error) {
+//
+// emulate opts into TCG emulation on hosts the x86_64-only Alpine image does
+// not support natively.
+func NewDockerConfig(ctx context.Context, p provider.Provider, name string, sshKeys []string, alpineVersion string, emulate bool) (*vm.VMConfig, error) {
 	if alpineVersion == "" {
 		alpineVersion = "latest"
+	}
+
+	guestArch, err := guestArchFor(images.DistroAlpine, emulate)
+	if err != nil {
+		return nil, err
 	}
 
 	img, err := images.NewImage(p, images.DistroAlpine, alpineVersion)
@@ -61,6 +69,7 @@ func NewDockerConfig(ctx context.Context, p provider.Provider, name string, sshK
 	cfg := &vm.VMConfig{
 		Name:     name,
 		Template: "docker",
+		Arch:     guestArch,
 		Memory:   "2G",
 		CPUs:     2,
 		Sockets:  1,

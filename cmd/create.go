@@ -75,6 +75,7 @@ var (
 	createBootDisk             string
 	createBootDiskPath         string
 	createNested               bool
+	createEmulate              bool
 	createBackend              string
 )
 
@@ -105,6 +106,9 @@ Templates apply sane defaults automatically:
                   and your SSH keys, the installer runs hands-off and reboots
                   into the finished desktop with sshd enabled, so vee ssh works.
                   Also reachable as --distro omarchy on devbox and desktop.
+                  x86_64 guest; on Apple Silicon pass --emulate to run it under
+                  TCG emulation (needs qemu-system-x86_64, e.g. brew install
+                  qemu — functional but slower than a native guest).
   docker          2G / 2 CPUs, Alpine Linux, Docker daemon on tcp://localhost:2375
   windows         8G / 4 CPUs, UEFI. x86_64: secboot + TPM 2.0, virtio disk,
                   default win10. arm64 (Apple Silicon): NVMe disk, ramfb display,
@@ -614,6 +618,9 @@ func optsFromFlags(cmd *cobra.Command, name string) build.Opts {
 	if cmd.Flags().Changed("nested") {
 		opts.Nested = createNested
 	}
+	if cmd.Flags().Changed("emulate") {
+		opts.Emulate = createEmulate
+	}
 	return opts
 }
 
@@ -631,6 +638,7 @@ func init() {
 	createCmd.Flags().IntVar(&createSpicePort, "spice-port", 0, "SPICE port (0 = use template default)")
 	createCmd.Flags().BoolVar(&createUEFI, "uefi", false, "Enable UEFI boot (OVMF)")
 	createCmd.Flags().BoolVar(&createNested, "nested", false, "Expose nested virtualization (EL2) to the guest so it can run KVM — Docker Desktop, KubeVirt, etc. (arm64 QEMU guests; under HVF needs QEMU >= 11.1 and an M3+ Mac on macOS 15+)")
+	createCmd.Flags().BoolVar(&createEmulate, "emulate", false, "Run a guest whose image does not support this host's CPU architecture under TCG emulation — x86_64-only images (arch, bazzite, truenas, alpine, omarchy) on Apple Silicon. Functional but slower than a native guest; needs the matching system qemu (e.g. brew install qemu)")
 	createCmd.Flags().StringVar(&createGPUMode, "gpu-mode", "none", "GPU mode: none, virtio, passthrough")
 	createCmd.Flags().StringVar(&createGPUPCI, "gpu-pci", "", "PCI address for GPU passthrough (e.g. 08:00.0)")
 	createCmd.Flags().BoolVar(&createAntiDetect, "anti-detect", false, "Apply anti-hypervisor-detection CPU flags (gaming passthrough)")

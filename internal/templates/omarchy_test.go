@@ -133,6 +133,26 @@ func TestOmarchySeedDiskPlan(t *testing.T) {
 	}
 }
 
+// Emulation is opt-in for every image that does not support the host arch:
+// a cross-arch image must be refused with the --emulate hint rather than
+// silently dropped into a TCG guest, the flag must lift the refusal (and pin
+// VMConfig.Arch to the image's arch), and native images never need the flag.
+func TestGuestArchGate(t *testing.T) {
+	if arch, err := guestArchOn("x86_64", "x86_64", "omarchy", false); err != nil || arch != "" {
+		t.Errorf("native image gated: arch=%q err=%v", arch, err)
+	}
+	if arch, err := guestArchOn("aarch64", "x86_64", "omarchy", true); err != nil || arch != "x86_64" {
+		t.Errorf("cross-arch with --emulate: arch=%q err=%v, want x86_64 and no error", arch, err)
+	}
+	_, err := guestArchOn("aarch64", "x86_64", "omarchy", false)
+	if err == nil {
+		t.Fatal("cross-arch image accepted without --emulate")
+	}
+	if !strings.Contains(err.Error(), "--emulate") {
+		t.Errorf("refusal does not hint at --emulate: %v", err)
+	}
+}
+
 // authorized_keys drives SSH access to the installed system (the installer
 // enables sshd when it is present), so every key must land there verbatim.
 func TestOmarchySeedAuthorizedKeys(t *testing.T) {

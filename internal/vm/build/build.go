@@ -25,6 +25,7 @@ import (
 	"github.com/Benehiko/vee/internal/images"
 	"github.com/Benehiko/vee/internal/media"
 	"github.com/Benehiko/vee/internal/mirror"
+	"github.com/Benehiko/vee/internal/platform"
 	"github.com/Benehiko/vee/internal/sshkeys"
 	"github.com/Benehiko/vee/internal/templates"
 	"github.com/Benehiko/vee/internal/vm"
@@ -118,6 +119,11 @@ type Opts struct {
 	// its own hypervisor. arm64 (aarch64) QEMU guests only; see
 	// vm.VMConfig.Nested.
 	Nested bool
+
+	// Emulate opts into running an x86_64-only guest under TCG emulation on a
+	// non-x86_64 host (omarchy on Apple Silicon). Without it such templates
+	// refuse with a hint, so nobody lands in an emulated guest by accident.
+	Emulate bool
 
 	// NoAutoInstall skips the auto-install pass. The VM boots directly from
 	// its primary disk, treating it as already installed. Use when attaching
@@ -230,6 +236,16 @@ func Build(ctx context.Context, prov provider.Provider, opts Opts) (*vm.VMConfig
 	cfg, err := configFromTemplate(ctx, prov, opts, sshKeys)
 	if err != nil {
 		return nil, err
+	}
+
+	// Safety net behind the per-template checks: no config may reach the
+	// manager with a cross-arch guest unless the user opted into emulation.
+	// Templates refuse earlier (before downloading anything); this catches a
+	// future template that sets Arch without wiring the opt-in through.
+	if cfg.Arch != "" && cfg.Arch != platform.DefaultGuestArch() && !opts.Emulate {
+		return nil, fmt.Errorf("template %q builds a %s guest but this host's native guest arch is %s — "+
+			"pass --emulate to run it under TCG emulation (functional, but slower than a native guest)",
+			opts.Template, cfg.Arch, platform.DefaultGuestArch())
 	}
 
 	if err := applyOverrides(ctx, cfg, opts, prov); err != nil {
@@ -346,6 +362,7 @@ func configFromTemplate(ctx context.Context, prov provider.Provider, opts Opts, 
 			SSHPort:          opts.SSHPort,
 			User:             opts.User,
 			Password:         opts.Password,
+			Emulate:          opts.Emulate,
 		}
 	}
 
@@ -377,22 +394,22 @@ func configFromTemplate(ctx context.Context, prov provider.Provider, opts Opts, 
 		}
 		return templates.NewTorrentConfig(ctx, prov, opts.Name, sshKeys,
 			opts.TorrentExtras.Mounts, opts.TorrentExtras.NFSMounts, opts.TorrentExtras.NordConf,
-			opts.TorrentExtras.WireGuard, opts.TorrentExtras.VPNProvider, spicePort, opts.Distro)
+			opts.TorrentExtras.WireGuard, opts.TorrentExtras.VPNProvider, spicePort, opts.Distro, opts.Emulate)
 	case "devbox":
-		return templates.NewDevboxConfig(ctx, prov, opts.Name, sshKeys, opts.Distro, opts.DistroVersion)
+		return templates.NewDevboxConfig(ctx, prov, opts.Name, sshKeys, opts.Distro, opts.DistroVersion, opts.Emulate)
 	case "server":
-		return templates.NewServerConfig(ctx, prov, opts.Name, sshKeys, opts.Distro, opts.DistroVersion)
+		return templates.NewServerConfig(ctx, prov, opts.Name, sshKeys, opts.Distro, opts.DistroVersion, opts.Emulate)
 	case "desktop":
-		return templates.NewDesktopConfig(ctx, prov, opts.Name, sshKeys, opts.Distro, opts.DistroVersion)
+		return templates.NewDesktopConfig(ctx, prov, opts.Name, sshKeys, opts.Distro, opts.DistroVersion, opts.Emulate)
 	case "omarchy":
 		return templates.NewOmarchyConfig(ctx, prov, opts.Name, sshKeys, opts.DistroVersion,
-			templates.OmarchyOptions{User: opts.User, Password: opts.Password})
+			templates.OmarchyOptions{User: opts.User, Password: opts.Password, Emulate: opts.Emulate})
 	case "truenas":
 		spicePort := 0
 		if opts.SPICEPort != nil {
 			spicePort = *opts.SPICEPort
 		}
-		return templates.NewTruenasConfig(ctx, prov, opts.Name, opts.DistroVersion, opts.NICBridge, spicePort, opts.DataDisks)
+		return templates.NewTruenasConfig(ctx, prov, opts.Name, opts.DistroVersion, opts.NICBridge, spicePort, opts.DataDisks, opts.Emulate)
 	case "macos":
 		mopts := templates.MacOSOptions{
 			DiskSize: opts.Disk,
@@ -436,7 +453,7 @@ func configFromTemplate(ctx context.Context, prov provider.Provider, opts Opts, 
 		}
 		return templates.NewWindowsConfig(ctx, prov, winVersion, opts.Name, virtiofsTag, spicePort, sshKeys)
 	case "docker":
-		return templates.NewDockerConfig(ctx, prov, opts.Name, sshKeys, opts.DistroVersion)
+		return templates.NewDockerConfig(ctx, prov, opts.Name, sshKeys, opts.DistroVersion, opts.Emulate)
 	case "jellyfin":
 		var libs []media.Source
 		var secrets map[string]string
@@ -451,7 +468,7 @@ func configFromTemplate(ctx context.Context, prov provider.Provider, opts Opts, 
 			adminUser = opts.DNSSinkExtras.AdminUser
 			passwordHash = opts.DNSSinkExtras.PasswordHash
 		}
-		return templates.NewDNSSinkConfig(ctx, prov, opts.Name, sshKeys, opts.NICBridge, adminUser, passwordHash)
+		return templates.NewDNSSinkConfig(ctx, prov, opts.Name, sshKeys, opts.NICBridge, adminUser, passwordHash, opts.Emulate)
 	case "bitmagnet":
 		if opts.BitmagnetExtras == nil {
 			return nil, fmt.Errorf("bitmagnet template requires interactive prompts (VPN, database password); collect them and pass via Opts.BitmagnetExtras")
@@ -465,6 +482,7 @@ func configFromTemplate(ctx context.Context, prov provider.Provider, opts Opts, 
 			VPNProvider:   opts.BitmagnetExtras.VPNProvider,
 			Bridge:        opts.NICBridge,
 			DiskSize:      opts.Disk,
+			Emulate:       opts.Emulate,
 		})
 	case "ubuntu-server":
 		version := images.UbuntuVersion(opts.DistroVersion)

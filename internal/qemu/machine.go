@@ -50,6 +50,7 @@ type BaseMachine struct {
 	basePath     string
 	name         string
 	architecture string
+	binaryPath   string
 	accelerator  Accelerator
 	cpu          *CPU
 	machineType  string
@@ -155,6 +156,16 @@ func WithAccelerator(accel Accelerator) QemuOptions {
 func WithArchitecture(arch string) QemuOptions {
 	return func(q *BaseMachine) {
 		q.architecture = arch
+	}
+}
+
+// WithBinary overrides the qemu-system binary for this machine. Empty keeps
+// the provider-configured default (the host-native vee-managed QEMU); a
+// cross-arch (TCG-emulated) guest points here at the matching qemu-system
+// binary for its architecture.
+func WithBinary(path string) QemuOptions {
+	return func(q *BaseMachine) {
+		q.binaryPath = path
 	}
 }
 
@@ -493,7 +504,10 @@ func (q *BaseMachine) start(ctx context.Context, detach bool) (*StartResult, err
 		}
 	}
 
-	binary := q.provider.Config().QemuBinaryPath
+	binary := q.binaryPath
+	if binary == "" {
+		binary = q.provider.Config().QemuBinaryPath
+	}
 	args := q.Args()
 	q.provider.Logger().Info("starting QEMU",
 		zap.String("machine", q.name),
