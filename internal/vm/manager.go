@@ -538,6 +538,11 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool, opts 
 		if err != nil {
 			return err
 		}
+		if res2, retried, rerr := m.retryStartWithoutGL(ctx, cfg, so.recovery, result); rerr != nil {
+			return rerr
+		} else if retried {
+			result = res2
+		}
 		fgState := &VMState{
 			PID:          result.PID,
 			Backend:      string(cfg.BackendName()),
@@ -584,6 +589,11 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool, opts 
 	result, err := machine.StartDetached(ctx)
 	if err != nil {
 		return err
+	}
+	if res2, retried, rerr := m.retryStartWithoutGL(ctx, cfg, so.recovery, result); rerr != nil {
+		return rerr
+	} else if retried {
+		result = res2
 	}
 
 	newState := &VMState{
@@ -1929,7 +1939,8 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 	case GPUVirtio:
 		opts = append(opts, qemu.WithVGA("none"))
 		arch := guestArch
-		if cfg.Headless || cfg.SPICE != nil || emulated {
+		switch {
+		case cfg.Headless || cfg.SPICE != nil || emulated:
 			// The GL-capable virtio-gpu device requires a windowed display with
 			// a host GL context; headless and SPICE VMs use -display none which
 			// provides none. Fall back to a plain (2D) virtio-gpu adapter.
@@ -1940,7 +1951,18 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 				opts = append(opts, qemu.WithDisplay(qemu.DisplayArg(platform.HostOS(), false, "")))
 			}
 			opts = append(opts, qemu.WithDevice(qemu.VirtioGPUDevice(arch, false, false, "")))
-		} else {
+		case cfg.GPU.disableGL:
+			// The GL start attempt crashed: this QEMU's windowed display
+			// backend was built without OpenGL. Boot windowed with the plain
+			// 2D adapter (the guest renders in software) and a fixed EDID
+			// mode so the desktop comes up at a sane resolution.
+			disp := qemu.DisplayArg(platform.HostOS(), false, "")
+			if platform.IsMacOS() {
+				disp += ",show-cursor=on"
+			}
+			opts = append(opts, qemu.WithDisplay(disp))
+			opts = append(opts, qemu.WithDevice(qemu.VirtioGPUDevice(arch, false, false, "")+",edid=on,xres=1920,yres=1080"))
+		default:
 			// Host- and arch-aware GL adapter + display. On macOS this is
 			// virtio-gpu-gl-pci + "-display cocoa,gl=es" (ANGLE/Metal); on Linux
 			// virtio-vga-gl + "-display gtk,gl=on". Hardware acceleration only
