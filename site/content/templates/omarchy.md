@@ -51,7 +51,7 @@ vee pull omarchy
 
 - The password is seeded into the installer as a SHA-512 crypt hash (the same `openssl passwd -6` format Omarchy's wizard writes); the plain text never lands on the seed. The default password (matching the username) is for the graphical console — change it in the guest for anything reachable from untrusted networks.
 - The seed's `user_configuration.json` follows the archinstall schema of the pinned ISO releases. The Omarchy mirror keeps only the current release, so `--distro-version` accepts the releases vee knows about; `latest` (the default) resolves to the newest.
-- Omarchy publishes x86_64 ISOs only. On x86_64 hosts the guest runs hardware-accelerated (KVM); on Apple Silicon the template pins `arch: x86_64` in `vm.yaml` and vee runs the guest under TCG emulation with the system `qemu-system-x86_64` (e.g. `brew install qemu`) — functional, but expect the install to take an hour or more and the desktop to render in software.
+- Omarchy publishes x86_64 ISOs only. On x86_64 hosts the guest runs hardware-accelerated (KVM); on Apple Silicon the template pins `arch: x86_64` in `vm.yaml` and vee runs the guest under TCG emulation with the system `qemu-system-x86_64` (e.g. `brew install qemu`). The unattended install reads from the ISO's offline package mirror, so even emulated it lands in tens of minutes (~10 on an M4 Max); the desktop works but renders in software.
 - Disk encryption is deliberately not seeded: an encrypted autoinstall still stops at the LUKS passphrase on every boot, which defeats an unattended VM.
 
 For a cloud-init managed GNOME desktop instead, use [`desktop`]({{< relref "desktop" >}}).

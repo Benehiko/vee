@@ -82,7 +82,8 @@ func NewOmarchyConfig(ctx context.Context, p provider.Provider, name string, ssh
 
 	if platform.HostArch() == "arm64" {
 		p.Logger().Warn("omarchy is x86_64-only — on this host the guest runs under TCG emulation: " +
-			"expect the install to take an hour or more and the desktop to render in software")
+			"the unattended install takes on the order of tens of minutes (~10 on an M4) and the " +
+			"desktop renders in software")
 	}
 
 	return &vm.VMConfig{
