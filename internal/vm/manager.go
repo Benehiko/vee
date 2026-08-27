@@ -28,6 +28,7 @@ import (
 	"github.com/Benehiko/vee/internal/gpu"
 	"github.com/Benehiko/vee/internal/platform"
 	"github.com/Benehiko/vee/internal/qemu"
+	"github.com/Benehiko/vee/internal/qemubin"
 	"github.com/Benehiko/vee/internal/virtiofs"
 	"github.com/Benehiko/vee/internal/virtiofsdinstall"
 	"github.com/Benehiko/vee/internal/vzhelper"
@@ -245,6 +246,13 @@ func (m *Manager) Create(ctx context.Context, cfg *VMConfig) error {
 		src := cfg.UEFI.VarsPath
 		if src == "" {
 			src = m.provider.Config().OVMFVarsPath
+			// The provider default is host-arch firmware; a cross-arch guest
+			// needs its own arch's vars template (e.g. edk2-i386-vars for an
+			// x86_64 guest on an arm64 host, not the AAVMF vars).
+			if cfg.Arch != "" && cfg.Arch != platform.DefaultGuestArch() {
+				home, _ := os.UserHomeDir()
+				_, src, _ = provider.FirmwareForArch(home, cfg.Arch)
+			}
 		}
 		dst := filepath.Join(dir, "OVMF_VARS.fd")
 		if err := copyFile(src, dst); err != nil {
@@ -1558,8 +1566,32 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 		qemu.WithMemory(cfg.Memory),
 	}
 
+	// Guest architecture: host-native by default; a cross-arch config runs
+	// under TCG emulation with the matching qemu-system binary, q35/virt
+	// machine type, and per-arch firmware resolved below.
+	guestArch := cfg.Arch
+	if guestArch == "" {
+		guestArch = platform.DefaultGuestArch()
+	}
+	emulated := guestArch != platform.DefaultGuestArch()
+	if emulated {
+		qemuPath, err := qemubin.EnsureForArch(guestArch)
+		if err != nil {
+			return nil, nil, fmt.Errorf("emulated %s guest: %w", guestArch, err)
+		}
+		opts = append(opts,
+			qemu.WithArchitecture(guestArch),
+			qemu.WithAccelerator(qemu.AccelTCG),
+			qemu.WithBinary(qemuPath),
+		)
+		m.provider.Logger().Warn("cross-architecture guest runs under TCG emulation — expect it to be much slower than a native guest",
+			zap.String("vm", cfg.Name),
+			zap.String("guest_arch", guestArch),
+			zap.String("host_arch", platform.HostArch()),
+			zap.String("qemu", qemuPath))
+	}
+
 	// CPU — gaming passthrough merges GamingCPUFlags before building.
-	guestArch := platform.DefaultGuestArch()
 	cpuModel := cfg.CPUModel
 	cpuFlags := cfg.CPUFlags
 	if cfg.GPU.Mode == GPUPassthrough && cfg.GPU.AntiDetect {
@@ -1579,6 +1611,11 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 			cpuFlags = nil
 		}
 	}
+	if emulated && (cpuModel == "" || cpuModel == "host") {
+		// -cpu host requires a hardware accelerator; TCG guests take the
+		// richest emulatable model instead.
+		cpuModel = "max"
+	}
 	sockets, cores, threads := cputil.AdjustSMP(cfg.CPUs, cfg.Sockets, cfg.Cores, cfg.Threads)
 	cpu := qemu.NewCPU(m.provider,
 		qemu.WithCPUModel(qemu.CPUModel(cpuModel)),
@@ -1588,8 +1625,15 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 	opts = append(opts, qemu.WithCPU(cpu))
 
 	// Machine type override (e.g. "q35,smm=on" for Windows Secure Boot) and any
-	// extra -global args (e.g. the secure-pflash global).
-	opts = append(opts, qemu.WithMachineType(cfg.MachineType))
+	// extra -global args (e.g. the secure-pflash global). The provider default
+	// machine type is host-arch derived, so a cross-arch guest with no explicit
+	// override needs its own arch's board instead (q35 for x86_64 on an arm64
+	// host, not virt).
+	machineType := cfg.MachineType
+	if machineType == "" && emulated {
+		machineType = platform.MachineTypeForArch(guestArch)
+	}
+	opts = append(opts, qemu.WithMachineType(machineType))
 	if cfg.Nested {
 		// Create() refused non-aarch64 configs, but a hand-edited vm.yaml can
 		// still carry the field anywhere; WithNested is a no-op off aarch64.
@@ -1599,11 +1643,16 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 		opts = append(opts, qemu.WithGlobal(g))
 	}
 
-	// UEFI
+	// UEFI. The provider's firmware paths cover the host-native arch; a
+	// cross-arch guest resolves its own arch's edk2 code file instead.
 	if cfg.UEFI.Enabled {
 		codePath := cfg.UEFI.CodePath
 		if codePath == "" {
 			codePath = m.provider.Config().OVMFCodePath
+			if emulated {
+				home, _ := os.UserHomeDir()
+				codePath, _, _ = provider.FirmwareForArch(home, guestArch)
+			}
 		}
 		opts = append(opts, qemu.WithUEFI(qemu.NewUEFI(codePath, cfg.UEFI.VarsPath)))
 	}
@@ -1842,11 +1891,17 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 		memfdAdded = true
 	case GPUVirtio:
 		opts = append(opts, qemu.WithVGA("none"))
-		arch := platform.DefaultGuestArch()
-		if cfg.Headless || cfg.SPICE != nil {
+		arch := guestArch
+		if cfg.Headless || cfg.SPICE != nil || emulated {
 			// The GL-capable virtio-gpu device requires a windowed display with
 			// a host GL context; headless and SPICE VMs use -display none which
 			// provides none. Fall back to a plain (2D) virtio-gpu adapter.
+			// Cross-arch guests also take the 2D adapter: they resolve a system
+			// QEMU whose build cannot be assumed to carry virglrenderer, and GL
+			// forwarding buys little under TCG anyway.
+			if emulated && !cfg.Headless {
+				opts = append(opts, qemu.WithDisplay(qemu.DisplayArg(platform.HostOS(), false, "")))
+			}
 			opts = append(opts, qemu.WithDevice(qemu.VirtioGPUDevice(arch, false, false, "")))
 		} else {
 			// Host- and arch-aware GL adapter + display. On macOS this is

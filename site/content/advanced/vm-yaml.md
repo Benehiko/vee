@@ -69,6 +69,7 @@ created_at: 2026-01-01T00:00:00Z
 | `name` | string | VM name (matches directory name) |
 | `template` | string | Template used to create the VM |
 | `backend` | string | Virtualization backend: `qemu` (default when empty) or `vz` (Apple Virtualization.framework for macOS guests on Apple Silicon hosts — experimental, requires a `macos:` section and the `vee-vz-helper` binary; [#51](https://github.com/Benehiko/vee/issues/51)) |
+| `arch` | string | Guest CPU architecture in QEMU naming (`aarch64`, `x86_64`). Empty = host-native (hardware-accelerated). A cross-arch value runs the guest under TCG emulation — much slower — resolving the matching system `qemu-system-<arch>` binary, firmware, and machine type automatically. QEMU backend only. Set by the `omarchy` template (x86_64-only ISO) |
 | `memory` | string | RAM, e.g. `16G` |
 | `cpus` | int | Total vCPU count |
 | `sockets` | int | CPU socket topology |

@@ -145,10 +145,12 @@ func NewImage(p provider.Provider, distro, version string) (Image, error) {
 	// On aarch64 hosts (Apple Silicon), only some distros have a wired-up arm64
 	// image. Ubuntu (cloud image) and Fedora (Cloud Base qcow2) publish aarch64
 	// builds vee can boot under HVF, and Windows client media is assembled
-	// per-arch from UUP dump's arm64 builds. The rest (Arch/Bazzite/Omarchy/
-	// TrueNAS official media, the Alpine x86 URL) are x86_64-only and would not
-	// boot, so refuse clearly rather than fetch an unbootable image.
-	if hostArch == "arm64" && distro != DistroUbuntu && distro != DistroFedora && distro != DistroWindows {
+	// per-arch from UUP dump's arm64 builds. Omarchy is x86_64-only but its
+	// template pins Arch: x86_64, so the guest boots under TCG emulation (slow
+	// but functional). The rest (Arch/Bazzite/TrueNAS official media, the
+	// Alpine x86 URL) are x86_64-only with no emulation wiring, so refuse
+	// clearly rather than fetch an unbootable image.
+	if hostArch == "arm64" && distro != DistroUbuntu && distro != DistroFedora && distro != DistroWindows && distro != DistroOmarchy {
 		return nil, fmt.Errorf("distro %q is not yet available for arm64 (aarch64) guests; "+
 			"Ubuntu, Fedora and Windows are the supported arm64 guests on Apple Silicon — "+
 			"use --distro ubuntu or --distro fedora, or the windows template", distro)

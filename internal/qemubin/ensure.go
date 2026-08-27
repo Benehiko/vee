@@ -129,6 +129,22 @@ func Ensure() (string, error) {
 	return binPath, nil
 }
 
+// EnsureForArch resolves a qemu-system binary for a specific guest
+// architecture. The host-native arch goes through Ensure (vee-managed bundle,
+// downloaded and hardened); a cross-arch guest (TCG emulation, e.g. x86_64 on
+// Apple Silicon) resolves a system QEMU instead — the vee-qemu bundle ships
+// only the host-native system binary.
+func EnsureForArch(guestArch string) (string, error) {
+	if guestArch == "" || guestArch == platform.DefaultGuestArch() {
+		return Ensure()
+	}
+	name := platform.QemuBinaryName(guestArch)
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	return resolveSystemQemuNamed(name)
+}
+
 // resolveSystemQemu locates a usable qemu-system binary when no vee-managed
 // build is published for the current platform. On macOS it probes common
 // Homebrew prefixes and PATH; stock Homebrew QEMU works for basic use but does
@@ -136,8 +152,12 @@ func Ensure() (string, error) {
 // build (a qemu-virgl tap, UTM's bundled QEMU, or a future vee-qemu asset),
 // which is surfaced in the error guidance when nothing is found.
 func resolveSystemQemu() (string, error) {
-	name := qemuBinaryName()
+	return resolveSystemQemuNamed(qemuBinaryName())
+}
 
+// resolveSystemQemuNamed locates the given qemu-system binary on the host:
+// a drop-in under ~/.vee/bin first, then Homebrew prefixes (macOS), then PATH.
+func resolveSystemQemuNamed(name string) (string, error) {
 	// A non-versioned drop-in under ~/.vee/bin takes precedence.
 	if home, err := os.UserHomeDir(); err == nil {
 		vee := filepath.Join(home, ".vee", "bin", name)

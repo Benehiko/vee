@@ -105,6 +105,8 @@ Templates apply sane defaults automatically:
                   and your SSH keys, the installer runs hands-off and reboots
                   into the finished desktop with sshd enabled, so vee ssh works.
                   Also reachable as --distro omarchy on devbox and desktop.
+                  x86_64 guest; on Apple Silicon it runs under TCG emulation
+                  (needs qemu-system-x86_64, e.g. brew install qemu — slow).
   docker          2G / 2 CPUs, Alpine Linux, Docker daemon on tcp://localhost:2375
   windows         8G / 4 CPUs, UEFI. x86_64: secboot + TPM 2.0, virtio disk,
                   default win10. arm64 (Apple Silicon): NVMe disk, ramfb display,

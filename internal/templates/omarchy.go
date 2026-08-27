@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Benehiko/vee/internal/images"
+	"github.com/Benehiko/vee/internal/platform"
 	"github.com/Benehiko/vee/internal/shacrypt"
 	"github.com/Benehiko/vee/internal/vm"
 	"github.com/Benehiko/vee/provider"
@@ -79,9 +80,18 @@ func NewOmarchyConfig(ctx context.Context, p provider.Provider, name string, ssh
 	conf := p.Config()
 	vmDir := filepath.Join(conf.StoragePath, name)
 
+	if platform.HostArch() == "arm64" {
+		p.Logger().Warn("omarchy is x86_64-only — on this host the guest runs under TCG emulation: " +
+			"expect the install to take an hour or more and the desktop to render in software")
+	}
+
 	return &vm.VMConfig{
 		Name:     name,
 		Template: template,
+		// Omarchy publishes x86_64 ISOs only. On an x86_64 host this matches
+		// the native arch (hardware-accelerated); on arm64 hosts the manager
+		// runs the guest under TCG emulation.
+		Arch:     "x86_64",
 		Memory:   "8G",
 		CPUs:     4,
 		Sockets:  1,

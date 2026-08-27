@@ -230,7 +230,13 @@ type VMConfig struct {
 	// (Apple Virtualization.framework, Apple Silicon hosts — issue #51).
 	// Empty means QEMU, so configs written before this field existed keep
 	// working unchanged.
-	Backend  string   `yaml:"backend,omitempty"       json:"backend,omitempty"`
+	Backend string `yaml:"backend,omitempty"       json:"backend,omitempty"`
+	// Arch is the guest CPU architecture in QEMU naming ("aarch64", "x86_64").
+	// Empty means the host's native arch (hardware-accelerated). A cross-arch
+	// value runs the guest under TCG emulation — functional but much slower —
+	// with the matching system qemu binary, firmware, and machine type resolved
+	// automatically. QEMU backend only.
+	Arch     string   `yaml:"arch,omitempty"          json:"arch,omitempty"`
 	Memory   string   `yaml:"memory"                  json:"memory"`
 	CPUs     int      `yaml:"cpus"                    json:"cpus"`
 	Sockets  int      `yaml:"sockets"                 json:"sockets"`
