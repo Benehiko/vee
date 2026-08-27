@@ -135,7 +135,7 @@ check the build log for that warning if the guest reports an `llvmpipe` renderer
 
 #### Known limitations of the virgl bundle
 
-**Update (qemu-11.1.0-rc2-vee1):** the GL build compiles again. The build script
+**Update (qemu-11.1.0-vee1):** the GL build compiles again. The build script
 moved to the maintained **startergo** tap family (virglrenderer 1.x + ANGLE +
 patched libepoxy, carrying Akihiko Odaki's macOS patches) and gained a one-line
 EGL cast for ANGLE's int-typed native display (#93), and the published bundle
@@ -284,9 +284,8 @@ the user verbatim. The knob is wired for arm64 (aarch64) QEMU guests only;
 frameworks do not work inside a VM (see the macOS-guest caveats below).
 
 **Current HVF status:** QEMU gained HVF EL2 support in **11.1**, and vee's
-pinned bundle is **11.1.0-rc2** (`qemu-11.1.0-rc2-vee1`; the rc is deliberate —
-upstream's 11.1.0 final is expected ~Aug 2026 and the pin moves to it when it
-ships). The full chain is verified on an M4 Max: an Ubuntu 24.04 arm64 guest
+pinned bundle is **11.1.0** (`qemu-11.1.0-vee1`, built from the upstream final
+released 2026-08-11). The full chain is verified on an M4 Max: an Ubuntu 24.04 arm64 guest
 boots with `CPU: All CPU(s) started at EL2` and KVM initialized in-guest, using
 exactly the arguments vee generates. The hardware floor is an M3-or-later Mac
 on macOS 15+ (older bundles — 10.0.2 and earlier — refuse EL2 outright on every
@@ -607,7 +606,7 @@ diagnostics.
 - x86 guests run under slow TCG emulation; use aarch64 guests.
 - Nested virtualization (`--nested` / `nested: true`) needs an M3-or-later Mac
   on macOS 15+ and a guest kernel with ARM nested-virt support (Fedora 41+).
-  The pinned bundle (11.1.0-rc2) supports it; pre-11.1 QEMU refuses EL2.
+  The pinned bundle (11.1.0) supports it; pre-11.1 QEMU refuses EL2.
 - Accelerated `gpu.mode: virtio` needs a virgl-capable QEMU; stock QEMU = software GL.
 - The **virgl-accelerated** vee-qemu bundle is still not buildable (QEMU 10.x vs
   the 2021-era macOS virglrenderer); see "Known limitations of the virgl bundle".
