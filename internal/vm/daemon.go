@@ -120,6 +120,14 @@ func (m *Manager) RunDaemon(ctx context.Context) error {
 	reconcileInhibitor()
 	m.reconcileSSHProxies(ctx)
 	defer m.stopAllSSHProxies()
+	m.reconcileTunnels(ctx)
+	defer m.stopAllTunnels()
+
+	// The vhost router publishes HTTP background tunnels under
+	// <service>.<host> names. It is best-effort: binding :80 needs
+	// CAP_NET_BIND_SERVICE, and a host without it still gets working
+	// per-port tunnels.
+	go m.serveTunnelRouter(ctx)
 
 	ticker := time.NewTicker(daemonPollInterval)
 	defer ticker.Stop()
@@ -154,6 +162,7 @@ func (m *Manager) RunDaemon(ctx context.Context) error {
 			}
 			reconcileInhibitor()
 			m.reconcileSSHProxies(ctx)
+			m.reconcileTunnels(ctx)
 		}
 	}
 }

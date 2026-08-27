@@ -25,6 +25,7 @@ type ipResolver func(ctx context.Context) (string, error)
 // hands the guest.
 type sshLoopbackProxy struct {
 	vmName     string
+	bindAddr   string
 	port       int
 	targetPort int
 	ln         net.Listener
@@ -36,14 +37,31 @@ type sshLoopbackProxy struct {
 // port is 0) and forwards to targetPort on the resolved guest address until
 // Close. The actual bound port is in Port().
 func startSSHLoopbackProxy(ctx context.Context, vmName string, port, targetPort int, resolve ipResolver, log *zap.Logger) (*sshLoopbackProxy, error) {
+	return startGuestProxy(ctx, vmName, BindLoopback, port, targetPort, resolve, log)
+}
+
+// startGuestProxy is the general form behind both the daemon's SSH loopback
+// proxies and its background service tunnels: it listens on bindAddr:port and
+// forwards every connection to targetPort on the guest address resolved at
+// connect time.
+//
+// bindAddr is a parameter rather than a constant because background tunnels
+// may be published to the LAN on 0.0.0.0 (`vee tunnel --host`), while the SSH
+// proxies stay on loopback — exposing a guest's sshd to the LAN is never
+// implied by wanting a stable local port.
+func startGuestProxy(ctx context.Context, vmName, bindAddr string, port, targetPort int, resolve ipResolver, log *zap.Logger) (*sshLoopbackProxy, error) {
+	if bindAddr == "" {
+		bindAddr = BindLoopback
+	}
 	var lc net.ListenConfig
-	ln, err := lc.Listen(ctx, "tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	ln, err := lc.Listen(ctx, "tcp", net.JoinHostPort(bindAddr, fmt.Sprintf("%d", port)))
 	if err != nil {
-		return nil, fmt.Errorf("ssh loopback proxy for %q: %w", vmName, err)
+		return nil, fmt.Errorf("guest proxy for %q: %w", vmName, err)
 	}
 	pctx, cancel := context.WithCancel(ctx)
 	p := &sshLoopbackProxy{
 		vmName:     vmName,
+		bindAddr:   bindAddr,
 		port:       ln.Addr().(*net.TCPAddr).Port,
 		targetPort: targetPort,
 		ln:         ln,
@@ -55,6 +73,9 @@ func startSSHLoopbackProxy(ctx context.Context, vmName string, port, targetPort 
 }
 
 func (p *sshLoopbackProxy) Port() int { return p.port }
+
+// BindAddr reports the address the proxy is listening on.
+func (p *sshLoopbackProxy) BindAddr() string { return p.bindAddr }
 
 // Close stops the listener and waits for the accept loop to exit. In-flight
 // connections are severed via the proxy context.
@@ -204,7 +225,7 @@ func (p *sshLoopbackProxy) forward(ctx context.Context, local net.Conn, resolve 
 	ip, err := resolve(rctx)
 	rcancel()
 	if err != nil {
-		log.Debug("ssh loopback proxy could not resolve guest IP",
+		log.Debug("guest proxy could not resolve guest IP",
 			zap.String("vm", p.vmName), zap.Error(err))
 		return
 	}
@@ -212,8 +233,9 @@ func (p *sshLoopbackProxy) forward(ctx context.Context, local net.Conn, resolve 
 	var d net.Dialer
 	guest, err := d.DialContext(ctx, "tcp", net.JoinHostPort(ip, fmt.Sprintf("%d", p.targetPort)))
 	if err != nil {
-		log.Debug("ssh loopback proxy could not reach guest sshd",
-			zap.String("vm", p.vmName), zap.String("guest", ip), zap.Error(err))
+		log.Debug("guest proxy could not reach guest port",
+			zap.String("vm", p.vmName), zap.String("guest", ip),
+			zap.Int("port", p.targetPort), zap.Error(err))
 		return
 	}
 	defer func() { _ = guest.Close() }()

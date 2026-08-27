@@ -76,6 +76,11 @@ KillSignal=SIGTERM
 # to take down qemu children before the daemon has issued a graceful QMP
 # system_powerdown.
 KillMode=mixed
+# Allow the tunnel router to bind port 80 without running as root, so
+# background tunnels published with --host are reachable by name rather than
+# only by port. The daemon still runs as the invoking user.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 StandardOutput=journal
 StandardError=journal
 

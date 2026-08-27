@@ -52,6 +52,12 @@ type Manager struct {
 	// long-lived Manager populates it.
 	sshProxyMu sync.Mutex
 	sshProxies map[string]*sshLoopbackProxy
+
+	// tunnels holds the daemon's background service tunnels, reconciled from
+	// the on-disk registry on every poll tick.
+	tunnels tunnelState
+	// tunnelRegistryPath overrides the registry location; set only by tests.
+	tunnelRegistryPath string
 }
 
 func NewManager(p provider.Provider) *Manager {
@@ -1403,6 +1409,13 @@ func (m *Manager) Delete(name string) error {
 	}
 	if m.db != nil {
 		_ = dbDeleteVM(m.db, name)
+	}
+	// Drop any background tunnels for this VM; the registry outlives the VM
+	// directory, so leaving them would have the daemon keep reporting tunnels
+	// for a guest that no longer exists.
+	if err := m.Tunnels().RemoveVM(name); err != nil {
+		m.provider.Logger().Warn("could not remove background tunnels for deleted VM",
+			zap.String("vm", name), zap.Error(err))
 	}
 	return deleteVMDir(m.vmDir(name))
 }

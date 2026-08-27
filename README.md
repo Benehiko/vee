@@ -235,7 +235,7 @@ See [docs/gpu-passthrough-gaming.md](docs/gpu-passthrough-gaming.md) for Sunshin
 | `vee status <name>` | Show detailed status of a VM |
 | `vee ssh <name>` | Open a shell |
 | `vee ssh-share <name>` | Share host SSH agent into the VM via AF_VSOCK |
-| `vee tunnel <name> [service]` | List VM services, or open/connect to one |
+| `vee tunnel <name> [service]` | List VM services, or open/connect to one (`--host` binds the LAN, `--background` hands it to the daemon, `--list` shows background tunnels) |
 | `vee ports <name>` | List bound TCP ports and process names in a running VM |
 | `vee ip <name>` | Show a VM's IP addresses (guest agent, or host lease/ARP tables by MAC) |
 | `vee logs <name>` | Stream QEMU output, or the helper log for a macOS guest |
@@ -392,6 +392,7 @@ docs also live in this repo:
 - [docs/gpu-passthrough-gaming.md](docs/gpu-passthrough-gaming.md) — Sunshine + Moonlight streaming over GPU passthrough
 - [docs/media-sources.md](docs/media-sources.md) — attaching NFS/SMB/host-dir/block/USB media to VMs
 - [docs/pacman-mirror.md](docs/pacman-mirror.md) — host-side pacman caching proxy for Arch VMs
+- [docs/tunnels.md](docs/tunnels.md) — background tunnels: LAN binding, daemon-managed persistence, and name-based routing
 - [docs/host-shutdown.md](docs/host-shutdown.md) — how the daemon stops VMs cleanly at host shutdown (logind on Linux, launchd on macOS)
 - [docs/install-iso-lifecycle.md](docs/install-iso-lifecycle.md) — one-shot installer ISO lifecycle and repair
 - [docs/github-runner.md](docs/github-runner.md) — self-hosted GitHub Actions runner: cred persistence, SSH keys, disk GC
