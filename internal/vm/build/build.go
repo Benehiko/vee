@@ -315,6 +315,7 @@ var KnownTemplates = []string{
 	"devbox",
 	"server",
 	"desktop",
+	"omarchy",
 	"docker",
 	"gaming-arch",
 	"gaming-bazzite",
@@ -383,6 +384,9 @@ func configFromTemplate(ctx context.Context, prov provider.Provider, opts Opts, 
 		return templates.NewServerConfig(ctx, prov, opts.Name, sshKeys, opts.Distro, opts.DistroVersion)
 	case "desktop":
 		return templates.NewDesktopConfig(ctx, prov, opts.Name, sshKeys, opts.Distro, opts.DistroVersion)
+	case "omarchy":
+		return templates.NewOmarchyConfig(ctx, prov, opts.Name, sshKeys, opts.DistroVersion,
+			templates.OmarchyOptions{User: opts.User, Password: opts.Password})
 	case "truenas":
 		spicePort := 0
 		if opts.SPICEPort != nil {

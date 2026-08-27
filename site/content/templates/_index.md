@@ -9,8 +9,9 @@ vee ships with built-in templates that configure QEMU arguments, cloud-init, net
 |----------|-------------|
 | [`ubuntu-server`]({{< relref "ubuntu-server" >}}) | Ubuntu 24.04 LTS, UEFI, user-mode NIC (default) |
 | [`server`]({{< relref "server" >}}) | openssh + ufw + fail2ban, `--distro` ubuntu/arch/fedora |
-| [`desktop`]({{< relref "desktop" >}}) | GNOME + Mesa, accelerated virtio-gpu, `--distro` fedora/ubuntu |
-| [`devbox`]({{< relref "devbox" >}}) | Docker + zsh, `--distro` ubuntu/arch/fedora |
+| [`desktop`]({{< relref "desktop" >}}) | GNOME + Mesa, accelerated virtio-gpu, `--distro` fedora/ubuntu/omarchy |
+| [`omarchy`]({{< relref "omarchy" >}}) | Omarchy (Arch + Hyprland) desktop, unattended ISO install |
+| [`devbox`]({{< relref "devbox" >}}) | Docker + zsh, `--distro` ubuntu/arch/fedora/omarchy |
 | [`docker`]({{< relref "docker" >}}) | Alpine Linux, Docker daemon on `tcp://localhost:2375` |
 | [`gaming-arch`]({{< relref "gaming-arch" >}}) | Arch + KDE Plasma + Steam, virgl or GPU passthrough |
 | [`gaming-bazzite`]({{< relref "gaming-bazzite" >}}) | Bazzite (Fedora Atomic) gaming ISO, KDE Plasma |

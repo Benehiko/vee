@@ -31,8 +31,13 @@ func NewDesktopConfig(ctx context.Context, p provider.Provider, name string, ssh
 	if version == "" {
 		version = "latest"
 	}
+	// Omarchy has no cloud image — it installs unattended from its own ISO,
+	// seeded with the answers its wizard would have asked for.
+	if distro == images.DistroOmarchy {
+		return NewOmarchyConfig(ctx, p, name, sshKeys, version, OmarchyOptions{Template: "desktop"})
+	}
 	if distro != images.DistroFedora && distro != images.DistroUbuntu {
-		return nil, fmt.Errorf("unsupported distro for desktop: %s (use fedora or ubuntu)", distro)
+		return nil, fmt.Errorf("unsupported distro for desktop: %s (use fedora, ubuntu or omarchy)", distro)
 	}
 
 	img, err := images.NewImage(p, distro, version)

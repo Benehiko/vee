@@ -30,6 +30,7 @@ vee create workstation --template desktop --distro fedora
 |--------|-------|
 | `fedora` | Default. `@base-x` + `gnome-shell`/`gnome-session`/`nautilus`/`gnome-control-center` + GDM, Wayland autologin |
 | `ubuntu` | `ubuntu-desktop-minimal` + `gdm3`, Wayland autologin |
+| `omarchy` | Delegates to the [`omarchy`]({{< relref "omarchy" >}}) template: an unattended install of Omarchy's Arch + Hyprland desktop from its own ISO (no cloud image, no cloud-init) |
 
 Other distros are rejected.
 

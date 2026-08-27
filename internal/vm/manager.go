@@ -304,6 +304,33 @@ func (m *Manager) Create(ctx context.Context, cfg *VMConfig) error {
 		})
 	}
 
+	// Generate an installer seed ISO if requested: a cidata-labelled volume
+	// carrying the template's own file set (Omarchy autoinstall). Attached the
+	// same way as the cloud-init seed and likewise ejected once the installed
+	// OS disk boots.
+	if len(cfg.SeedFiles) > 0 && cfg.BackendName() == backend.QEMU {
+		files := make([]cloudinit.SeedFile, len(cfg.SeedFiles))
+		for i, f := range cfg.SeedFiles {
+			files[i] = cloudinit.SeedFile{Name: f.Name, Content: []byte(f.Content)}
+		}
+		isoPath, err := cloudinit.GenerateSeed(dir, files)
+		if err != nil {
+			return fmt.Errorf("installer seed: %w", err)
+		}
+		seedInterface := "ide"
+		if platform.HostArch() == "arm64" {
+			seedInterface = "virtio"
+		}
+		cfg.Disks = append(cfg.Disks, DiskConfig{
+			Path:       isoPath,
+			Interface:  seedInterface,
+			Media:      "cdrom",
+			Cache:      "none",
+			Readonly:   true,
+			InstallISO: true,
+		})
+	}
+
 	// Assign a random free SPICE port if the template left it at 0, then
 	// back-fill any ServiceEntry with Protocol=spice so tunnel can find it.
 	if cfg.BackendName() == backend.QEMU && cfg.SPICE != nil && cfg.SPICE.Port == 0 {

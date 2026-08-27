@@ -199,6 +199,12 @@ type CloudInitConfig struct {
 	WriteFiles  []CloudInitWriteFile `yaml:"write_files,omitempty"  json:"write_files,omitempty"`
 }
 
+// SeedFile is one file placed in the root of an installer seed ISO.
+type SeedFile struct {
+	Name    string `yaml:"name"    json:"name"`
+	Content string `yaml:"content" json:"content"`
+}
+
 // ServiceProtocol describes how a service should be accessed.
 type ServiceProtocol string
 
@@ -255,8 +261,14 @@ type VMConfig struct {
 	SPICE          *SPICEConfig     `yaml:"spice,omitempty"         json:"spice,omitempty"`
 	VirtiofsMounts []VirtiofsMount  `yaml:"virtiofs_mounts,omitempty" json:"virtiofs_mounts,omitempty"`
 	CloudInit      *CloudInitConfig `yaml:"cloud_init,omitempty"    json:"cloud_init,omitempty"`
-	TPM            *TPMConfig       `yaml:"tpm,omitempty"           json:"tpm,omitempty"`
-	SSHUser        string           `yaml:"ssh_user,omitempty"      json:"ssh_user,omitempty"`
+	// SeedFiles, when set, are rendered into a "cidata"-labelled seed ISO
+	// attached as a read-only cdrom at create time — for installer ISOs whose
+	// autoinstall keys off the cidata volume label but reads its own file set
+	// instead of the NoCloud user-data/meta-data pair (Omarchy). Mutually
+	// independent from CloudInit; QEMU guests only.
+	SeedFiles []SeedFile `yaml:"seed_files,omitempty" json:"seed_files,omitempty"`
+	TPM       *TPMConfig `yaml:"tpm,omitempty"           json:"tpm,omitempty"`
+	SSHUser   string     `yaml:"ssh_user,omitempty"      json:"ssh_user,omitempty"`
 	// SSHHost overrides IP resolution for SSH-based operations (backup, status).
 	// Set this for non-template VMs whose IP cannot be resolved from the MAC.
 	// Format: host or host:port (port defaults to 22).

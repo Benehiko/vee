@@ -26,6 +26,7 @@ const (
 	DistroWindows = "windows"
 	DistroAlpine  = "alpine"
 	DistroBazzite = "bazzite"
+	DistroOmarchy = "omarchy"
 )
 
 // SupportedDistros returns the distro slugs usable as GUEST DISTROS for the
@@ -33,7 +34,7 @@ const (
 // deliberately absent: a macOS IPSW is not a bootable distro image for those
 // templates — it is pullable only via PullableDistros / the macos template.
 func SupportedDistros() []string {
-	return []string{DistroUbuntu, DistroArch, DistroFedora, DistroTrueNAS, DistroWindows, DistroAlpine, DistroBazzite}
+	return []string{DistroUbuntu, DistroArch, DistroFedora, DistroTrueNAS, DistroWindows, DistroAlpine, DistroBazzite, DistroOmarchy}
 }
 
 // PullableDistros returns everything `vee pull` accepts: the guest distros
@@ -88,6 +89,12 @@ func DistroVersions(distro string) []string {
 			out[i] = string(v)
 		}
 		return out
+	case DistroOmarchy:
+		out := make([]string, len(KnownOmarchyVersions))
+		for i, v := range KnownOmarchyVersions {
+			out[i] = string(v)
+		}
+		return out
 	case DistroMacOS:
 		// No pinned list: "latest" is resolved by the host's
 		// Virtualization.framework; older versions are pulled by URL.
@@ -138,9 +145,9 @@ func NewImage(p provider.Provider, distro, version string) (Image, error) {
 	// On aarch64 hosts (Apple Silicon), only some distros have a wired-up arm64
 	// image. Ubuntu (cloud image) and Fedora (Cloud Base qcow2) publish aarch64
 	// builds vee can boot under HVF, and Windows client media is assembled
-	// per-arch from UUP dump's arm64 builds. The rest (Arch/Bazzite/TrueNAS
-	// official media, the Alpine x86 URL) are x86_64-only and would not boot,
-	// so refuse clearly rather than fetch an unbootable image.
+	// per-arch from UUP dump's arm64 builds. The rest (Arch/Bazzite/Omarchy/
+	// TrueNAS official media, the Alpine x86 URL) are x86_64-only and would not
+	// boot, so refuse clearly rather than fetch an unbootable image.
 	if hostArch == "arm64" && distro != DistroUbuntu && distro != DistroFedora && distro != DistroWindows {
 		return nil, fmt.Errorf("distro %q is not yet available for arm64 (aarch64) guests; "+
 			"Ubuntu, Fedora and Windows are the supported arm64 guests on Apple Silicon — "+
@@ -175,6 +182,8 @@ func NewImage(p provider.Provider, distro, version string) (Image, error) {
 		return NewAlpineImage(p, AlpineVersion(version)), nil
 	case DistroBazzite:
 		return NewBazziteImage(p, BazziteVersion(version)), nil
+	case DistroOmarchy:
+		return NewOmarchyImage(p, OmarchyVersion(version)), nil
 	default:
 		return nil, fmt.Errorf("unknown distro: %s", distro)
 	}

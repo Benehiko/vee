@@ -21,4 +21,5 @@ vee create dev --template devbox --distro ubuntu  # default
 ## Notes
 
 - Supports `--distro` to switch the base Linux distro (where images are available).
+- `--distro omarchy` delegates to the [`omarchy`]({{< relref "omarchy" >}}) template: an unattended install of Omarchy's Arch + Hyprland desktop from its own ISO, with the devbox's `dev` user carried over. Omarchy has no cloud-init, but its stock install already includes Docker, lazydocker, and git.
 - Supports `--virtiofs-dir` to share your home directory or project folder into the VM.
