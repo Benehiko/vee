@@ -18,6 +18,7 @@ vee create <name> [flags]
 | `--cpus` | Number of vCPUs (default: template-specific) |
 | `--disk` | Attach an additional blank disk of this size alongside the OS disk, e.g. `40G`. On the `macos` template it sets the size of the guest's own disk instead. |
 | `--distro` | Linux distro for templates that support it |
+| `--emulate` | Run a guest whose image does not support this host's CPU architecture under TCG emulation — x86_64-only images (arch, bazzite, truenas, alpine, omarchy) on Apple Silicon. Functional but slower than native; needs the matching system qemu (`brew install qemu`) |
 | `--data-disk` | Extra raw disk in `path:label` format (repeatable) |
 | `--nvme-dev` | Pass an NVMe device through directly (passthrough template) |
 | `--ipsw` | macos template: restore image — `latest`, an https URL, or a local `.ipsw` |

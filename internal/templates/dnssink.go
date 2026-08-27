@@ -47,12 +47,18 @@ func NewDNSSinkConfig(
 	bridge string,
 	adminUser string,
 	adminPasswordHash string,
+	emulate bool,
 ) (*vm.VMConfig, error) {
 	if bridge == "" {
 		bridge = "br0"
 	}
 	if adminUser == "" {
 		adminUser = "admin"
+	}
+
+	guestArch, err := guestArchFor(images.DistroAlpine, emulate)
+	if err != nil {
+		return nil, err
 	}
 
 	img, err := images.NewImage(p, images.DistroAlpine, "latest")
@@ -138,6 +144,7 @@ func NewDNSSinkConfig(
 	cfg := &vm.VMConfig{
 		Name:     name,
 		Template: "dns-sink",
+		Arch:     guestArch,
 		Memory:   "512M",
 		CPUs:     1,
 		Sockets:  1,

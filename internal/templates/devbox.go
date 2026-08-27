@@ -14,9 +14,11 @@ import (
 )
 
 // NewDevboxConfig returns a VMConfig for a developer workstation VM.
-// distro selects the base OS (ubuntu, arch, fedora); version selects the ISO version ("latest" for newest).
-// sshKeys are injected into the default user's authorized_keys via cloud-init.
-func NewDevboxConfig(ctx context.Context, p provider.Provider, name string, sshKeys []string, distro, version string) (*vm.VMConfig, error) {
+// distro selects the base OS (ubuntu, arch, fedora, omarchy); version selects
+// the ISO version ("latest" for newest). sshKeys are injected into the default
+// user's authorized_keys via cloud-init. emulate opts the x86_64-only omarchy
+// distro into TCG emulation on non-x86_64 hosts (ignored otherwise).
+func NewDevboxConfig(ctx context.Context, p provider.Provider, name string, sshKeys []string, distro, version string, emulate bool) (*vm.VMConfig, error) {
 	if distro == "" {
 		distro = images.DistroUbuntu
 	}
@@ -28,7 +30,12 @@ func NewDevboxConfig(ctx context.Context, p provider.Provider, name string, sshK
 	// from its own ISO instead, with Docker and the dev tooling already part
 	// of the stock install. The devbox's "dev" user carries over.
 	if distro == images.DistroOmarchy {
-		return NewOmarchyConfig(ctx, p, name, sshKeys, version, OmarchyOptions{Template: "devbox", User: "dev"})
+		return NewOmarchyConfig(ctx, p, name, sshKeys, version, OmarchyOptions{Template: "devbox", User: "dev", Emulate: emulate})
+	}
+
+	guestArch, err := guestArchFor(distro, emulate)
+	if err != nil {
+		return nil, err
 	}
 
 	img, err := images.NewImage(p, distro, version)
@@ -53,6 +60,7 @@ func NewDevboxConfig(ctx context.Context, p provider.Provider, name string, sshK
 	cfg := &vm.VMConfig{
 		Name:     name,
 		Template: "devbox",
+		Arch:     guestArch,
 		Memory:   "8G",
 		CPUs:     4,
 		Sockets:  1,

@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/Benehiko/vee/internal/images"
-	"github.com/Benehiko/vee/internal/platform"
 	"github.com/Benehiko/vee/internal/shacrypt"
 	"github.com/Benehiko/vee/internal/vm"
 	"github.com/Benehiko/vee/provider"
@@ -30,6 +29,10 @@ type OmarchyOptions struct {
 	// Password is the guest login password (defaults to the username, like the
 	// gaming templates). Seeded into the installer as a SHA-512 crypt hash.
 	Password string
+	// Emulate opts into TCG emulation on a non-x86_64 host. Omarchy publishes
+	// x86_64 ISOs only, so without it such hosts are refused with a hint —
+	// emulation is functional but slow, and nobody should land there silently.
+	Emulate bool
 }
 
 // NewOmarchyConfig builds a VMConfig for an Omarchy desktop VM.
@@ -64,6 +67,11 @@ func NewOmarchyConfig(ctx context.Context, p provider.Provider, name string, ssh
 		password = user
 	}
 
+	guestArch, err := guestArchFor(images.DistroOmarchy, opts.Emulate)
+	if err != nil {
+		return nil, err
+	}
+
 	img, err := images.NewImage(p, images.DistroOmarchy, version)
 	if err != nil {
 		return nil, fmt.Errorf("omarchy image: %w", err)
@@ -80,7 +88,7 @@ func NewOmarchyConfig(ctx context.Context, p provider.Provider, name string, ssh
 	conf := p.Config()
 	vmDir := filepath.Join(conf.StoragePath, name)
 
-	if platform.HostArch() == "arm64" {
+	if guestArch != "" {
 		p.Logger().Warn("omarchy is x86_64-only — on this host the guest runs under TCG emulation: " +
 			"the unattended install takes on the order of tens of minutes (~10 on an M4) and the " +
 			"desktop renders in software")
@@ -89,10 +97,7 @@ func NewOmarchyConfig(ctx context.Context, p provider.Provider, name string, ssh
 	return &vm.VMConfig{
 		Name:     name,
 		Template: template,
-		// Omarchy publishes x86_64 ISOs only. On an x86_64 host this matches
-		// the native arch (hardware-accelerated); on arm64 hosts the manager
-		// runs the guest under TCG emulation.
-		Arch:     "x86_64",
+		Arch:     guestArch,
 		Memory:   "8G",
 		CPUs:     4,
 		Sockets:  1,

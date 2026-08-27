@@ -24,7 +24,9 @@ import (
 // resolves to virtio-gpu-gl-pci + a Cocoa display, which is hardware-accelerated
 // only when the resolved QEMU was built with virglrenderer (the vee-qemu bundle,
 // UTM, or a qemu-virgl tap); stock QEMU falls back to software GL.
-func NewDesktopConfig(ctx context.Context, p provider.Provider, name string, sshKeys []string, distro, version string) (*vm.VMConfig, error) {
+// emulate opts the x86_64-only omarchy distro into TCG emulation on
+// non-x86_64 hosts (ignored for the cloud-image distros).
+func NewDesktopConfig(ctx context.Context, p provider.Provider, name string, sshKeys []string, distro, version string, emulate bool) (*vm.VMConfig, error) {
 	if distro == "" {
 		distro = images.DistroFedora
 	}
@@ -34,10 +36,15 @@ func NewDesktopConfig(ctx context.Context, p provider.Provider, name string, ssh
 	// Omarchy has no cloud image — it installs unattended from its own ISO,
 	// seeded with the answers its wizard would have asked for.
 	if distro == images.DistroOmarchy {
-		return NewOmarchyConfig(ctx, p, name, sshKeys, version, OmarchyOptions{Template: "desktop"})
+		return NewOmarchyConfig(ctx, p, name, sshKeys, version, OmarchyOptions{Template: "desktop", Emulate: emulate})
 	}
 	if distro != images.DistroFedora && distro != images.DistroUbuntu {
 		return nil, fmt.Errorf("unsupported distro for desktop: %s (use fedora, ubuntu or omarchy)", distro)
+	}
+
+	guestArch, err := guestArchFor(distro, emulate)
+	if err != nil {
+		return nil, err
 	}
 
 	img, err := images.NewImage(p, distro, version)
@@ -58,6 +65,7 @@ func NewDesktopConfig(ctx context.Context, p provider.Provider, name string, ssh
 	cfg := &vm.VMConfig{
 		Name:     name,
 		Template: "desktop",
+		Arch:     guestArch,
 		Memory:   "8G",
 		CPUs:     4,
 		Sockets:  1,

@@ -272,7 +272,7 @@ func TestAlpineNFSUsesAlpinePackageName(t *testing.T) {
 func TestAlpineRejectsBothVPNs(t *testing.T) {
 	_, err := NewTorrentAlpineConfig(
 		t.Context(), nil, "dl", nil, nil, nil,
-		&vpn.NordVPNConfig{Token: "tok"}, testWGConf(), "nordvpn",
+		&vpn.NordVPNConfig{Token: "tok"}, testWGConf(), "nordvpn", false,
 	)
 	if err == nil {
 		t.Fatal("passing both a NordVPN token and a WireGuard config must be rejected")

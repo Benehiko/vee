@@ -422,6 +422,7 @@ func NewTorrentAlpineConfig(
 	nordConf *vpn.NordVPNConfig,
 	wgConf *vpn.WireGuardConfig,
 	vpnProvider string,
+	emulate bool,
 ) (*vm.VMConfig, error) {
 	// NordLynx is WireGuard, so a NordVPN account needs no snapd here: exchange
 	// the account token for a NordLynx config and drive the same kill-switch.
@@ -442,6 +443,11 @@ func NewTorrentAlpineConfig(
 			// mechanism.
 			vpnProvider = "nordlynx"
 		}
+	}
+
+	guestArch, err := guestArchFor(images.DistroAlpine, emulate)
+	if err != nil {
+		return nil, err
 	}
 
 	img, err := images.NewImage(p, images.DistroAlpine, "latest")
@@ -477,6 +483,7 @@ func NewTorrentAlpineConfig(
 	return &vm.VMConfig{
 		Name:     name,
 		Template: "torrent",
+		Arch:     guestArch,
 		Memory:   "1G",
 		CPUs:     1,
 		Sockets:  1,

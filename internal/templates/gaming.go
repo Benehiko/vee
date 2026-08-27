@@ -48,6 +48,9 @@ type GamingOptions struct {
 	User string
 	// Password overrides the default guest login password (matches username).
 	Password string
+	// Emulate opts into TCG emulation when the distro image does not support
+	// the host architecture (the Arch and Bazzite ISOs are x86_64-only).
+	Emulate bool
 }
 
 // NewGamingArchConfig builds a VMConfig for an Arch Linux gaming VM.
@@ -58,6 +61,11 @@ func NewGamingArchConfig(ctx context.Context, p provider.Provider, name string, 
 	}
 	if opts.Bridge == "" {
 		opts.Bridge = "br0"
+	}
+
+	guestArch, err := guestArchFor(images.DistroArch, opts.Emulate)
+	if err != nil {
+		return nil, err
 	}
 
 	img, err := images.NewImage(p, images.DistroArch, "latest")
@@ -105,6 +113,7 @@ func NewGamingArchConfig(ctx context.Context, p provider.Provider, name string, 
 	cfg := &vm.VMConfig{
 		Name:     name,
 		Template: "gaming-arch",
+		Arch:     guestArch,
 		Memory:   "16G",
 		CPUs:     8,
 		Sockets:  1,
@@ -187,6 +196,11 @@ func NewGamingBazziteConfig(ctx context.Context, p provider.Provider, name strin
 		opts.Bridge = "br0"
 	}
 
+	guestArch, err := guestArchFor(images.DistroBazzite, opts.Emulate)
+	if err != nil {
+		return nil, err
+	}
+
 	img, err := images.NewImage(p, images.DistroBazzite, "latest")
 	if err != nil {
 		return nil, fmt.Errorf("gaming-bazzite image: %w", err)
@@ -211,6 +225,7 @@ func NewGamingBazziteConfig(ctx context.Context, p provider.Provider, name strin
 	cfg := &vm.VMConfig{
 		Name:     name,
 		Template: "gaming-bazzite",
+		Arch:     guestArch,
 		Memory:   "16G",
 		CPUs:     8,
 		Sockets:  1,

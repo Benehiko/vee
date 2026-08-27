@@ -41,7 +41,9 @@ func ParseDataDisk(s string) DataDisk {
 // name so ZFS can identify physical drives after reboots. Each passthrough disk
 // gets its own iothread so drive I/O does not contend with vCPU execution on
 // the main QEMU loop.
-func NewTruenasConfig(ctx context.Context, p provider.Provider, name, version, bridge string, spicePort int, dataDisks []string) (*vm.VMConfig, error) {
+// emulate opts into TCG emulation on hosts the x86_64-only TrueNAS ISO does
+// not support natively.
+func NewTruenasConfig(ctx context.Context, p provider.Provider, name, version, bridge string, spicePort int, dataDisks []string, emulate bool) (*vm.VMConfig, error) {
 	if version == "" {
 		version = "latest"
 	}
@@ -51,6 +53,11 @@ func NewTruenasConfig(ctx context.Context, p provider.Provider, name, version, b
 	// port 0 → manager assigns a random free port at create time
 	_ = spicePort
 	spicePort = 0
+
+	guestArch, err := guestArchFor(images.DistroTrueNAS, emulate)
+	if err != nil {
+		return nil, err
+	}
 
 	img, err := images.NewImage(p, images.DistroTrueNAS, version)
 	if err != nil {
@@ -105,6 +112,7 @@ func NewTruenasConfig(ctx context.Context, p provider.Provider, name, version, b
 	return &vm.VMConfig{
 		Name:     name,
 		Template: "truenas",
+		Arch:     guestArch,
 		// ZFS + NFS are both throughput-sensitive and multi-threaded: nfsd runs
 		// a thread pool, and ZFS does checksumming, compression and write
 		// aggregation off the caller. A single vCPU serializes all of that, so

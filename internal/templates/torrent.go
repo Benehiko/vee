@@ -437,9 +437,12 @@ func appendFstab(line, target string) string {
 // which enforces the kill-switch with ufw and runs qBittorrent under systemd.
 // "alpine" gives a much smaller guest that enforces the same policy with
 // iptables under OpenRC — see NewTorrentAlpineConfig for what that costs.
-func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, sshKeys []string, mounts []ShareMount, nfsMounts []NFSMount, nordConf *vpn.NordVPNConfig, wgConf *vpn.WireGuardConfig, vpnProvider string, spicePort int, distro string) (*vm.VMConfig, error) {
+// emulate opts into TCG emulation when the distro's image does not support
+// the host architecture (the Alpine image is x86_64-only; Ubuntu is
+// multi-arch and never needs it).
+func NewTorrentConfig(ctx context.Context, p provider.Provider, name string, sshKeys []string, mounts []ShareMount, nfsMounts []NFSMount, nordConf *vpn.NordVPNConfig, wgConf *vpn.WireGuardConfig, vpnProvider string, spicePort int, distro string, emulate bool) (*vm.VMConfig, error) {
 	if distro == images.DistroAlpine {
-		return NewTorrentAlpineConfig(ctx, p, name, sshKeys, mounts, nfsMounts, nordConf, wgConf, vpnProvider)
+		return NewTorrentAlpineConfig(ctx, p, name, sshKeys, mounts, nfsMounts, nordConf, wgConf, vpnProvider, emulate)
 	}
 	if distro != "" && distro != images.DistroUbuntu {
 		return nil, fmt.Errorf("torrent template supports --distro ubuntu or alpine, got %q", distro)

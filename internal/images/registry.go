@@ -43,6 +43,22 @@ func PullableDistros() []string {
 	return append(SupportedDistros(), DistroMacOS)
 }
 
+// ImageArch returns the CPU architecture (QEMU naming) of the image vee
+// fetches for distro on this host. Ubuntu and Fedora publish multi-arch cloud
+// images, Windows media is assembled per host arch from UUP dump, and macOS
+// restore images are Apple Silicon by definition — those follow the host.
+// Everything else (Arch, Bazzite, TrueNAS, Alpine, Omarchy) publishes
+// x86_64-only media; on a non-x86_64 host such a guest only runs under TCG
+// emulation, which templates gate behind the --emulate opt-in.
+func ImageArch(distro string) string {
+	switch distro {
+	case DistroUbuntu, DistroFedora, DistroWindows, DistroMacOS:
+		return platform.DefaultGuestArch()
+	default:
+		return "x86_64"
+	}
+}
+
 // DistroVersions returns the known version strings for a distro, newest first.
 func DistroVersions(distro string) []string {
 	switch distro {
@@ -133,8 +149,8 @@ func NewImage(p provider.Provider, distro, version string) (Image, error) {
 
 	hostArch := platform.HostArch()
 
-	// macOS restore images are the inverse of the arm64 gate below: they are
-	// ONLY for Apple Silicon macOS hosts (the vz backend).
+	// macOS restore images are ONLY for Apple Silicon macOS hosts (the vz
+	// backend) — there is no emulation path for them.
 	if distro == DistroMacOS {
 		if !platform.IsMacOS() || hostArch != "arm64" {
 			return nil, fmt.Errorf("macos restore images require an Apple Silicon macOS host")
@@ -142,19 +158,9 @@ func NewImage(p provider.Provider, distro, version string) (Image, error) {
 		return NewMacOSImage(p, version)
 	}
 
-	// On aarch64 hosts (Apple Silicon), only some distros have a wired-up arm64
-	// image. Ubuntu (cloud image) and Fedora (Cloud Base qcow2) publish aarch64
-	// builds vee can boot under HVF, and Windows client media is assembled
-	// per-arch from UUP dump's arm64 builds. Omarchy is x86_64-only but its
-	// template pins Arch: x86_64, so the guest boots under TCG emulation (slow
-	// but functional). The rest (Arch/Bazzite/TrueNAS official media, the
-	// Alpine x86 URL) are x86_64-only with no emulation wiring, so refuse
-	// clearly rather than fetch an unbootable image.
-	if hostArch == "arm64" && distro != DistroUbuntu && distro != DistroFedora && distro != DistroWindows && distro != DistroOmarchy {
-		return nil, fmt.Errorf("distro %q is not yet available for arm64 (aarch64) guests; "+
-			"Ubuntu, Fedora and Windows are the supported arm64 guests on Apple Silicon — "+
-			"use --distro ubuntu or --distro fedora, or the windows template", distro)
-	}
+	// No host-arch gate here: every image is fetchable everywhere. Whether a
+	// cross-arch image may BOOT on this host is the templates' concern — they
+	// consult ImageArch and require the --emulate opt-in for TCG guests.
 
 	switch distro {
 	case DistroUbuntu:
