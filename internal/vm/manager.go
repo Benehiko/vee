@@ -54,6 +54,12 @@ type Manager struct {
 	sshProxyMu sync.Mutex
 	sshProxies map[string]*sshLoopbackProxy
 
+	// sshTunnelClients holds one shared SSH connection per VM, used by
+	// background tunnels whose service is only reachable over SSH. Shared so
+	// a page load does not pay a handshake per connection.
+	sshTunnelMu      sync.Mutex
+	sshTunnelClients map[string]*sshExecClient
+
 	// tunnels holds the daemon's background service tunnels, reconciled from
 	// the on-disk registry on every poll tick.
 	tunnels tunnelState

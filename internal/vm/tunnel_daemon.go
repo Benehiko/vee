@@ -152,7 +152,8 @@ func (m *Manager) reconcileTunnels(ctx context.Context) {
 			port = availablePort(0, tunnelPortMin, tunnelPortMax)
 		}
 		proxy, perr := startGuestProxy(ctx, want.spec.VM, want.spec.BindAddr(), port,
-			want.guestPort, m.guestIPResolver(want.spec.VM), log)
+			want.guestPort, m.guestIPResolver(want.spec.VM),
+			m.sshFallbackDialer(want.spec.VM), log)
 		if perr != nil {
 			m.tunnels.inactive[key] = perr.Error()
 			log.Warn("background tunnel failed to start",
@@ -193,6 +194,19 @@ func (m *Manager) stopAllTunnels() {
 	for key, t := range m.tunnels.active {
 		t.proxy.Close()
 		delete(m.tunnels.active, key)
+	}
+	m.closeSSHTunnelClients()
+}
+
+// closeSSHTunnelClients drops every shared SSH connection held for background
+// tunnels, so none outlives the daemon that opened it.
+func (m *Manager) closeSSHTunnelClients() {
+	m.sshTunnelMu.Lock()
+	clients := m.sshTunnelClients
+	m.sshTunnelClients = nil
+	m.sshTunnelMu.Unlock()
+	for _, c := range clients {
+		_ = c.Close()
 	}
 }
 

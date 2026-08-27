@@ -85,7 +85,7 @@ func TestTunnelStatusesReportsActiveListener(t *testing.T) {
 	}
 
 	resolve := func(context.Context) (string, error) { return "127.0.0.1", nil }
-	proxy, err := startGuestProxy(ctx, "media", BindLoopback, 0, port, resolve, testLogger())
+	proxy, err := startGuestProxy(ctx, "media", BindLoopback, 0, port, resolve, nil, testLogger())
 	if err != nil {
 		t.Fatalf("startGuestProxy: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestGuestProxyReresolvesPerConnection(t *testing.T) {
 	current.Store(&first)
 	resolve := func(context.Context) (string, error) { return *current.Load(), nil }
 
-	p, err := startGuestProxy(ctx, "media", BindLoopback, 0, port, resolve, testLogger())
+	p, err := startGuestProxy(ctx, "media", BindLoopback, 0, port, resolve, nil, testLogger())
 	if err != nil {
 		t.Fatalf("startGuestProxy: %v", err)
 	}
