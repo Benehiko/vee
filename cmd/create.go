@@ -99,6 +99,12 @@ Templates apply sane defaults automatically:
   desktop         8G / 4 CPUs, GNOME + Mesa via cloud-init, accelerated virtio-gpu
                   (virgl). Graphical window with GDM autologin (supports --distro:
                   fedora default, ubuntu). Works on Apple Silicon (aarch64).
+  omarchy         8G / 4 CPUs, Omarchy (Arch + Hyprland) desktop ISO, accelerated
+                  virtio-gpu (virgl). Fully unattended: vee seeds Omarchy's
+                  autoinstall with a user (--user/--password, default omarchy)
+                  and your SSH keys, the installer runs hands-off and reboots
+                  into the finished desktop with sshd enabled, so vee ssh works.
+                  Also reachable as --distro omarchy on devbox and desktop.
   docker          2G / 2 CPUs, Alpine Linux, Docker daemon on tcp://localhost:2375
   windows         8G / 4 CPUs, UEFI. x86_64: secboot + TPM 2.0, virtio disk,
                   default win10. arm64 (Apple Silicon): NVMe disk, ramfb display,
@@ -137,9 +143,10 @@ Templates apply sane defaults automatically:
                   boot. The generated GUI password is saved in the VM directory.
                   Pass --skip-first-boot to leave the guest at Setup Assistant.
 
-Supported distros for devbox/server: ubuntu, arch, fedora
+Supported distros for devbox: ubuntu (default), arch, fedora, omarchy (unattended ISO install)
+Supported distros for server: ubuntu (default), arch, fedora
 Supported distros for torrent: ubuntu (default), alpine
-Supported distros for desktop: fedora (default), ubuntu
+Supported distros for desktop: fedora (default), ubuntu, omarchy (unattended ISO install)
 Use --distro-version latest (default) or a specific version string.
 
 TrueNAS data disk passthrough (serial optional, auto-derived from path if omitted):
@@ -631,13 +638,13 @@ func init() {
 	createCmd.Flags().StringVar(&createVirtiofsTag, "virtiofs-tag", "share", "Mount tag for the virtiofs share")
 	createCmd.Flags().StringArrayVar(&createNFSMounts, "nfs-mount", nil, "NFS export mounted inside the guest as SERVER:EXPORT:GUESTPATH (repeatable; torrent template; requires --nic-mode=bridge)")
 	createCmd.Flags().StringVar(&createSSHKeyFile, "ssh-keys", "", "Path to file containing SSH public keys (one per line)")
-	createCmd.Flags().StringVar(&createUser, "user", "", "Guest login username (gaming-arch and macos templates; others hard-code their user)")
-	createCmd.Flags().StringVar(&createPassword, "password", "", "Guest login password (chpasswd via cloud-init; gaming-arch defaults to the username)")
+	createCmd.Flags().StringVar(&createUser, "user", "", "Guest login username (gaming-arch, omarchy and macos templates; others hard-code their user)")
+	createCmd.Flags().StringVar(&createPassword, "password", "", "Guest login password (gaming-arch and omarchy default to the username)")
 	createCmd.Flags().BoolVar(&createSSHShare, "ssh-share", false, "Enable SSH agent sharing into VM via AF_VSOCK")
 	createCmd.Flags().BoolVar(&createVsock, "vsock", false, "Attach a virtio-vsock device for a private host<->guest channel")
 	createCmd.Flags().BoolVar(&createHeadless, "headless", false, "Run VM headless (no display window); SSH-only access")
 	createCmd.Flags().IntVar(&createSSHPort, "ssh-port", 0, "Host port forwarded to VM port 22 (user-mode NAT; most templates default to a stable per-name port). Change later with `vee config <name> --ssh-port`")
-	createCmd.Flags().StringVar(&createDistro, "distro", "ubuntu", "Base OS distro for devbox/server/torrent templates: ubuntu, arch, fedora, alpine (torrent: ubuntu or alpine)")
+	createCmd.Flags().StringVar(&createDistro, "distro", "ubuntu", "Base OS distro for devbox/server/desktop/torrent templates: ubuntu, arch, fedora, alpine, omarchy (see template help for which distros each supports)")
 	createCmd.Flags().StringVar(&createDistroVersion, "distro-version", "latest", "ISO version for the selected distro (e.g. 24.04, 2025.05.01, 42) or 'latest'")
 	createCmd.Flags().StringVar(&createIPSW, "ipsw", "", "macos template: restore image — 'latest', an https URL, or a local .ipsw path")
 	createCmd.Flags().StringVar(&createMacosvmDir, "macosvm-dir", "", "macos template: import an existing macosvm bundle directory instead of restoring")
@@ -670,6 +677,7 @@ func init() {
 			"torrent\tqBittorrent VM with optional VPN",
 			"devbox\tDev environment with Docker + zsh",
 			"server\tMinimal server with openssh + ufw + fail2ban",
+			"omarchy\tOmarchy (Arch + Hyprland) desktop, unattended ISO install",
 			"windows\tWindows VM, unattended install (UEFI; secboot+TPM on x86_64)",
 			"truenas\tTrueNAS SCALE VM",
 			"docker\tAlpine Linux VM with Docker daemon on tcp://localhost:2375",

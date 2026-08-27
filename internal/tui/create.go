@@ -34,6 +34,7 @@ var allTemplateNames = []string{
 	"devbox",
 	"server",
 	"desktop",
+	"omarchy",
 	"docker",
 	"torrent",
 	"gaming-arch",

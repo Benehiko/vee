@@ -24,6 +24,13 @@ func NewDevboxConfig(ctx context.Context, p provider.Provider, name string, sshK
 		version = "latest"
 	}
 
+	// Omarchy has no cloud image and no cloud-init: it installs unattended
+	// from its own ISO instead, with Docker and the dev tooling already part
+	// of the stock install. The devbox's "dev" user carries over.
+	if distro == images.DistroOmarchy {
+		return NewOmarchyConfig(ctx, p, name, sshKeys, version, OmarchyOptions{Template: "devbox", User: "dev"})
+	}
+
 	img, err := images.NewImage(p, distro, version)
 	if err != nil {
 		return nil, fmt.Errorf("devbox image: %w", err)

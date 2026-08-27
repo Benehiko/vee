@@ -235,9 +235,10 @@ type templateListOut struct {
 // agents. TestTemplateCatalogMatchesBuild fails if the two sets drift.
 var templateCatalog = []templateInfo{
 	{Name: "ubuntu-server", Description: "Ubuntu 24.04 LTS server, UEFI, user-mode NIC (default template)"},
-	{Name: "devbox", Description: "Docker + zsh via cloud-init", Params: "distro (ubuntu|arch|fedora), distro_version"},
+	{Name: "devbox", Description: "Docker + zsh via cloud-init", Params: "distro (ubuntu|arch|fedora|omarchy), distro_version"},
 	{Name: "server", Description: "openssh + ufw + fail2ban via cloud-init", Params: "distro (ubuntu|arch|fedora), distro_version"},
-	{Name: "desktop", Description: "GNOME + Mesa, accelerated virtio-gpu (virgl)", Params: "distro (fedora|ubuntu)"},
+	{Name: "desktop", Description: "GNOME + Mesa, accelerated virtio-gpu (virgl)", Params: "distro (fedora|ubuntu|omarchy)"},
+	{Name: "omarchy", Description: "Omarchy (Arch + Hyprland) desktop, unattended ISO install seeded with user + SSH keys (sshd enabled), accelerated virtio-gpu (virgl)", Params: "distro_version, user, password"},
 	{Name: "docker", Description: "Alpine Linux with the Docker daemon on tcp://localhost:2375"},
 	{Name: "gaming-arch", Description: "Arch Linux + KDE Plasma + Steam, 16G / 8 CPUs", Params: "gpu_mode, gpu_pci, gpu_vendor (amd|nvidia|virtio)"},
 	{Name: "gaming-bazzite", Description: "Bazzite (Fedora Atomic) gaming ISO, 16G / 8 CPUs", Params: "gpu_mode, gpu_pci, gpu_vendor"},
@@ -282,7 +283,7 @@ type vmCreateIn struct {
 	Distro        string `json:"distro,omitempty" jsonschema:"distro for templates that support it: ubuntu, arch, fedora"`
 	DistroVersion string `json:"distro_version,omitempty" jsonschema:"distro version, or latest"`
 	Hostname      string `json:"hostname,omitempty"`
-	User          string `json:"user,omitempty" jsonschema:"guest login username (honoured by gaming-arch and macos)"`
+	User          string `json:"user,omitempty" jsonschema:"guest login username (honoured by gaming-arch, omarchy and macos)"`
 	Password      string `json:"password,omitempty" jsonschema:"guest login password; empty means SSH key-only"`
 	Nested        bool   `json:"nested,omitempty" jsonschema:"expose hardware virtualization to the guest (arm64 QEMU guests only)"`
 	NoAutoInstall bool   `json:"no_auto_install,omitempty" jsonschema:"skip the install pass; boot the primary disk as already installed"`

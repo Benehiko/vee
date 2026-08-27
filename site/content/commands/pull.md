@@ -54,6 +54,7 @@ vee pull macos https://updates.cdn-apple.com/…/UniversalMac_15.5_24F74_Restore
 | `fedora` | Cloud image — 42, 41, 40 |
 | `alpine` | Cloud image |
 | `bazzite` | Fedora Atomic gaming ISO |
+| `omarchy` | Omarchy (Arch + Hyprland) desktop ISO |
 | `truenas` | TrueNAS SCALE installer ISO |
 | `windows` | Built on demand, matching the host arch — `win11`, `win10`, `server2025`, `server2022` on x86_64; `win11`, `win10` on arm64 |
 

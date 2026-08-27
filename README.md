@@ -36,9 +36,10 @@ Templates apply sane defaults (memory, CPUs, disks, networking, cloud-init) auto
 | Template | Description |
 |----------|-------------|
 | `ubuntu-server` | Ubuntu 24.04 LTS · UEFI · user-mode NIC (default) |
-| `devbox` | Docker + zsh via cloud-init · `--distro` flag (ubuntu/arch/fedora) |
+| `devbox` | Docker + zsh via cloud-init · `--distro` flag (ubuntu/arch/fedora/omarchy) |
 | `server` | openssh + ufw + fail2ban via cloud-init · `--distro` flag |
-| `desktop` | GNOME + Mesa · accelerated virtio-gpu (virgl) · `--distro` flag (fedora/ubuntu) · Apple Silicon |
+| `desktop` | GNOME + Mesa · accelerated virtio-gpu (virgl) · `--distro` flag (fedora/ubuntu/omarchy) · Apple Silicon |
+| `omarchy` | [Omarchy](https://omarchy.org/) (Arch + Hyprland) desktop · 8G / 4 CPUs · fully unattended ISO install with seeded user + SSH keys · accelerated virtio-gpu (virgl) |
 | `gaming-arch` | Arch Linux + KDE Plasma + Steam · 16G / 8 CPUs · virgl or GPU passthrough |
 | `gaming-bazzite` | Bazzite (Fedora Atomic) gaming ISO · 16G / 8 CPUs · KDE Plasma |
 | `gaming` | Legacy alias for `gaming-arch` with passthrough |
@@ -92,6 +93,7 @@ Both the distro and `distro-version` forms shell-complete from the built-in list
 | `fedora` | Cloud image (cloud-init ready) — 42, 41 · aarch64 + x86_64 |
 | `alpine` | Cloud image |
 | `bazzite` | Fedora Atomic gaming ISO |
+| `omarchy` | Omarchy (Arch + Hyprland) desktop ISO — installs unattended via a vee-generated autoinstall seed |
 | `truenas` | TrueNAS SCALE installer ISO |
 | `windows` | Built on demand, matching the host arch — `win11`, `win10`, `server2025`, `server2022` on x86_64; `win11`, `win10` on arm64 (UUP dump publishes no arm64 Server feature builds) |
 | `macos` | Restore image (IPSW, 15-20 GB) — `latest` asks the host which image it can install; an `https://…ipsw` URL from [ipsw.me](https://ipsw.me/product/Mac/) pins an older one · Apple Silicon macOS hosts only |
