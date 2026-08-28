@@ -1973,7 +1973,10 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 			// virtio-gpu-gl-pci + "-display cocoa,gl=es" (ANGLE/Metal); on Linux
 			// virtio-vga-gl + "-display gtk,gl=on". Hardware acceleration only
 			// materializes when the resolved QEMU was built with virglrenderer.
-			dev := qemu.VirtioGPUDevice(arch, true, cfg.GPU.Venus, cfg.GPU.HostMem)
+			// The fixed EDID mode matches the 2D fallback branch above, so the
+			// guest desktop comes up at the same resolution either way instead
+			// of virtio-gpu's 1024x768 default.
+			dev := qemu.VirtioGPUDevice(arch, true, cfg.GPU.Venus, cfg.GPU.HostMem) + ",edid=on,xres=1920,yres=1080"
 			opts = append(opts, qemu.WithDevice(dev))
 			opts = append(opts, qemu.WithDisplay(qemu.DisplayArg(platform.HostOS(), true, qemu.GLBackend(cfg.GPU.GLBackend))))
 			if platform.IsMacOS() {
