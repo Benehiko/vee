@@ -69,7 +69,18 @@ func (m *Manager) WaitSSHReady(ctx context.Context, name string, timeout time.Du
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if !isAlive(state.PID) {
+		// Reload state each attempt: a guest-requested reboot power-cycles the
+		// VM into a new process mid-wait, and the pre-reboot snapshot would
+		// misreport the relaunched guest as exited.
+		if s, serr := m.loadState(name); serr == nil && s != nil {
+			state = s
+		}
+		if !state.Running || !isAlive(state.PID) {
+			if state.LastShutdownReason == ShutdownReasonReboot {
+				lastErr = fmt.Errorf("VM %q is power-cycling after a guest-requested reboot", name)
+				time.Sleep(2 * time.Second)
+				continue
+			}
 			return fmt.Errorf("VM %q process exited while waiting", name)
 		}
 

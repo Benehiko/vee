@@ -52,6 +52,15 @@ type ShutdownEventData struct {
 	Reason string `json:"reason,omitempty"`
 }
 
+// ResetEventData is the payload of QMP's RESET event, emitted when the board
+// resets without the QEMU process exiting (the default -action reboot=reset).
+// Guest is true when the guest OS requested the reset (`reboot` inside the
+// VM), false for host-requested resets (QMP system_reset).
+type ResetEventData struct {
+	Guest  bool   `json:"guest"`
+	Reason string `json:"reason,omitempty"`
+}
+
 // NewQMPClient dials the QMP Unix socket, retrying for up to timeout.
 func NewQMPClient(ctx context.Context, socketPath string, timeout time.Duration) (*QMPClient, error) {
 	deadline := time.Now().Add(timeout)

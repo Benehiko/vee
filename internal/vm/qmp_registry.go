@@ -44,10 +44,16 @@ func (r *qmpRegistry) get(name string) (*qemu.QMPOwner, bool) {
 	return o, ok
 }
 
-func (r *qmpRegistry) delete(name string) {
+// deleteIf removes the entry for name only while it still points at o. A
+// reboot power-cycle registers the relaunched VM's owner before the old
+// watcher's deferred cleanup runs; an unconditional delete would deregister
+// the fresh connection.
+func (r *qmpRegistry) deleteIf(name string, o *qemu.QMPOwner) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	delete(r.owners, name)
+	if cur, ok := r.owners[name]; ok && cur == o {
+		delete(r.owners, name)
+	}
 }
 
 // ExecuteQMP runs a QMP command against a running VM via its registered owner
@@ -169,7 +175,7 @@ func (m *Manager) watchVMConnection(ctx context.Context, name, qmpSocket string)
 	}
 	defer func() {
 		if m.qmp != nil {
-			m.qmp.delete(name)
+			m.qmp.deleteIf(name, owner)
 		}
 		_ = owner.Close()
 	}()
@@ -181,11 +187,15 @@ func (m *Manager) watchVMConnection(ctx context.Context, name, qmpSocket string)
 				zap.String("vm", name))
 			return
 		case ev := <-events:
-			if ev.Event != "SHUTDOWN" {
-				continue
-			}
-			if m.handleShutdownEvent(name, ev) {
-				return
+			switch ev.Event {
+			case "SHUTDOWN":
+				if m.handleShutdownEvent(ctx, name, ev) {
+					return
+				}
+			case "RESET":
+				if m.handleResetEvent(ctx, name, ev) {
+					return
+				}
 			}
 		}
 	}
@@ -194,7 +204,7 @@ func (m *Manager) watchVMConnection(ctx context.Context, name, qmpSocket string)
 // handleShutdownEvent records the shutdown reason for a SHUTDOWN event and
 // reports whether the watcher should stop (true once the terminal event is
 // handled).
-func (m *Manager) handleShutdownEvent(name string, ev qemu.QMPEvent) bool {
+func (m *Manager) handleShutdownEvent(ctx context.Context, name string, ev qemu.QMPEvent) bool {
 	log := m.provider.Logger()
 
 	var data qemu.ShutdownEventData
@@ -208,8 +218,77 @@ func (m *Manager) handleShutdownEvent(name string, ev qemu.QMPEvent) bool {
 		return true
 	}
 
+	// A guest reset surfaces as SHUTDOWN only on builds configured with
+	// -action reboot=shutdown (the default reboot=reset emits RESET instead,
+	// handled in handleResetEvent). Either way the guest asked to come back
+	// up, not to be left off.
+	if data.Reason == "guest-reset" && m.shouldPowerCycleOnGuestReset(name) {
+		go m.powerCycleAfterGuestReset(ctx, name)
+		return true
+	}
+
 	m.recordGuestShutdown(name)
 	return true
+}
+
+// handleResetEvent reacts to QMP's RESET event: the board reset in place and
+// the QEMU process stays alive. A guest-initiated reset (`reboot` inside the
+// guest) cannot be left to that warm reset here — under HVF the firmware
+// re-enters edk2 with interrupt/timer state Hypervisor.framework does not
+// reinitialize, so the guest wedges while QEMU looks healthy ("Display output
+// is not active", SSH connection reset, a live PID). vee answers with what
+// the user would otherwise do by hand: a full power-cycle into a fresh QEMU
+// process. Host-requested resets (QMP system_reset) and resets during a
+// pending install pass (Windows setup reboots mid-install and resumes fine in
+// place) keep the warm-reset behavior. Reports whether the watcher should
+// stop — the relaunch registers a fresh owner and watcher.
+func (m *Manager) handleResetEvent(ctx context.Context, name string, ev qemu.QMPEvent) bool {
+	var data qemu.ResetEventData
+	_ = json.Unmarshal(ev.Data, &data)
+	if !data.Guest || !m.shouldPowerCycleOnGuestReset(name) {
+		return false
+	}
+	go m.powerCycleAfterGuestReset(ctx, name)
+	return true
+}
+
+// shouldPowerCycleOnGuestReset gates the reboot power-cycle: never during a
+// pending install pass, where installer-driven reboots must stay in place and
+// a guest-initiated stop signals install completion. The VM must also still
+// be recorded as running — loadState hands back an empty state for names it
+// has no record of, and those have nothing to relaunch.
+func (m *Manager) shouldPowerCycleOnGuestReset(name string) bool {
+	state, err := m.loadState(name)
+	if err != nil {
+		return false
+	}
+	return state.Running && state.InstallState != InstallStatePending
+}
+
+// powerCycleAfterGuestReset relaunches a VM whose guest requested a reboot.
+// ForceStop rather than Stop: the guest has already flushed its disks and
+// reset the board, so there is nothing left to shut down gracefully — and on
+// the wedge path the firmware would ignore system_powerdown until the 30s
+// kill fallback anyway. A failed relaunch leaves DesiredState=running, so the
+// daemon's autostart pass retries it. The relaunch must not die with the
+// caller (the watcher's connection drops mid-cycle), so the deadline hangs
+// off a detached copy of its context.
+func (m *Manager) powerCycleAfterGuestReset(ctx context.Context, name string) {
+	log := m.provider.Logger()
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Minute)
+	defer cancel()
+
+	log.Info("guest requested a reboot: power-cycling",
+		zap.String("vm", name))
+	if err := m.forceStopWithReason(ctx, name, ShutdownReasonReboot); err != nil {
+		log.Warn("reboot power-cycle: stop failed",
+			zap.String("vm", name), zap.Error(err))
+		return
+	}
+	if err := m.Start(ctx, name, false); err != nil {
+		log.Warn("reboot power-cycle: relaunch failed",
+			zap.String("vm", name), zap.Error(err))
+	}
 }
 
 // recordGuestShutdown marks a VM's state as guest-initiated shutdown so the

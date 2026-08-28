@@ -67,9 +67,11 @@ screen directly.
 
 QEMU's QMP socket (`-qmp unix:…,server,nowait`) accepts **only one connected
 client at a time**. The vee daemon holds that single connection for every VM it
-supervises, so it can watch for guest-initiated `SHUTDOWN` events and tell a
-clean guest poweroff apart from a crash. A second process dialing the same
-socket gets `EAGAIN` ("resource temporarily unavailable").
+supervises, so it can watch for guest-initiated `SHUTDOWN` events (telling a
+clean guest poweroff apart from a crash) and `RESET` events (a `reboot` inside
+the guest, which vee answers with a full power-cycle — see `vee stop`'s
+documentation). A second process dialing the same socket gets `EAGAIN`
+("resource temporarily unavailable").
 
 To avoid that collision, `vee qmp` chooses its transport automatically:
 
