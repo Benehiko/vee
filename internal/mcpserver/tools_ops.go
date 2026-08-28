@@ -448,29 +448,34 @@ type vmScreenshotIn struct {
 }
 
 type vmScreenshotOut struct {
-	Width  int    `json:"width"`
-	Height int    `json:"height"`
-	Bytes  int    `json:"bytes"`
-	Path   string `json:"path,omitempty" jsonschema:"host file the PNG was saved to, when path was given"`
+	Width   int    `json:"width"`
+	Height  int    `json:"height"`
+	Bytes   int    `json:"bytes"`
+	Path    string `json:"path,omitempty" jsonschema:"host file the PNG was saved to, when path was given"`
+	Warning string `json:"warning,omitempty" jsonschema:"set when the capture is a single solid color (locked session or unreadable GL scanout)"`
 }
 
 func (s *server) vmScreenshot(ctx context.Context, _ *mcp.CallToolRequest, in vmScreenshotIn) (*mcp.CallToolResult, vmScreenshotOut, error) {
-	data, width, height, err := s.mgr.Screenshot(ctx, in.Name)
+	data, width, height, warning, err := s.mgr.Screenshot(ctx, in.Name)
 	if err != nil {
 		return nil, vmScreenshotOut{}, err
 	}
-	out := vmScreenshotOut{Width: width, Height: height, Bytes: len(data)}
+	out := vmScreenshotOut{Width: width, Height: height, Bytes: len(data), Warning: warning}
 	if in.Path != "" {
 		if err := os.WriteFile(in.Path, data, 0o600); err != nil {
 			return nil, vmScreenshotOut{}, fmt.Errorf("save PNG: %w", err)
 		}
 		out.Path = in.Path
 	}
+	summary := fmt.Sprintf("%dx%d PNG, %d bytes", width, height, len(data))
+	if warning != "" {
+		summary += "\nwarning: " + warning
+	}
 	// Hand the pixels back as image content (the SDK base64-encodes them);
 	// the typed output still lands in structuredContent alongside it.
 	res := &mcp.CallToolResult{
 		Content: []mcp.Content{
-			&mcp.TextContent{Text: fmt.Sprintf("%dx%d PNG, %d bytes", width, height, len(data))},
+			&mcp.TextContent{Text: summary},
 			&mcp.ImageContent{Data: data, MIMEType: "image/png"},
 		},
 	}

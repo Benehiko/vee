@@ -281,7 +281,8 @@ func (m *Manager) startAutoStartVMs(ctx context.Context) error {
 //
 //   - DesiredState=stopped     → never restart (user ran `vee stop`)
 //   - LastShutdownReason=guest → never restart (guest OS shut itself down)
-//   - DesiredState=running     → restart (recover from crash / fresh boot)
+//   - DesiredState=running     → restart (recover from crash / fresh boot,
+//     or a reboot power-cycle whose relaunch failed — reason=reboot)
 //   - DesiredState=""          → legacy state predating these fields; honour
 //     auto_start as before
 func shouldDaemonStart(state *VMState) bool {

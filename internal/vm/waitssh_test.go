@@ -160,6 +160,34 @@ func TestWaitSSHReady(t *testing.T) {
 	}
 }
 
+func TestWaitSSHReadyCloudInit(t *testing.T) {
+	// With --cloud-init the wait must gate on the provisioning probe, and the
+	// probe must escalate through passwordless sudo where it works: on Fedora
+	// /run/cloud-init/status.json is root-readable only, so an unprivileged
+	// `cloud-init status` fails spuriously.
+	cmds := make(chan string, 4)
+	ln := startTestSSHD(t, testHostSigner(t), cmds)
+	port := ln.Addr().(*net.TCPAddr).Port
+	m := setupWaitVM(t, "desktop", port)
+
+	if err := m.WaitSSHReady(t.Context(), "waitvm", 30*time.Second, true); err != nil {
+		t.Fatalf("WaitSSHReady: %v", err)
+	}
+
+	var got []string
+	for len(cmds) > 0 {
+		got = append(got, <-cmds)
+	}
+	if len(got) != 2 || got[0] != "true" || got[1] != cloudInitWaitCmd {
+		t.Errorf("exec sequence = %q, want [true, cloudInitWaitCmd]", got)
+	}
+	for _, fragment := range []string{"command -v cloud-init", "sudo -n cloud-init status --wait", "exit 127"} {
+		if !strings.Contains(cloudInitWaitCmd, fragment) {
+			t.Errorf("cloudInitWaitCmd misses %q", fragment)
+		}
+	}
+}
+
 func TestWaitSSHReadyTimeout(t *testing.T) {
 	// A port nothing listens on: the wait must give up at the deadline with a
 	// timeout error, not hang.

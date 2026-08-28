@@ -71,6 +71,29 @@ func DecodePPM(data []byte) (image.Image, error) {
 	return img, nil
 }
 
+// UniformImage reports whether every pixel of img has the same color — the
+// shape of a screendump that captured nothing real: a locked session's black
+// lock screen, or a GL-backed console whose scanout lives in a host GL
+// texture the CPU-side surface never sees. Callers use it to warn, not to
+// fail: a solid frame can also be legitimate (a bare console blanked screen).
+func UniformImage(img image.Image) bool {
+	b := img.Bounds()
+	if b.Empty() {
+		return true
+	}
+	first := img.At(b.Min.X, b.Min.Y)
+	fr, fg, fb, fa := first.RGBA()
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			r, g, bl, a := img.At(x, y).RGBA()
+			if r != fr || g != fg || bl != fb || a != fa {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // scaleSample maps a 0..maxval sample to 0..255, clamping samples that a
 // malformed file put above maxval.
 func scaleSample(v byte, maxval int) byte {
