@@ -15,8 +15,8 @@ import (
 // authenticated exec round-trip succeeds, unlike the start-time readiness
 // probe, whose bare TCP dial (or QGA ping) can flip "ready" before
 // authorized_keys are in place or cloud-init has finished. With cloudInit set
-// it additionally runs `cloud-init status --wait` (POSIX guests only), so
-// "ready" also means first-boot provisioning is done.
+// it additionally runs cloudInitWaitCmd (POSIX guests only), so "ready" also
+// means first-boot provisioning is done.
 func (m *Manager) WaitSSHReady(ctx context.Context, name string, timeout time.Duration, cloudInit bool) error {
 	cfg, err := m.LoadConfig(name)
 	if err != nil {
@@ -160,14 +160,23 @@ func (m *Manager) sshExecProbe(ctx context.Context, addr, user string, key []byt
 	return err == nil
 }
 
-// waitCloudInitDone runs `cloud-init status --wait` on an established
-// connection, bounded by the caller's remaining time. Exit status 2 means
-// done with recoverable errors — still done; 127 means the guest has no
-// cloud-init, which cannot block readiness either.
+// cloudInitWaitCmd gates readiness on first-boot provisioning. Guests without
+// cloud-init (macOS, Alpine-based templates) exit 127 up front, which cannot
+// block readiness. Where passwordless sudo works, status runs privileged: on
+// Fedora /run/cloud-init/status.json is root-readable only, so an
+// unprivileged `cloud-init status` exits 1 — a spurious hard failure, not
+// "still provisioning".
+const cloudInitWaitCmd = "command -v cloud-init >/dev/null 2>&1 || exit 127; " +
+	"if sudo -n true 2>/dev/null; then sudo -n cloud-init status --wait; else cloud-init status --wait; fi"
+
+// waitCloudInitDone runs cloudInitWaitCmd on an established connection,
+// bounded by the caller's remaining time. Exit status 2 means done with
+// recoverable errors — still done; 127 means the guest has no cloud-init,
+// which cannot block readiness either.
 func (m *Manager) waitCloudInitDone(ctx context.Context, client *sshExecClient, remaining time.Duration) error {
 	runCtx, cancel := context.WithTimeout(ctx, remaining)
 	defer cancel()
-	_, _, err := client.Run(runCtx, "cloud-init status --wait")
+	_, _, err := client.Run(runCtx, cloudInitWaitCmd)
 	if err == nil {
 		return nil
 	}
