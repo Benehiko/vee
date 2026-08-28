@@ -5,6 +5,8 @@ weight: 25
 
 Graphical Linux desktop with accelerated virtio-gpu (virgl). Boots a distro cloud image and cloud-init installs a minimal GNOME + Mesa GL/Vulkan stack with GDM autologin. Works on Apple Silicon (aarch64).
 
+The GUI comes up on the first boot: provisioning switches the running system to `graphical.target` once GDM is installed, so no power-cycle is needed after `vee create`. Gate on provisioning with `vee wait <name> --cloud-init`. The autologin session never locks — screen locking and idle blanking are disabled system-wide (dconf) so unattended sessions stay usable for screenshots and UI automation.
+
 ## Create
 
 ```sh

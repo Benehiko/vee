@@ -108,17 +108,56 @@ func NewDesktopConfig(ctx context.Context, p provider.Provider, name string, ssh
 	return cfg, nil
 }
 
+// dconf system-database files that keep the autologin session usable
+// unattended: no screen lock, no idle blanking. Without these, GNOME locks
+// the session on idle and every screenshot after that is a black lock screen
+// nobody is around to unlock. The keys are locked down so a stray in-guest
+// settings change cannot re-enable locking under a test run.
+const (
+	desktopDconfProfile = "user-db:user\nsystem-db:local\n"
+	desktopDconfNoLock  = `[org/gnome/desktop/screensaver]
+lock-enabled=false
+
+[org/gnome/desktop/session]
+idle-delay=uint32 0
+
+[org/gnome/desktop/lockdown]
+disable-lock-screen=true
+`
+	desktopDconfLocks = `/org/gnome/desktop/screensaver/lock-enabled
+/org/gnome/desktop/session/idle-delay
+/org/gnome/desktop/lockdown/disable-lock-screen
+`
+)
+
 // desktopRunCmds returns the cloud-init runcmd + write_files that install a
 // minimal GNOME desktop and enable GDM autologin for the cloud image's default
 // user. The Mesa GL/Vulkan drivers come from the CategoryDesktop package list;
-// these commands add the desktop environment itself (a group install) and flip
-// the system to the graphical target.
+// these commands add the desktop environment itself (a group install), flip
+// the system to the graphical target, and start it in the same boot — without
+// the final isolate, the running system would stay on multi-user.target until
+// a power-cycle, hiding the GUI from the first boot entirely.
 func desktopRunCmds(distro, user string) ([]string, []vm.CloudInitWriteFile) {
 	vsockService := vsockSSHAgentService()
 	writeFiles := []vm.CloudInitWriteFile{
 		{
 			Path:        "/etc/systemd/system/vee-ssh-agent.service",
 			Content:     vsockService,
+			Permissions: "0644",
+		},
+		{
+			Path:        "/etc/dconf/profile/user",
+			Content:     desktopDconfProfile,
+			Permissions: "0644",
+		},
+		{
+			Path:        "/etc/dconf/db/local.d/00-vee-desktop",
+			Content:     desktopDconfNoLock,
+			Permissions: "0644",
+		},
+		{
+			Path:        "/etc/dconf/db/local.d/locks/00-vee-desktop",
+			Content:     desktopDconfLocks,
 			Permissions: "0644",
 		},
 	}
@@ -133,9 +172,13 @@ func desktopRunCmds(distro, user string) ([]string, []vm.CloudInitWriteFile) {
 		runCmds := []string{
 			"dnf install -y @base-x gnome-shell gnome-session gnome-terminal nautilus gnome-control-center gdm",
 			"dnf install -y socat",
+			// The dconf binary arrives with GNOME above; the keyfiles landed
+			// via write_files before any runcmd.
+			"dconf update",
 			"systemctl set-default graphical.target",
 			"systemctl enable gdm",
 			"systemctl enable --now vee-ssh-agent",
+			"systemctl --no-block isolate graphical.target",
 		}
 		return runCmds, writeFiles
 
@@ -148,9 +191,11 @@ func desktopRunCmds(distro, user string) ([]string, []vm.CloudInitWriteFile) {
 		runCmds := []string{
 			"apt-get update",
 			"DEBIAN_FRONTEND=noninteractive apt-get install -y ubuntu-desktop-minimal gdm3 socat",
+			"dconf update",
 			"systemctl set-default graphical.target",
 			"systemctl enable gdm3",
 			"systemctl enable --now vee-ssh-agent",
+			"systemctl --no-block isolate graphical.target",
 		}
 		return runCmds, writeFiles
 	}
