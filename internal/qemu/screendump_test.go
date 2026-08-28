@@ -76,3 +76,37 @@ func TestDecodePPMErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestUniformImage(t *testing.T) {
+	black := make([]byte, 2*2*3)
+	blackImg, err := DecodePPM(buildP6("P6\n2 2\n255\n", black))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !UniformImage(blackImg) {
+		t.Error("all-black frame not reported uniform")
+	}
+
+	mixed := []byte{
+		255, 0, 0, 0, 255, 0,
+		0, 0, 255, 255, 255, 255,
+	}
+	mixedImg, err := DecodePPM(buildP6("P6\n2 2\n255\n", mixed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if UniformImage(mixedImg) {
+		t.Error("multi-color frame reported uniform")
+	}
+
+	// A single off pixel in an otherwise solid frame must break uniformity.
+	almost := make([]byte, 3*3*3)
+	almost[len(almost)-1] = 1
+	almostImg, err := DecodePPM(buildP6("P6\n3 3\n255\n", almost))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if UniformImage(almostImg) {
+		t.Error("frame with one differing pixel reported uniform")
+	}
+}

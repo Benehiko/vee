@@ -45,7 +45,7 @@ Examples:
 			out = args[1]
 		}
 
-		data, width, height, err := vm.NewManager(prov).Screenshot(cmd.Context(), name)
+		data, width, height, warning, err := vm.NewManager(prov).Screenshot(cmd.Context(), name)
 		if err != nil {
 			return err
 		}
@@ -58,6 +58,9 @@ Examples:
 			abs = out
 		}
 		cmd.PrintErrf("captured %dx%d\n", width, height)
+		if warning != "" {
+			cmd.PrintErrf("warning: %s\n", warning)
+		}
 		fmt.Println(abs)
 		return nil
 	},

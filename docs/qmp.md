@@ -59,6 +59,13 @@ daemon-aware transport as `vee qmp` (see below).
 Only QEMU-backed VMs can be captured — vz-backed VMs have no QMP socket. For
 a macOS guest, connect to its Screen Sharing with `vee view` instead.
 
+When the capture comes back as a single solid color, vee prints a warning on
+stderr (the PNG is still written): a uniform frame is almost always either a
+locked guest session (`loginctl unlock-sessions` inside the guest) or a
+GL-backed display whose scanout lives in a host GL texture that `screendump`'s
+CPU-side surface never sees. In the GL case, drive the application under test
+through its API or logs instead of pixels, or boot the VM with the 2D adapter.
+
 The MCP server exposes the same capture as the `vm_screenshot` tool, which
 returns the PNG inline as image content so an agent can look at the guest's
 screen directly.
