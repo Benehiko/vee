@@ -130,6 +130,17 @@ disable-lock-screen=true
 `
 )
 
+// First-boot banner: while cloud-init installs GNOME the VM window shows a
+// bare text console for several minutes, and the first thing a user sees is
+// "no GUI". Say what is happening on the display itself — immediately on
+// tty1, and on the login prompt via issue.d for anyone who gets there first.
+// Both are removed by the final runcmd; later boots go straight to GDM.
+const (
+	desktopIssueBanner = "\nvee: installing the GNOME desktop (first boot) — the GUI starts\nautomatically when provisioning finishes: vee wait <name> --cloud-init\n\n"
+	desktopIssuePath   = "/etc/issue.d/50-vee-desktop.issue"
+	desktopTTYBanner   = "printf '\\n  vee: installing the GNOME desktop (first boot, takes a few minutes) —\\n  the GUI starts automatically when provisioning finishes.\\n\\n' > /dev/tty1 || true"
+)
+
 // desktopRunCmds returns the cloud-init runcmd + write_files that install a
 // minimal GNOME desktop and enable GDM autologin for the cloud image's default
 // user. The Mesa GL/Vulkan drivers come from the CategoryDesktop package list;
@@ -160,6 +171,11 @@ func desktopRunCmds(distro, user string) ([]string, []vm.CloudInitWriteFile) {
 			Content:     desktopDconfLocks,
 			Permissions: "0644",
 		},
+		{
+			Path:        desktopIssuePath,
+			Content:     desktopIssueBanner,
+			Permissions: "0644",
+		},
 	}
 
 	switch distro {
@@ -170,6 +186,7 @@ func desktopRunCmds(distro, user string) ([]string, []vm.CloudInitWriteFile) {
 			Permissions: "0644",
 		})
 		runCmds := []string{
+			desktopTTYBanner,
 			"dnf install -y @base-x gnome-shell gnome-session gnome-terminal nautilus gnome-control-center gdm",
 			"dnf install -y socat",
 			// The dconf binary arrives with GNOME above; the keyfiles landed
@@ -178,6 +195,7 @@ func desktopRunCmds(distro, user string) ([]string, []vm.CloudInitWriteFile) {
 			"systemctl set-default graphical.target",
 			"systemctl enable gdm",
 			"systemctl enable --now vee-ssh-agent",
+			"rm -f " + desktopIssuePath,
 			"systemctl --no-block isolate graphical.target",
 		}
 		return runCmds, writeFiles
@@ -189,6 +207,7 @@ func desktopRunCmds(distro, user string) ([]string, []vm.CloudInitWriteFile) {
 			Permissions: "0644",
 		})
 		runCmds := []string{
+			desktopTTYBanner,
 			"apt-get update",
 			// force-confold: the autologin custom.conf above is pre-seeded
 			// before gdm3 installs, and its conffile prompt would otherwise
@@ -200,6 +219,7 @@ func desktopRunCmds(distro, user string) ([]string, []vm.CloudInitWriteFile) {
 			"systemctl set-default graphical.target",
 			"systemctl enable gdm3",
 			"systemctl enable --now vee-ssh-agent",
+			"rm -f " + desktopIssuePath,
 			"systemctl --no-block isolate graphical.target",
 		}
 		return runCmds, writeFiles
