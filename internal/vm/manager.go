@@ -1989,6 +1989,14 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 					zap.String("vm", cfg.Name))
 			}
 		}
+		// The aarch64 "virt" board has no built-in input (x86 "q35" at least
+		// has PS/2), so a guest with a display but no input devices renders
+		// fine while dropping every click and keystroke.
+		if !cfg.Headless {
+			for _, dev := range qemu.VirtioInputDevices() {
+				opts = append(opts, qemu.WithDevice(dev))
+			}
+		}
 	case GPUAppleGFX:
 		// apple-gfx (ParavirtualizedGraphics.framework) accelerates macOS guests
 		// only and needs the vmapple machine, AVPBooter firmware, and a

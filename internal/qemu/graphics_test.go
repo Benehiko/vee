@@ -61,6 +61,19 @@ func TestDisplayArg(t *testing.T) {
 	}
 }
 
+func TestVirtioInputDevices(t *testing.T) {
+	got := qemu.VirtioInputDevices()
+	want := []string{"virtio-keyboard-pci", "virtio-tablet-pci"}
+	if len(got) != len(want) {
+		t.Fatalf("VirtioInputDevices() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("VirtioInputDevices()[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestDefaultGLBackend(t *testing.T) {
 	if got := qemu.DefaultGLBackend("darwin"); got != qemu.GLBackendES {
 		t.Errorf("macOS default GL backend: got %q, want es", got)
