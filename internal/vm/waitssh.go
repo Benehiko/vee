@@ -114,10 +114,19 @@ func (m *Manager) WaitSSHReady(ctx context.Context, name string, timeout time.Du
 		if cloudInit && !windows {
 			err := m.waitCloudInitDone(ctx, client, time.Until(deadline))
 			_ = client.Close()
-			if err != nil {
+			if err == nil {
+				return nil
+			}
+			if errors.Is(err, errCloudInitFailed) || ctx.Err() != nil {
 				return fmt.Errorf("VM %q: %w", name, err)
 			}
-			return nil
+			// The connection died mid-wait, not cloud-init: first-boot
+			// provisioning can bounce the guest's networking (the desktop
+			// install restarts systemd-networkd under it). Redial and
+			// re-enter the wait until the deadline.
+			lastErr = fmt.Errorf("cloud-init wait interrupted: %w", err)
+			time.Sleep(2 * time.Second)
+			continue
 		}
 		_ = client.Close()
 		return nil
@@ -169,10 +178,18 @@ func (m *Manager) sshExecProbe(ctx context.Context, addr, user string, key []byt
 const cloudInitWaitCmd = "command -v cloud-init >/dev/null 2>&1 || exit 127; " +
 	"if sudo -n true 2>/dev/null; then sudo -n cloud-init status --wait; else cloud-init status --wait; fi"
 
+// errCloudInitFailed marks a definitive provisioning failure: cloud-init ran
+// to completion and reported error status. Only this outcome is terminal for
+// the wait — a dropped connection is retried on a fresh dial, because
+// first-boot provisioning can bounce the guest's networking under the wait.
+var errCloudInitFailed = errors.New("cloud-init finished with an error status")
+
 // waitCloudInitDone runs cloudInitWaitCmd on an established connection,
 // bounded by the caller's remaining time. Exit status 2 means done with
 // recoverable errors — still done; 127 means the guest has no cloud-init,
-// which cannot block readiness either.
+// which cannot block readiness either. Any other exit status is a terminal
+// errCloudInitFailed; a connection-level failure (no exit status) is returned
+// as-is for the caller to retry.
 func (m *Manager) waitCloudInitDone(ctx context.Context, client *sshExecClient, remaining time.Duration) error {
 	runCtx, cancel := context.WithTimeout(ctx, remaining)
 	defer cancel()
@@ -186,6 +203,7 @@ func (m *Manager) waitCloudInitDone(ctx context.Context, client *sshExecClient, 
 		case 2, 127:
 			return nil
 		}
+		return fmt.Errorf("%w (cloud-init status --wait exited %d)", errCloudInitFailed, exitErr.ExitStatus())
 	}
 	return fmt.Errorf("cloud-init not finished: %w", err)
 }

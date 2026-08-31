@@ -160,6 +160,12 @@ func (m *Manager) RunDaemon(ctx context.Context) error {
 			if err := m.startAutoStartVMs(ctx); err != nil {
 				log.Warn("autostart watch pass had errors", zap.Error(err))
 			}
+			// Re-adopt on every pass, not just at startup: a VM started by
+			// the CLI after this daemon booted loses its QMP watcher the
+			// moment that CLI exits, and an unwatched VM's guest events —
+			// poweroff bookkeeping, the reboot power-cycle — go unseen.
+			// adoptRunningVMs skips VMs whose owner is already registered.
+			m.adoptRunningVMs(ctx)
 			reconcileInhibitor()
 			m.reconcileSSHProxies(ctx)
 			m.reconcileTunnels(ctx)

@@ -32,6 +32,16 @@ func TestDesktopRunCmdsProvisionGUIInBand(t *testing.T) {
 				t.Errorf("last runcmd = %q, want the graphical.target isolate", last)
 			}
 
+			// The first-boot banner must precede the long desktop install so
+			// the VM window explains itself, and must be gone before GDM
+			// takes over.
+			if runCmds[0] != desktopTTYBanner {
+				t.Errorf("first runcmd = %q, want the tty banner", runCmds[0])
+			}
+			if !slices.Contains(runCmds, "rm -f "+desktopIssuePath) {
+				t.Error("runcmds never remove the first-boot issue banner")
+			}
+
 			installIdx, dconfIdx := -1, -1
 			for i, cmd := range runCmds {
 				if strings.Contains(cmd, "install") && installIdx == -1 {
@@ -68,6 +78,7 @@ func TestDesktopWriteFilesDisableScreenLock(t *testing.T) {
 				"/etc/dconf/profile/user",
 				"/etc/dconf/db/local.d/00-vee-desktop",
 				"/etc/dconf/db/local.d/locks/00-vee-desktop",
+				desktopIssuePath,
 			} {
 				if !slices.Contains(paths, want) {
 					t.Errorf("write_files miss %s (got %v)", want, paths)

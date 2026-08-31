@@ -369,6 +369,15 @@ TrueNAS data disk passthrough (serial optional, auto-derived from path if omitte
 			if err := runStartSpinner(cmd, mgr, name); err != nil {
 				return err
 			}
+			// "ready" above means SSH answers — on a desktop template the
+			// GNOME group install is still running inside cloud-init at this
+			// point, and the VM window shows a text console for several more
+			// minutes. Say so, or the first thing a user sees is "no GUI".
+			if cfg.Template == "desktop" {
+				fmt.Printf("\nThe desktop is still installing inside the guest (first boot only);\n")
+				fmt.Printf("the VM window shows a text console until it finishes. Gate on it with:\n")
+				fmt.Printf("  vee wait %s --cloud-init\n", name)
+			}
 			// A macOS guest cannot be granted its Screen Sharing permissions
 			// until it has booted once, because macOS only creates the privacy
 			// database those grants live in during that boot. Complete the cycle

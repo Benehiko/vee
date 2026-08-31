@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,6 +18,15 @@ import (
 // startTestSSHD runs a minimal loopback sshd accepting any public key. Each
 // exec request is recorded on cmds and answered with exit status 0.
 func startTestSSHD(t *testing.T, hostSigner ssh.Signer, cmds chan<- string) net.Listener {
+	t.Helper()
+	return startTestSSHDHandler(t, hostSigner, cmds, nil)
+}
+
+// startTestSSHDHandler is startTestSSHD with a per-exec handler. The handler
+// reports whether to send an exit-status (and which); returning sendExit
+// false closes the channel without one, which the client surfaces as a
+// connection-level failure (ssh.ExitMissingError).
+func startTestSSHDHandler(t *testing.T, hostSigner ssh.Signer, cmds chan<- string, handler func(cmd string) (status byte, sendExit bool)) net.Listener {
 	t.Helper()
 	cfg := &ssh.ServerConfig{
 		PublicKeyCallback: func(ssh.ConnMetadata, ssh.PublicKey) (*ssh.Permissions, error) {
@@ -70,7 +80,13 @@ func startTestSSHD(t *testing.T, hostSigner ssh.Signer, cmds chan<- string) net.
 							default:
 							}
 							_ = req.Reply(true, nil)
-							_, _ = ch.SendRequest("exit-status", false, []byte{0, 0, 0, 0})
+							status, sendExit := byte(0), true
+							if handler != nil {
+								status, sendExit = handler(cmd)
+							}
+							if sendExit {
+								_, _ = ch.SendRequest("exit-status", false, []byte{0, 0, 0, status})
+							}
 							_ = ch.Close()
 						}
 					}()
@@ -185,6 +201,60 @@ func TestWaitSSHReadyCloudInit(t *testing.T) {
 		if !strings.Contains(cloudInitWaitCmd, fragment) {
 			t.Errorf("cloudInitWaitCmd misses %q", fragment)
 		}
+	}
+}
+
+func TestWaitSSHReadyCloudInitRetriesDroppedConnection(t *testing.T) {
+	// First-boot provisioning can bounce the guest's networking under the
+	// wait (the desktop install restarts systemd-networkd). A connection
+	// that dies mid `cloud-init status --wait` must be redialed and the
+	// wait re-entered — only a real error status is terminal.
+	var mu sync.Mutex
+	drops := 0
+	handler := func(cmd string) (byte, bool) {
+		if cmd != cloudInitWaitCmd {
+			return 0, true
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if drops == 0 {
+			drops++
+			return 0, false // die without an exit status: connection-level failure
+		}
+		return 0, true
+	}
+	cmds := make(chan string, 8)
+	ln := startTestSSHDHandler(t, testHostSigner(t), cmds, handler)
+	port := ln.Addr().(*net.TCPAddr).Port
+	m := setupWaitVM(t, "desktop", port)
+
+	if err := m.WaitSSHReady(t.Context(), "waitvm", 30*time.Second, true); err != nil {
+		t.Fatalf("WaitSSHReady: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if drops != 1 {
+		t.Errorf("dropped-connection path never exercised (drops=%d)", drops)
+	}
+}
+
+func TestWaitSSHReadyCloudInitErrorIsTerminal(t *testing.T) {
+	// cloud-init reporting error status (exit 1) must fail the wait
+	// immediately instead of retrying until the timeout.
+	handler := func(cmd string) (byte, bool) {
+		if cmd == cloudInitWaitCmd {
+			return 1, true
+		}
+		return 0, true
+	}
+	cmds := make(chan string, 8)
+	ln := startTestSSHDHandler(t, testHostSigner(t), cmds, handler)
+	port := ln.Addr().(*net.TCPAddr).Port
+	m := setupWaitVM(t, "desktop", port)
+
+	err := m.WaitSSHReady(t.Context(), "waitvm", 30*time.Second, true)
+	if err == nil || !strings.Contains(err.Error(), "error status") {
+		t.Fatalf("want terminal cloud-init failure, got %v", err)
 	}
 }
 
