@@ -11,7 +11,7 @@ vee wait <name> [--timeout 10m] [--cloud-init]
 
 Succeeds once an authenticated SSH command round-trip to the guest completes (`true` on POSIX guests, `ver` on Windows guests). `vee start`'s boot wait uses the same probe for provisioned guests; `wait` covers what start cannot: a VM that is already running (started earlier, by the daemon, or from another terminal), and gating on first-boot provisioning with `--cloud-init`.
 
-With `--cloud-init` it additionally runs `cloud-init status --wait` inside the guest, so "ready" also means the template's first-boot provisioning is done (POSIX guests only). The probe escalates through passwordless sudo when the guest grants it — on Fedora the cloud-init status file is root-readable only — and guests without cloud-init installed (macOS, the Alpine-based templates) pass immediately rather than blocking.
+With `--cloud-init` it additionally runs `cloud-init status --wait` inside the guest, so "ready" also means the template's first-boot provisioning is done (POSIX guests only). The probe escalates through passwordless sudo when the guest grants it — on Fedora the cloud-init status file is root-readable only — and guests without cloud-init installed (macOS, the Alpine-based templates) pass immediately rather than blocking. A connection that drops mid-wait is redialed until the timeout (first-boot provisioning can bounce the guest's networking, e.g. the desktop install restarting systemd-networkd); only cloud-init reporting an actual error status fails the wait early.
 
 Exits non-zero when the timeout passes or the VM's process exits, so it chains:
 
