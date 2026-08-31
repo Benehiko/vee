@@ -40,6 +40,12 @@ func TestDesktopRunCmdsProvisionGUIInBand(t *testing.T) {
 				if cmd == "dconf update" {
 					dconfIdx = i
 				}
+				// The pre-seeded gdm3 custom.conf trips dpkg's conffile
+				// prompt; without force-confold the noninteractive install
+				// aborts (no GDM, no sshd).
+				if strings.Contains(cmd, "apt-get install") && !strings.Contains(cmd, "-o Dpkg::Options::=--force-confold") {
+					t.Errorf("apt-get install misses --force-confold: %q", cmd)
+				}
 			}
 			if dconfIdx == -1 {
 				t.Error("runcmds miss `dconf update`")
