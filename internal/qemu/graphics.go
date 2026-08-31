@@ -57,6 +57,16 @@ func VirtioGPUDevice(arch string, gl, venus bool, hostMem string) string {
 	return dev
 }
 
+// VirtioInputDevices returns the -device values for a virtio keyboard and
+// tablet (absolute pointer). Boards without built-in input — the aarch64
+// "virt" board has no PS/2 controller, unlike x86 "q35" — drop every host
+// window click and keystroke unless explicit input devices are attached.
+// The virtio-input drivers ship in the Linux kernel; Windows guests need USB
+// HID devices instead.
+func VirtioInputDevices() []string {
+	return []string{"virtio-keyboard-pci", "virtio-tablet-pci"}
+}
+
 // DisplayArg returns the -display value for the given host OS. macOS only has
 // the cocoa windowed backend; Linux uses gtk. When gl is true the gl= suboption
 // is appended using backend (empty picks the host default: es on macOS, on
