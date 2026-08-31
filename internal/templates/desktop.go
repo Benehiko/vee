@@ -190,7 +190,12 @@ func desktopRunCmds(distro, user string) ([]string, []vm.CloudInitWriteFile) {
 		})
 		runCmds := []string{
 			"apt-get update",
-			"DEBIAN_FRONTEND=noninteractive apt-get install -y ubuntu-desktop-minimal gdm3 socat",
+			// force-confold: the autologin custom.conf above is pre-seeded
+			// before gdm3 installs, and its conffile prompt would otherwise
+			// abort the whole install under the noninteractive frontend
+			// (observed on ubuntu 24.04.9: dpkg fails, no GDM, no sshd).
+			// Keeping "old" keeps the pre-seeded file, which is the point.
+			"DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::=--force-confold ubuntu-desktop-minimal gdm3 socat",
 			"dconf update",
 			"systemctl set-default graphical.target",
 			"systemctl enable gdm3",
