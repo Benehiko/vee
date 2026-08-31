@@ -139,12 +139,17 @@ check the build log for that warning if the guest reports an `llvmpipe` renderer
 moved to the maintained **startergo** tap family (virglrenderer 1.x + ANGLE +
 patched libepoxy, carrying Akihiko Odaki's macOS patches) and gained a one-line
 EGL cast for ANGLE's int-typed native display (#93), and the published bundle
-now ships `libvirglrenderer` and exposes `virtio-gpu-gl-pci`. **Whether the
-rendering is actually Metal-accelerated at runtime (vs. falling back to
-software) has not been verified yet** — check `glxinfo -B` in a guest for a
-`virgl` vs `llvmpipe` renderer before trusting it. The notes below describe the
-earlier knazarov-era blocker and are kept for history; the toolchain fix-up
-notes still apply.
+now ships `libvirglrenderer` and exposes `virtio-gpu-gl-pci`.
+
+**Update (qemu-11.1.0-vee2):** the bundle also carries the cocoa OpenGL patch
+(`scripts/patches/qemu-11.1.0-cocoa-gl.patch`, applied at build time and
+published as a release asset), so `-display cocoa,gl=es` has a windowed sink —
+upstream `ui/cocoa` is still 2D-only. Verified on an M4 Max: virglrenderer
+initializes with `ANGLE Metal Renderer: Apple M4 Max` and an Ubuntu desktop
+guest boots under `virtio-gpu-gl-pci`. Cross-check acceleration in a guest with
+`glxinfo -B` (`virgl` = accelerated, `llvmpipe` = software fallback). The notes
+below describe the earlier knazarov-era blocker and are kept for history; the
+toolchain fix-up notes still apply.
 
 - **QEMU ↔ virglrenderer version mismatch (the blocker).** The build pins
   **QEMU 10.0.2**, but the
@@ -284,7 +289,7 @@ the user verbatim. The knob is wired for arm64 (aarch64) QEMU guests only;
 frameworks do not work inside a VM (see the macOS-guest caveats below).
 
 **Current HVF status:** QEMU gained HVF EL2 support in **11.1**, and vee's
-pinned bundle is **11.1.0** (`qemu-11.1.0-vee1`, built from the upstream final
+pinned bundle is **11.1.0** (`qemu-11.1.0-vee2`, built from the upstream final
 released 2026-08-11). The full chain is verified on an M4 Max: an Ubuntu 24.04 arm64 guest
 boots with `CPU: All CPU(s) started at EL2` and KVM initialized in-guest, using
 exactly the arguments vee generates. The hardware floor is an M3-or-later Mac
