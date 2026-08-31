@@ -219,6 +219,14 @@ func desktopRunCmds(distro, user string) ([]string, []vm.CloudInitWriteFile) {
 			"systemctl set-default graphical.target",
 			"systemctl enable gdm3",
 			"systemctl enable --now vee-ssh-agent",
+			// The desktop install pulls in NetworkManager, and partway
+			// through, systemd-networkd gets restarted with the netplan-
+			// generated config gone from /run — the NIC keeps carrier but
+			// loses its DHCP address, and NM does not adopt it (globally-
+			// managed-devices), so the guest is unreachable until a reboot.
+			// Regenerating and applying netplan hands the NIC back to a
+			// configured renderer in this same boot.
+			"netplan apply",
 			"rm -f " + desktopIssuePath,
 			"systemctl --no-block isolate graphical.target",
 		}
