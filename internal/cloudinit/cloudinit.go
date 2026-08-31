@@ -199,12 +199,13 @@ func renderUserData(cfg *Config) (string, error) {
 
 	if len(runCmds) > 0 {
 		sb.WriteString("runcmd:\n")
+		// Every command is a YAML literal block scalar. A plain scalar would
+		// need the full YAML quoting rules: one ": " inside a command turns
+		// the entry into a mapping and fails the whole runcmd stage at
+		// shellify time ("Unable to shellify type 'dict'"), a "#" starts a
+		// comment, and leading indicator characters change the node type. The
+		// block scalar carries any single- or multi-line command verbatim.
 		for _, c := range runCmds {
-			if !strings.Contains(c, "\n") {
-				fmt.Fprintf(&sb, "  - %s\n", c)
-				continue
-			}
-			// Multi-line command: emit as a YAML literal block scalar.
 			sb.WriteString("  - |\n")
 			for line := range strings.SplitSeq(c, "\n") {
 				fmt.Fprintf(&sb, "    %s\n", line)

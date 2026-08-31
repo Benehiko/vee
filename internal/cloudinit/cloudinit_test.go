@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"go.uber.org/goleak"
+	"gopkg.in/yaml.v3"
 
 	"github.com/Benehiko/vee/internal/cloudinit"
 )
@@ -186,5 +187,35 @@ func TestGenerateISO(t *testing.T) {
 	// upcases it, hdiutil keeps it lowercase; cloud-init accepts either).
 	if !strings.Contains(strings.ToLower(string(data)), "cidata") {
 		t.Fatal("cidata volume label not found in ISO")
+	}
+}
+
+// TestUserDataRunCmdsYAMLSafe renders commands full of YAML-hostile syntax and
+// re-parses the result: every runcmd entry must come back as the original
+// string. A plain-scalar rendering turned "vee: installing" into a mapping,
+// which failed cloud-init's whole runcmd stage at shellify time.
+func TestUserDataRunCmdsYAMLSafe(t *testing.T) {
+	cmds := []string{
+		`printf '\n  vee: installing the desktop\n' > /dev/tty1 || true`,
+		`echo "#not a comment" && echo {brace}`,
+		"- leading indicator",
+		"line one\nline two",
+	}
+	ud := mustUserData(t, &cloudinit.Config{RunCmds: cmds})
+
+	var parsed struct {
+		RunCmd []string `yaml:"runcmd"`
+	}
+	if err := yaml.Unmarshal([]byte(ud), &parsed); err != nil {
+		t.Fatalf("user-data is not valid YAML: %v\n%s", err, ud)
+	}
+	if len(parsed.RunCmd) != len(cmds) {
+		t.Fatalf("runcmd count = %d, want %d\n%s", len(parsed.RunCmd), len(cmds), ud)
+	}
+	for i, want := range cmds {
+		got := strings.TrimRight(parsed.RunCmd[i], "\n")
+		if got != want {
+			t.Errorf("runcmd[%d] = %q, want %q", i, got, want)
+		}
 	}
 }
