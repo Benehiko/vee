@@ -39,7 +39,9 @@ if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
 fi
 
 echo "==> Installing build dependencies via Homebrew"
-brew update
+# Best-effort: a failure fetching one unrelated tap must not abort the build;
+# the installs below fail on their own if the formulae are truly unavailable.
+brew update || echo "warning: brew update failed; continuing with existing formulae" >&2
 # Base QEMU build deps.
 brew install meson ninja pkg-config glib pixman dtc capstone libslirp \
   jpeg-turbo libpng curl ncurses dylibbundler bzip2
@@ -65,18 +67,47 @@ GL_ACCEL=1
 # *present* it refuses to resolve even core formulae. Trust these four specific
 # taps (scoped, not a global trust bypass); a no-op on older Homebrew.
 GL_TAPS=(startergo/virglrenderer startergo/angle startergo/gn startergo/libepoxy)
+# Taps clone anonymously over https. A user gitconfig that rewrites
+# https://github.com/ to ssh would route brew's clone through ssh auth instead
+# (and fail wherever the ssh agent is gated) — and brew scrubs the env, so no
+# per-process git config can reach its clone. Pre-clone each tap ourselves
+# with a longest-match identity rule that beats any such rewrite; brew then
+# adopts the existing directory.
+export GIT_CONFIG_COUNT=1 \
+  GIT_CONFIG_KEY_0="url.https://github.com/startergo/.insteadOf" \
+  GIT_CONFIG_VALUE_0="https://github.com/startergo/"
 for t in "${GL_TAPS[@]}"; do
+  tap_dir="$(brew --repository)/Library/Taps/${t%%/*}/homebrew-${t##*/}"
+  if [[ ! -d "$tap_dir" ]]; then
+    git clone --depth 1 "https://github.com/${t%%/*}/homebrew-${t##*/}" "$tap_dir" || true
+  fi
   brew tap "$t" 2>/dev/null || true
   brew trust "$t" 2>/dev/null || true
 done
+# Install the GL deps one by one, tolerating per-formula link failures (the
+# ANGLE tap bundles vulkan headers that collide with the vulkan-headers
+# formula's symlinks): a failed link still leaves a usable keg, but inside a
+# single dependent install it aborts the whole chain.
+for f in startergo/gn/gn startergo/libepoxy/libepoxy startergo/angle/angle; do
+  brew install "$f" 2>/dev/null || true
+done
 if ! brew install startergo/virglrenderer/virglrenderer; then
-  # No macOS Homebrew-core virglrenderer exists to fall back to, so build a plain
-  # HVF QEMU without accelerated virtio-gpu (2D still works; guests run fast
-  # under HVF). Untap the third-party taps so they don't poison core resolution.
-  echo "warning: startergo virglrenderer tap unavailable; building WITHOUT accelerated virtio-gpu (HVF + 2D only)" >&2
-  brew untap "${GL_TAPS[@]}" 2>/dev/null || true
-  brew install libepoxy || true
-  GL_ACCEL=0
+  # A failed `brew link` (the ANGLE tap bundles vulkan headers that collide
+  # with the vulkan-headers formula) still leaves usable kegs behind, and the
+  # include/lib paths below come from `brew --prefix`, which resolves unlinked
+  # kegs — only a missing keg means the stack is really unavailable.
+  if brew list startergo/virglrenderer/virglrenderer >/dev/null 2>&1; then
+    echo "note: virglrenderer keg installed but not linked (header conflicts) — continuing with keg paths" >&2
+  else
+    # No macOS Homebrew-core virglrenderer exists to fall back to, so build a
+    # plain HVF QEMU without accelerated virtio-gpu (2D still works; guests
+    # run fast under HVF). Untap the third-party taps so they don't poison
+    # core resolution.
+    echo "warning: startergo virglrenderer tap unavailable; building WITHOUT accelerated virtio-gpu (HVF + 2D only)" >&2
+    brew untap "${GL_TAPS[@]}" 2>/dev/null || true
+    brew install libepoxy || true
+    GL_ACCEL=0
+  fi
 fi
 brew install molten-vk vulkan-headers || true
 
@@ -90,19 +121,25 @@ for f in angle libangle libepoxy-angle libepoxy virglrenderer; do
 done
 export PKG_CONFIG_PATH="$PKGS"
 
-# QEMU's configure creates a Python venv (mkvenv) that needs "distlib" to build
-# console-script wrappers. Newer runner Pythons (3.12+, incl. Homebrew's 3.14)
-# are PEP 668 "externally managed", so a bare `pip install --user distlib`
-# fails (and previously did so silently), leaving configure to abort with
-# "found no usable distlib". Install it into the exact python3 configure will
-# pick, tolerating the externally-managed marker. Try the ordinary path first,
-# then fall back to --break-system-packages.
+# QEMU's configure creates a Python venv (mkvenv) that needs "distlib" (and
+# importable meson/pycotap, else it tries a pip install that a restrictive
+# user pip.conf can veto) to build console-script wrappers. Newer runner
+# Pythons (3.12+, incl. Homebrew's 3.14) are PEP 668 "externally managed", so
+# a bare `pip install --user` fails (and previously did so silently), leaving
+# configure to abort with "found no usable distlib". Install into the exact
+# python3 configure will pick, tolerating the externally-managed marker and
+# overriding pip.conf's require-virtualenv/require-hashes for just this
+# install. Try the ordinary path first, then fall back.
 PYBIN="$(command -v python3)"
-echo "==> Ensuring distlib for $PYBIN ($("$PYBIN" --version 2>&1))"
-if ! "$PYBIN" -c 'import distlib' >/dev/null 2>&1; then
-  "$PYBIN" -m pip install --user distlib >/dev/null 2>&1 ||
-    "$PYBIN" -m pip install --break-system-packages distlib >/dev/null 2>&1 ||
-    "$PYBIN" -m pip install --user --break-system-packages distlib >/dev/null 2>&1 ||
+PYPKGS=(distlib meson pycotap)
+# Exported for the whole build: configure's mkvenv runs pip itself (qemu.qmp
+# et al) and inherits any restrictive user pip.conf otherwise.
+export PIP_REQUIRE_VIRTUALENV=false PIP_REQUIRE_HASHES=0
+echo "==> Ensuring ${PYPKGS[*]} for $PYBIN ($("$PYBIN" --version 2>&1))"
+if ! "$PYBIN" -c 'import distlib, mesonbuild, pycotap' >/dev/null 2>&1; then
+  "$PYBIN" -m pip install --user "${PYPKGS[@]}" >/dev/null 2>&1 ||
+    "$PYBIN" -m pip install --break-system-packages "${PYPKGS[@]}" >/dev/null 2>&1 ||
+    "$PYBIN" -m pip install --user --break-system-packages "${PYPKGS[@]}" >/dev/null 2>&1 ||
     true
 fi
 "$PYBIN" -c 'import distlib; print("distlib", distlib.__version__)' ||
@@ -114,6 +151,21 @@ curl -fsSL "https://download.qemu.org/qemu-${QEMU_VERSION}.tar.xz" -o qemu.tar.x
 rm -rf "qemu-${QEMU_VERSION}"
 tar xf qemu.tar.xz
 cd "qemu-${QEMU_VERSION}"
+
+# Cocoa OpenGL support: upstream ui/cocoa is 2D-only (no dpy_gl ops), so
+# "-display cocoa,gl=es" refuses on every unpatched build. This is Akihiko
+# Odaki's cocoa-GL work, via startergo's qemu-v07 rebase, ported to this QEMU
+# version. Shipped as a patch-file release asset next to the tarball, like the
+# egl-helpers cast below (GPLv2 §3).
+COCOA_GL_PATCH="$SCRIPT_DIR/patches/qemu-${QEMU_VERSION}-cocoa-gl.patch"
+if [[ -f "$COCOA_GL_PATCH" ]]; then
+  echo "==> Applying $(basename "$COCOA_GL_PATCH")"
+  patch -p1 --no-backup-if-mismatch < "$COCOA_GL_PATCH"
+  mkdir -p "$OUT"
+  cp "$COCOA_GL_PATCH" "$OUT/"
+else
+  echo "warning: no cocoa-GL patch for QEMU ${QEMU_VERSION}; the cocoa display will be 2D-only" >&2
+fi
 
 # ui/egl-helpers.c passes an EGLNativeDisplayType straight to
 # eglGetPlatformDisplayEXT, whose prototype takes void*. Mesa's eglplatform.h
@@ -209,6 +261,14 @@ dylibbundler --overwrite-files --bundle-deps --create-dir \
   --fix-file "$BUNDLE/bin/qemu-system-aarch64" \
   --dest-dir "$BUNDLE/lib" \
   --install-path "@loader_path/../lib"
+
+# ANGLE is loaded lazily: epoxy dlopens libEGL.dylib/libGLESv2.dylib at the
+# first EGL call, so dylibbundler's link-time walk never sees them. Ship them
+# next to the other dylibs — the bundle's lib/ dir is on the loader path.
+ANGLE="$(brew --prefix startergo/angle/angle 2>/dev/null || brew --prefix angle 2>/dev/null || true)"
+if [[ -n "$ANGLE" && -f "$ANGLE/lib/libEGL.dylib" ]]; then
+  cp "$ANGLE/lib/libEGL.dylib" "$ANGLE/lib/libGLESv2.dylib" "$BUNDLE/lib/"
+fi
 
 # MoltenVK for Venus/Vulkan: copy the dylib + an ICD manifest the guest-facing
 # host Vulkan loader can find relative to the bundle.
