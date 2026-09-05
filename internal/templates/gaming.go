@@ -325,6 +325,16 @@ UEOF`
 		// Vulkan loader at the virtio (Venus) ICD. Without the second part RADV
 		// still claims the node first and dies in vdrm_device_connect ("failed
 		// to query GPU info"), leaving the guest with no Vulkan device at all.
+		//
+		// The third file works around a kwin/virgl incompatibility: kwin 6.7+
+		// wraps client wl_shm buffers in udmabuf dma-bufs and imports them into
+		// EGL. The virtio-gpu kernel driver turns such a foreign dma-buf into a
+		// guest-memory blob resource; Mesa's virgl driver sends the host a
+		// set_type for it, which virglrenderer silently rejects (no dmabuf fd),
+		// so the resource never gets a GL texture. kwin's first sampler view
+		// on it is then a fatal context error ("Illegal resource") and the
+		// compositor freezes while the guest stays alive. Disabling the udmabuf
+		// import makes kwin fall back to plain glTexImage2D uploads.
 		hideVirtioRender = `mkdir -p /mnt/etc/udev/rules.d
 cat > /mnt/etc/udev/rules.d/90-vee-virtio-render.rules <<'UEOF'
 # Managed by vee — virtio-gpu is the only GPU here; keep its render node usable.
@@ -335,6 +345,15 @@ cat > /mnt/etc/environment.d/99-vee-venus-icd.conf <<'UEOF'
 # Managed by vee — select the virtio (Venus) Vulkan ICD. RADV would otherwise
 # claim the virtio render node and fail in vdrm_device_connect.
 VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.json
+UEOF
+cat > /mnt/etc/environment.d/98-vee-kwin-udmabuf.conf <<'UEOF'
+# Managed by vee — keep kwin from importing client wl_shm buffers through
+# udmabuf. On virtio-gpu those imports become guest-memory blob resources that
+# the host virgl renderer cannot type; the first texture sampled from one is a
+# fatal "Illegal resource" context error and kwin stops rendering for good.
+# Triggered by any shm cursor image or software-rendered window (Steam,
+# Chromium, glxgears under Xwayland). Not needed on a passthrough GPU.
+KWIN_DISABLE_UDMABUF_IMPORT=1
 UEOF`
 	}
 
