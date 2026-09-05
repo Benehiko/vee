@@ -306,6 +306,35 @@ func archGamingSetup(user, password string, sshKeys []string, hostname string, o
 	kasmvncService := ""
 	kasmvncSetup := ""
 
+	// Only a passthrough VM has a second (VFIO) GPU for RADV to bind to, so
+	// only there may the virtio render node be hidden; see the block this
+	// substitutes into.
+	hideVirtioRender := ""
+	if opts.Passthrough {
+		hideVirtioRender = `mkdir -p /mnt/etc/udev/rules.d
+cat > /mnt/etc/udev/rules.d/90-vee-hide-virtio-render.rules <<'UEOF'
+# Managed by vee — hide virtio-gpu render node from Vulkan/RADV so the VFIO GPU
+# is selected. Keeps the virtio card (scanout) node available for SPICE.
+SUBSYSTEM=="drm", KERNEL=="renderD*", DRIVERS=="virtio-pci", MODE="0000"
+UEOF`
+	} else {
+		// virtio-gpu is the only GPU: keep its render node usable, and point the
+		// Vulkan loader at the virtio (Venus) ICD. Without the second part RADV
+		// still claims the node first and dies in vdrm_device_connect ("failed
+		// to query GPU info"), leaving the guest with no Vulkan device at all.
+		hideVirtioRender = `mkdir -p /mnt/etc/udev/rules.d
+cat > /mnt/etc/udev/rules.d/90-vee-virtio-render.rules <<'UEOF'
+# Managed by vee — virtio-gpu is the only GPU here; keep its render node usable.
+SUBSYSTEM=="drm", KERNEL=="renderD*", DRIVERS=="virtio-pci", MODE="0660", GROUP="render"
+UEOF
+mkdir -p /mnt/etc/environment.d
+cat > /mnt/etc/environment.d/99-vee-venus-icd.conf <<'UEOF'
+# Managed by vee — select the virtio (Venus) Vulkan ICD. RADV would otherwise
+# claim the virtio render node and fail in vdrm_device_connect.
+VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.json
+UEOF`
+	}
+
 	nvidiaSetup := ""
 	if opts.GPUVendor == GPUVendorNvidia {
 		nvidiaSetup = `arch-chroot /mnt systemctl enable nvidia-persistenced`
@@ -638,7 +667,7 @@ Environment=LIBVA_DRM_DEVICE=/dev/dri/renderD129
 Environment=LIBVA_DRIVER_NAME=radeonsi
 SEOF
 
-# Hide the virtio-gpu *render* node from Vulkan.
+# Hide the virtio-gpu *render* node from Vulkan (passthrough VMs only).
 #
 # The passthrough VM carries a virtio-gpu-pci device alongside the VFIO GPU so
 # SPICE/KMS has a scanout surface. Since Mesa 26, RADV enumerates every DRM
@@ -654,12 +683,12 @@ SEOF
 # (scanout) is left untouched, so SPICE/KMS display and Sunshine KMS capture
 # keep working. Match by parent driver + render kernel name so the rule is
 # robust to non-deterministic renderD* / card* numbering.
-mkdir -p /etc/udev/rules.d
-cat > /etc/udev/rules.d/90-vee-hide-virtio-render.rules <<'UEOF'
-# Managed by vee — hide virtio-gpu render node from Vulkan/RADV so the VFIO GPU
-# is selected. Keeps the virtio card (scanout) node available for SPICE.
-SUBSYSTEM=="drm", KERNEL=="renderD*", DRIVERS=="virtio-pci", MODE="0000"
-UEOF
+#
+# This is only correct when there IS another GPU to fall back to. On a
+# non-passthrough VM the virtio render node is the only one present, and
+# blanking it leaves guest Vulkan with no device at all ("Failed to detect any
+# valid GPUs"), which also kills the virgl/Venus path.
+%s
 
 # PipeWire RT priority drop-ins — rtkit grants elevated scheduling but only
 # after PipeWire's direct setpriority() attempt fails. The drop-ins ensure
@@ -942,7 +971,7 @@ sha256sum /mnt/usr/local/bin/vee-check | awk '{print $1}' > /mnt/etc/vee-check.s
 echo "==> vee-install: stage=cleanup"
 umount -R /mnt
 echo "==> vee-install: stage=done"
-poweroff`, user, password, gpuPkgs, hostname, hostname, strings.Join(sshKeys, "\n"), kasmvncService, nvidiaSetup, kasmvncSetup)
+poweroff`, user, password, gpuPkgs, hostname, hostname, strings.Join(sshKeys, "\n"), hideVirtioRender, kasmvncService, nvidiaSetup, kasmvncSetup)
 
 	writeFiles := []vm.CloudInitWriteFile{
 		{
