@@ -478,3 +478,34 @@ func TestApplyOverridesSPICEWithoutAccelIsValid(t *testing.T) {
 		t.Errorf("config: got %+v / spice=%v, want virtio with SPICE kept", cfg.GPU, cfg.SPICE != nil)
 	}
 }
+
+// The gaming templates mount VirtiofsMountDir themselves as "Games". The
+// generic --virtiofs-dir override must not add a second entry for the same
+// directory, which would run a second virtiofsd over the same tree.
+func TestApplyOverridesVirtiofsDirNotDuplicated(t *testing.T) {
+	cfg := &vm.VMConfig{
+		Name:           "t1",
+		VirtiofsMounts: []vm.VirtiofsMount{{SharedDir: "/mnt/library", Tag: "Games"}},
+	}
+	mustApplyOverrides(t, cfg, Opts{Name: "t1", VirtiofsDir: "/mnt/library", VirtiofsReadonly: true}, nil)
+
+	if len(cfg.VirtiofsMounts) != 1 {
+		t.Fatalf("VirtiofsMounts: got %d entries, want 1: %+v", len(cfg.VirtiofsMounts), cfg.VirtiofsMounts)
+	}
+	if m := cfg.VirtiofsMounts[0]; m.Tag != "Games" || !m.Readonly {
+		t.Errorf("mount: got %+v, want the template's Games tag with readonly applied", m)
+	}
+}
+
+// A different directory is still a separate share.
+func TestApplyOverridesVirtiofsDirDistinctIsAppended(t *testing.T) {
+	cfg := &vm.VMConfig{
+		Name:           "t1",
+		VirtiofsMounts: []vm.VirtiofsMount{{SharedDir: "/mnt/library", Tag: "Games"}},
+	}
+	mustApplyOverrides(t, cfg, Opts{Name: "t1", VirtiofsDir: "/mnt/other"}, nil)
+
+	if len(cfg.VirtiofsMounts) != 2 {
+		t.Fatalf("VirtiofsMounts: got %d entries, want 2: %+v", len(cfg.VirtiofsMounts), cfg.VirtiofsMounts)
+	}
+}

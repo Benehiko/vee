@@ -25,6 +25,9 @@ const (
 type GamingOptions struct {
 	// VirtiofsMountDir shares a host games directory (empty = skip).
 	VirtiofsMountDir string
+	// VirtiofsReadonly serves that share read-only, so a guest Steam cannot
+	// write to a host library the host itself may have open.
+	VirtiofsReadonly bool
 	// GPUVendor selects guest GPU driver packages (amd, nvidia, virtio).
 	// Defaults to "amd" when unset.
 	GPUVendor GPUVendor
@@ -178,7 +181,7 @@ func NewGamingArchConfig(ctx context.Context, p provider.Provider, name string, 
 
 	if opts.VirtiofsMountDir != "" {
 		cfg.VirtiofsMounts = []vm.VirtiofsMount{
-			{SharedDir: opts.VirtiofsMountDir, Tag: "Games"},
+			{SharedDir: opts.VirtiofsMountDir, Tag: "Games", Readonly: opts.VirtiofsReadonly},
 		}
 	}
 
@@ -276,7 +279,7 @@ func NewGamingBazziteConfig(ctx context.Context, p provider.Provider, name strin
 
 	if opts.VirtiofsMountDir != "" {
 		cfg.VirtiofsMounts = []vm.VirtiofsMount{
-			{SharedDir: opts.VirtiofsMountDir, Tag: "Games"},
+			{SharedDir: opts.VirtiofsMountDir, Tag: "Games", Readonly: opts.VirtiofsReadonly},
 		}
 	}
 

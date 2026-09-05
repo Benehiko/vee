@@ -17,6 +17,10 @@ type Virtiofsd struct {
 	Tag               string
 	AnnounceSubmounts bool
 	Writeback         bool
+	// Readonly serves the share read-only: the guest can read and traverse it
+	// but every write is refused by virtiofsd itself, so a shared host
+	// directory cannot be modified from inside the VM.
+	Readonly bool
 }
 
 type VirtiofsdOption func(*Virtiofsd)
@@ -51,6 +55,12 @@ func WithWriteback(v bool) VirtiofsdOption {
 	}
 }
 
+func WithReadonly(v bool) VirtiofsdOption {
+	return func(vd *Virtiofsd) {
+		vd.Readonly = v
+	}
+}
+
 func NewVirtiofsd(p provider.Provider, opts ...VirtiofsdOption) *Virtiofsd {
 	vd := &Virtiofsd{provider: p}
 	for _, opt := range opts {
@@ -81,6 +91,9 @@ func (v *Virtiofsd) args() []string {
 	}
 	if v.Writeback {
 		args = append(args, "--writeback")
+	}
+	if v.Readonly {
+		args = append(args, "--readonly")
 	}
 	if v.Tag != "" {
 		args = append(args, "--tag", v.Tag)

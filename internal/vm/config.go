@@ -174,6 +174,11 @@ type VirtiofsMount struct {
 	SocketPath string `yaml:"socket_path" json:"socket_path"`
 	SharedDir  string `yaml:"shared_dir"  json:"shared_dir"`
 	Tag        string `yaml:"tag"         json:"tag"`
+	// Readonly serves the share read-only, so the guest can read and traverse
+	// it but virtiofsd refuses every write. Use it when the host directory is
+	// live data the guest has no business modifying — a Steam library the host
+	// also has open, for instance.
+	Readonly bool `yaml:"readonly,omitempty" json:"readonly,omitempty"`
 }
 
 type TPMConfig struct {
