@@ -21,7 +21,8 @@ func TestVirtioGPUDevice(t *testing.T) {
 		{"aarch64 no gl", "aarch64", false, false, "", "virtio-gpu-pci"},
 		{"x86_64 no gl", "x86_64", false, false, "", "virtio-gpu-pci"},
 		{"aarch64 venus", "aarch64", true, true, "8G", "virtio-gpu-gl-pci,blob=true,venus=true,hostmem=8G"},
-		{"venus without hostmem", "aarch64", true, true, "", "virtio-gpu-gl-pci,blob=true,venus=true"},
+		{"venus without hostmem defaults the window", "aarch64", true, true, "", "virtio-gpu-gl-pci,blob=true,venus=true,hostmem=" + qemu.DefaultVenusHostMem},
+		{"explicit hostmem overrides the default", "x86_64", true, true, "16G", "virtio-vga-gl,blob=true,venus=true,hostmem=16G"},
 		{"venus ignored without gl", "aarch64", false, true, "8G", "virtio-gpu-pci"},
 	}
 	for _, c := range cases {

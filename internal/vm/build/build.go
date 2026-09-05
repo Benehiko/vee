@@ -26,6 +26,7 @@ import (
 	"github.com/Benehiko/vee/internal/media"
 	"github.com/Benehiko/vee/internal/mirror"
 	"github.com/Benehiko/vee/internal/platform"
+	"github.com/Benehiko/vee/internal/qemu"
 	"github.com/Benehiko/vee/internal/sshkeys"
 	"github.com/Benehiko/vee/internal/templates"
 	"github.com/Benehiko/vee/internal/vm"
@@ -86,6 +87,13 @@ type Opts struct {
 	GPUPCI     string
 	GPUVendor  string // amd | nvidia | virtio (gaming templates)
 	AntiDetect *bool
+	// GLBackend selects the host OpenGL backend for virtio mode: "on" (Linux
+	// EGL), "es" (ANGLE/Metal, macOS) or "core" (native macOS, unstable).
+	GLBackend string
+	// Venus enables Vulkan-over-virtio on the virtio-gpu-gl device.
+	Venus *bool
+	// HostMem sizes the host memory window for Venus blob resources (e.g. "8G").
+	HostMem string
 
 	// Virtiofs share.
 	VirtiofsDir string
@@ -577,6 +585,15 @@ func applyOverrides(ctx context.Context, cfg *vm.VMConfig, opts Opts, prov provi
 	if opts.AntiDetect != nil {
 		cfg.GPU.AntiDetect = *opts.AntiDetect
 	}
+	if opts.GLBackend != "" {
+		cfg.GPU.GLBackend = opts.GLBackend
+	}
+	if opts.Venus != nil {
+		cfg.GPU.Venus = *opts.Venus
+	}
+	if opts.HostMem != "" {
+		cfg.GPU.HostMem = opts.HostMem
+	}
 	if opts.Nested {
 		cfg.Nested = true
 	}
@@ -725,10 +742,55 @@ func applyOverrides(ctx context.Context, cfg *vm.VMConfig, opts Opts, prov provi
 		cfg.SkipInstall = true
 	}
 
+	if err := validateGPUAccel(cfg, opts); err != nil {
+		return err
+	}
+
 	// Overrides must never push a macOS guest below its restored image's
 	// requirements — the failure would only surface at start, long after
 	// the expensive restore.
 	templates.ClampMacOSMinimums(cfg)
+	return nil
+}
+
+// validateGPUAccel rejects virtio-GPU acceleration settings that would be
+// silently ignored. gl_backend, venus and host_mem are only read on the
+// GPUVirtio path (the GL branch of the machine builder), so setting them on a
+// passthrough or GPU-less VM produces a VM that does not do what was asked
+// without any signal at start. host_mem additionally only reaches the device
+// string alongside venus.
+func validateGPUAccel(cfg *vm.VMConfig, opts Opts) error {
+	if cfg.GPU.Mode != vm.GPUVirtio {
+		switch {
+		case opts.GLBackend != "":
+			return fmt.Errorf("--gpu-gl-backend applies to GPU mode %q only (got %q) — add --gpu-mode=virtio", vm.GPUVirtio, cfg.GPU.Mode)
+		case opts.Venus != nil && *opts.Venus:
+			return fmt.Errorf("--gpu-venus applies to GPU mode %q only (got %q) — add --gpu-mode=virtio", vm.GPUVirtio, cfg.GPU.Mode)
+		case opts.HostMem != "":
+			return fmt.Errorf("--gpu-hostmem applies to GPU mode %q only (got %q) — add --gpu-mode=virtio", vm.GPUVirtio, cfg.GPU.Mode)
+		}
+		return nil
+	}
+	// The GL-capable adapter needs a windowed display to hold the host GL
+	// context; headless and SPICE VMs boot with -display none and silently take
+	// the plain 2D adapter, so GL settings on them never reach QEMU. Mirrors the
+	// fallback condition in Manager.buildBackendMachine.
+	if asked := opts.GLBackend != "" || (opts.Venus != nil && *opts.Venus) || opts.HostMem != ""; asked {
+		switch {
+		case cfg.Headless:
+			return fmt.Errorf("virtio-GPU acceleration (--gpu-gl-backend/--gpu-venus/--gpu-hostmem) needs a windowed display, but this VM is headless — drop --headless")
+		case cfg.SPICE != nil:
+			return fmt.Errorf("virtio-GPU acceleration (--gpu-gl-backend/--gpu-venus/--gpu-hostmem) needs a windowed display, but this VM uses SPICE, which boots with -display none — SPICE and host GL are mutually exclusive")
+		}
+	}
+	if opts.HostMem != "" && !cfg.GPU.Venus {
+		return fmt.Errorf("--gpu-hostmem sizes the Venus blob-resource window and is ignored without it — add --gpu-venus or drop --gpu-hostmem")
+	}
+	switch qemu.GLBackend(cfg.GPU.GLBackend) {
+	case "", qemu.GLBackendOn, qemu.GLBackendES, qemu.GLBackendCore:
+	default:
+		return fmt.Errorf("invalid --gpu-gl-backend %q: want on (Linux EGL), es (ANGLE/Metal, macOS) or core (native macOS, unstable)", cfg.GPU.GLBackend)
+	}
 	return nil
 }
 

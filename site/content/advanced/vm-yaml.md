@@ -128,8 +128,13 @@ Only for `backend: vz` guests (see [macOS guests](../../getting-started/macos-gu
 | `rom_file` | Path to VBIOS dump (required for AMD Navi) |
 | `anti_detect` | Hide virtualization artifacts from anti-cheat |
 | `gl_backend` | Host GL backend for `virtio` mode: `es` (ANGLE/Metal, macOS default, stable), `core` (native, unstable), `on` (Linux EGL). Empty picks the host default. |
-| `venus` | Enable Vulkan-over-virtio (Venus) on the virtio-gpu-gl device. Experimental; needs a Venus-capable QEMU and a host Vulkan driver (MoltenVK on macOS). |
-| `host_mem` | Host memory window for Venus blob resources, e.g. `8G` (only with `venus: true`). |
+| `venus` | Enable Vulkan-over-virtio (Venus) on the virtio-gpu-gl device. Experimental; needs a Venus-capable QEMU and a host Vulkan driver. The guest needs the Mesa `vulkan-virtio` ICD, so this is a Linux-guest path. |
+| `host_mem` | Host memory window for Venus blob resources, e.g. `8G` (only with `venus: true`; defaults to `8G` when Venus is on and this is unset). Size it against the GPU working set — render resolution, texture sizes, buffers in flight — not against guest RAM. |
+
+`gl_backend`, `venus` and `host_mem` are only read when `mode: virtio`, and
+`host_mem` only alongside `venus: true`. Setting them anywhere else is rejected
+at create time rather than silently ignored. All three are also available on
+`vee create` as `--gpu-gl-backend`, `--gpu-venus` and `--gpu-hostmem`.
 
 On a macOS host, `mode: virtio` emits `virtio-gpu-gl-pci` with `-display cocoa,gl=es`;
 `mode: passthrough` is rejected (VFIO is Linux-only). See [docs/macos.md](../../../docs/macos.md).

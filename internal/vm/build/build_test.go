@@ -350,3 +350,131 @@ func findDiskByPath(t *testing.T, cfg *vm.VMConfig, path string) vm.DiskConfig {
 	t.Fatalf("no disk with path %q in config (%d disks)", path, len(cfg.Disks))
 	return vm.DiskConfig{}
 }
+
+// The three virtio-GPU acceleration knobs are only read on the GPUVirtio path,
+// so applying them to any other GPU mode must fail loudly rather than produce a
+// VM that silently ignores them.
+func TestApplyOverridesGPUAccelRequiresVirtio(t *testing.T) {
+	venus := true
+	cases := []struct {
+		name string
+		opts Opts
+		want string
+	}{
+		{"gl backend", Opts{Name: "t1", GPUMode: "passthrough", GLBackend: "on"}, "--gpu-gl-backend"},
+		{"venus", Opts{Name: "t1", GPUMode: "passthrough", Venus: &venus}, "--gpu-venus"},
+		{"hostmem", Opts{Name: "t1", GPUMode: "none", HostMem: "8G"}, "--gpu-hostmem"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := applyOverrides(context.Background(), &vm.VMConfig{Name: "t1"}, c.opts, nil)
+			if err == nil {
+				t.Fatalf("applyOverrides(%+v): got nil error, want one mentioning %s", c.opts, c.want)
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Errorf("error %q does not mention %s", err, c.want)
+			}
+		})
+	}
+}
+
+// host_mem only reaches the device string alongside venus, so asking for one
+// without the other is a mistake worth reporting rather than dropping.
+func TestApplyOverridesHostMemRequiresVenus(t *testing.T) {
+	err := applyOverrides(context.Background(), &vm.VMConfig{Name: "t1"},
+		Opts{Name: "t1", GPUMode: "virtio", HostMem: "8G"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "--gpu-venus") {
+		t.Fatalf("applyOverrides: got %v, want an error pointing at --gpu-venus", err)
+	}
+}
+
+func TestApplyOverridesGPUAccelApplied(t *testing.T) {
+	venus := true
+	cfg := &vm.VMConfig{Name: "t1"}
+	mustApplyOverrides(t, cfg, Opts{
+		Name:      "t1",
+		GPUMode:   "virtio",
+		GLBackend: "on",
+		Venus:     &venus,
+		HostMem:   "16G",
+	}, nil)
+
+	if cfg.GPU.Mode != vm.GPUVirtio || cfg.GPU.GLBackend != "on" || !cfg.GPU.Venus || cfg.GPU.HostMem != "16G" {
+		t.Errorf("GPU config: got %+v, want virtio/on/venus/16G", cfg.GPU)
+	}
+}
+
+// An unset host_mem is valid: the device builder fills in its own default, so
+// --gpu-venus alone is a complete, working invocation.
+func TestApplyOverridesVenusWithoutHostMemIsValid(t *testing.T) {
+	venus := true
+	cfg := &vm.VMConfig{Name: "t1"}
+	mustApplyOverrides(t, cfg, Opts{Name: "t1", GPUMode: "virtio", Venus: &venus}, nil)
+
+	if !cfg.GPU.Venus || cfg.GPU.HostMem != "" {
+		t.Errorf("GPU config: got %+v, want venus enabled with an empty host_mem", cfg.GPU)
+	}
+}
+
+func TestApplyOverridesRejectsUnknownGLBackend(t *testing.T) {
+	err := applyOverrides(context.Background(), &vm.VMConfig{Name: "t1"},
+		Opts{Name: "t1", GPUMode: "virtio", GLBackend: "metal"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "metal") {
+		t.Fatalf("applyOverrides: got %v, want an error naming the invalid backend", err)
+	}
+}
+
+// The GL adapter needs a windowed display for its host GL context. A headless
+// or SPICE VM boots with -display none and silently takes the 2D adapter, so
+// asking for acceleration there must fail rather than no-op.
+func TestApplyOverridesGPUAccelNeedsWindowedDisplay(t *testing.T) {
+	venus := true
+	headless := true
+	cases := []struct {
+		name string
+		cfg  *vm.VMConfig
+		opts Opts
+		want string
+	}{
+		{
+			"headless",
+			&vm.VMConfig{Name: "t1"},
+			Opts{Name: "t1", GPUMode: "virtio", Venus: &venus, Headless: &headless},
+			"--headless",
+		},
+		{
+			"spice from template",
+			&vm.VMConfig{Name: "t1", SPICE: &vm.SPICEConfig{DisableTicketing: true}},
+			Opts{Name: "t1", GPUMode: "virtio", Venus: &venus},
+			"SPICE",
+		},
+		{
+			"spice with gl backend only",
+			&vm.VMConfig{Name: "t1", SPICE: &vm.SPICEConfig{DisableTicketing: true}},
+			Opts{Name: "t1", GPUMode: "virtio", GLBackend: "on"},
+			"SPICE",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := applyOverrides(context.Background(), c.cfg, c.opts, nil)
+			if err == nil {
+				t.Fatalf("applyOverrides: got nil error, want one mentioning %s", c.want)
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Errorf("error %q does not mention %s", err, c.want)
+			}
+		})
+	}
+}
+
+// A windowed VM that asks for nothing GL-related is unaffected by the display
+// check — SPICE on its own stays valid.
+func TestApplyOverridesSPICEWithoutAccelIsValid(t *testing.T) {
+	cfg := &vm.VMConfig{Name: "t1", SPICE: &vm.SPICEConfig{DisableTicketing: true}}
+	mustApplyOverrides(t, cfg, Opts{Name: "t1", GPUMode: "virtio"}, nil)
+
+	if cfg.GPU.Mode != vm.GPUVirtio || cfg.SPICE == nil {
+		t.Errorf("config: got %+v / spice=%v, want virtio with SPICE kept", cfg.GPU, cfg.SPICE != nil)
+	}
+}
