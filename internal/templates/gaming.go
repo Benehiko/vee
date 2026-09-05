@@ -427,7 +427,7 @@ pacstrap /mnt base linux linux-firmware grub efibootmgr sudo \
   networkmanager openssh qemu-guest-agent \
   plasma sddm xdg-desktop-portal-kde konsole \
   steam wine winetricks gamemode lib32-gamemode \
-  pipewire pipewire-pulse pipewire-alsa wireplumber \
+  pipewire pipewire-pulse pipewire-alsa wireplumber rtkit \
   libva-mesa-driver libva-utils \
   go git base-devel \
   %s
