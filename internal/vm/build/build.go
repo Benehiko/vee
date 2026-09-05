@@ -98,6 +98,8 @@ type Opts struct {
 	// Virtiofs share.
 	VirtiofsDir string
 	VirtiofsTag string
+	// VirtiofsReadonly serves the share read-only (virtiofsd --readonly).
+	VirtiofsReadonly bool
 
 	// SSH.
 	SSHKeyFile string
@@ -375,6 +377,7 @@ func configFromTemplate(ctx context.Context, prov provider.Provider, opts Opts, 
 		headless := opts.Headless != nil && *opts.Headless
 		return templates.GamingOptions{
 			VirtiofsMountDir: opts.VirtiofsDir,
+			VirtiofsReadonly: opts.VirtiofsReadonly,
 			GPUVendor:        resolveGPUVendor(opts.GPUVendor),
 			Passthrough:      opts.GPUMode == "passthrough",
 			PCIAddr:          opts.GPUPCI,
@@ -608,10 +611,31 @@ func applyOverrides(ctx context.Context, cfg *vm.VMConfig, opts Opts, prov provi
 		if tag == "" {
 			tag = "share"
 		}
-		cfg.VirtiofsMounts = append(cfg.VirtiofsMounts, vm.VirtiofsMount{
-			SharedDir: opts.VirtiofsDir,
-			Tag:       tag,
-		})
+		// Templates that take a share of their own (the gaming templates mount
+		// VirtiofsMountDir as "Games") have already added this directory, and a
+		// second entry would run a second virtiofsd over the same tree under a
+		// different tag. Keep the template's entry, but let an explicit
+		// --virtiofs-readonly still apply to it.
+		existing := -1
+		for i := range cfg.VirtiofsMounts {
+			if cfg.VirtiofsMounts[i].SharedDir == opts.VirtiofsDir {
+				existing = i
+				break
+			}
+		}
+		switch {
+		case existing >= 0 && opts.VirtiofsTag != "":
+			cfg.VirtiofsMounts[existing].Tag = tag
+			cfg.VirtiofsMounts[existing].Readonly = opts.VirtiofsReadonly
+		case existing >= 0:
+			cfg.VirtiofsMounts[existing].Readonly = opts.VirtiofsReadonly
+		default:
+			cfg.VirtiofsMounts = append(cfg.VirtiofsMounts, vm.VirtiofsMount{
+				SharedDir: opts.VirtiofsDir,
+				Tag:       tag,
+				Readonly:  opts.VirtiofsReadonly,
+			})
+		}
 	}
 	// vz macOS guests already consumed opts.Disk as the raw restore-disk
 	// size inside the template; adding a generic qcow2 disk here would make

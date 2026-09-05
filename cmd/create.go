@@ -65,6 +65,7 @@ var (
 	createGPUGLBackend  string
 	createGPUVenus      bool
 	createGPUHostMem    string
+	createVirtiofsRO    bool
 	createMedia         []string
 	createDNSAdminUser  string
 
@@ -615,6 +616,9 @@ func optsFromFlags(cmd *cobra.Command, name string) build.Opts {
 	if cmd.Flags().Changed("virtiofs-tag") {
 		opts.VirtiofsTag = createVirtiofsTag
 	}
+	if cmd.Flags().Changed("virtiofs-readonly") {
+		opts.VirtiofsReadonly = createVirtiofsRO
+	}
 	if cmd.Flags().Changed("ssh-keys") {
 		opts.SSHKeyFile = createSSHKeyFile
 	}
@@ -668,6 +672,7 @@ func init() {
 	createCmd.Flags().BoolVar(&createAntiDetect, "anti-detect", false, "Apply anti-hypervisor-detection CPU flags (gaming passthrough)")
 	createCmd.Flags().StringVar(&createVirtiofsDir, "virtiofs-dir", "", "Host directory to share via virtiofsd (Linux hosts only)")
 	createCmd.Flags().StringVar(&createVirtiofsTag, "virtiofs-tag", "share", "Mount tag for the virtiofs share")
+	createCmd.Flags().BoolVar(&createVirtiofsRO, "virtiofs-readonly", false, "Serve the virtiofs share read-only: the guest can read it but virtiofsd refuses every write (use for host data the guest must not modify)")
 	createCmd.Flags().StringArrayVar(&createNFSMounts, "nfs-mount", nil, "NFS export mounted inside the guest as SERVER:EXPORT:GUESTPATH (repeatable; torrent template; requires --nic-mode=bridge)")
 	createCmd.Flags().StringVar(&createSSHKeyFile, "ssh-keys", "", "Path to file containing SSH public keys (one per line)")
 	createCmd.Flags().StringVar(&createUser, "user", "", "Guest login username (gaming-arch, omarchy and macos templates; others hard-code their user)")

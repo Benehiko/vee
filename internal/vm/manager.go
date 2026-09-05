@@ -2095,6 +2095,7 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 		vd := virtiofs.NewVirtiofsd(m.provider,
 			virtiofs.WithVirtiofsdSocketPath(sockPath),
 			virtiofs.WithVirtiofsdSharedDir(mount.SharedDir),
+			virtiofs.WithReadonly(mount.Readonly),
 		)
 		pid, err := vd.StartDetached(ctx)
 		if err != nil {
