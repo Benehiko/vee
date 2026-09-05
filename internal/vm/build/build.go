@@ -771,6 +771,18 @@ func validateGPUAccel(cfg *vm.VMConfig, opts Opts) error {
 		}
 		return nil
 	}
+	// The GL-capable adapter needs a windowed display to hold the host GL
+	// context; headless and SPICE VMs boot with -display none and silently take
+	// the plain 2D adapter, so GL settings on them never reach QEMU. Mirrors the
+	// fallback condition in Manager.buildBackendMachine.
+	if asked := opts.GLBackend != "" || (opts.Venus != nil && *opts.Venus) || opts.HostMem != ""; asked {
+		switch {
+		case cfg.Headless:
+			return fmt.Errorf("virtio-GPU acceleration (--gpu-gl-backend/--gpu-venus/--gpu-hostmem) needs a windowed display, but this VM is headless — drop --headless")
+		case cfg.SPICE != nil:
+			return fmt.Errorf("virtio-GPU acceleration (--gpu-gl-backend/--gpu-venus/--gpu-hostmem) needs a windowed display, but this VM uses SPICE, which boots with -display none — SPICE and host GL are mutually exclusive")
+		}
+	}
 	if opts.HostMem != "" && !cfg.GPU.Venus {
 		return fmt.Errorf("--gpu-hostmem sizes the Venus blob-resource window and is ignored without it — add --gpu-venus or drop --gpu-hostmem")
 	}

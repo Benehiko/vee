@@ -423,3 +423,58 @@ func TestApplyOverridesRejectsUnknownGLBackend(t *testing.T) {
 		t.Fatalf("applyOverrides: got %v, want an error naming the invalid backend", err)
 	}
 }
+
+// The GL adapter needs a windowed display for its host GL context. A headless
+// or SPICE VM boots with -display none and silently takes the 2D adapter, so
+// asking for acceleration there must fail rather than no-op.
+func TestApplyOverridesGPUAccelNeedsWindowedDisplay(t *testing.T) {
+	venus := true
+	headless := true
+	cases := []struct {
+		name string
+		cfg  *vm.VMConfig
+		opts Opts
+		want string
+	}{
+		{
+			"headless",
+			&vm.VMConfig{Name: "t1"},
+			Opts{Name: "t1", GPUMode: "virtio", Venus: &venus, Headless: &headless},
+			"--headless",
+		},
+		{
+			"spice from template",
+			&vm.VMConfig{Name: "t1", SPICE: &vm.SPICEConfig{DisableTicketing: true}},
+			Opts{Name: "t1", GPUMode: "virtio", Venus: &venus},
+			"SPICE",
+		},
+		{
+			"spice with gl backend only",
+			&vm.VMConfig{Name: "t1", SPICE: &vm.SPICEConfig{DisableTicketing: true}},
+			Opts{Name: "t1", GPUMode: "virtio", GLBackend: "on"},
+			"SPICE",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := applyOverrides(context.Background(), c.cfg, c.opts, nil)
+			if err == nil {
+				t.Fatalf("applyOverrides: got nil error, want one mentioning %s", c.want)
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Errorf("error %q does not mention %s", err, c.want)
+			}
+		})
+	}
+}
+
+// A windowed VM that asks for nothing GL-related is unaffected by the display
+// check — SPICE on its own stays valid.
+func TestApplyOverridesSPICEWithoutAccelIsValid(t *testing.T) {
+	cfg := &vm.VMConfig{Name: "t1", SPICE: &vm.SPICEConfig{DisableTicketing: true}}
+	mustApplyOverrides(t, cfg, Opts{Name: "t1", GPUMode: "virtio"}, nil)
+
+	if cfg.GPU.Mode != vm.GPUVirtio || cfg.SPICE == nil {
+		t.Errorf("config: got %+v / spice=%v, want virtio with SPICE kept", cfg.GPU, cfg.SPICE != nil)
+	}
+}
