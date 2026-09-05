@@ -312,6 +312,9 @@ type vmCreateIn struct {
 	GPUPCI     string `json:"gpu_pci,omitempty" jsonschema:"PCI address of the GPU to pass through"`
 	GPUVendor  string `json:"gpu_vendor,omitempty" jsonschema:"amd, nvidia, or virtio (gaming templates)"`
 	AntiDetect *bool  `json:"anti_detect,omitempty"`
+	GLBackend  string `json:"gpu_gl_backend,omitempty" jsonschema:"host OpenGL backend for gpu_mode=virtio: on (Linux EGL), es (ANGLE/Metal, macOS) or core (native macOS, unstable); empty picks the host default"`
+	Venus      *bool  `json:"gpu_venus,omitempty" jsonschema:"enable Vulkan-over-virtio (Venus) on the virtio-gpu-gl device; requires gpu_mode=virtio, a Venus-capable QEMU and a Linux guest with the Mesa vulkan-virtio ICD"`
+	HostMem    string `json:"gpu_hostmem,omitempty" jsonschema:"host memory window for Venus blob resources, e.g. 8G; requires gpu_venus"`
 
 	// Shares and SSH.
 	VirtiofsDir string `json:"virtiofs_dir,omitempty" jsonschema:"host directory shared into the guest via virtiofs"`
@@ -593,6 +596,9 @@ func (s *server) vmCreate(ctx context.Context, _ *mcp.CallToolRequest, in vmCrea
 		GPUPCI:        in.GPUPCI,
 		GPUVendor:     in.GPUVendor,
 		AntiDetect:    in.AntiDetect,
+		GLBackend:     in.GLBackend,
+		Venus:         in.Venus,
+		HostMem:       in.HostMem,
 		VirtiofsDir:   in.VirtiofsDir,
 		VirtiofsTag:   in.VirtiofsTag,
 		SSHKeyFile:    in.SSHKeyFile,

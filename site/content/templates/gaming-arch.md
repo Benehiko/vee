@@ -42,6 +42,9 @@ vee create arch-gaming --template gaming-arch \
 | `--gpu-mode` | `none`/`virtio` | `passthrough` to hand a physical GPU to the guest |
 | `--gpu-pci` | `""` | PCI address for passthrough (e.g. `08:00.0`) |
 | `--gpu-vendor` | `amd` | Guest GPU driver: `amd`, `nvidia`, or `virtio` |
+| `--gpu-gl-backend` | *(host default)* | Host OpenGL backend for `--gpu-mode=virtio`: `on`, `es`, or `core` |
+| `--gpu-venus` | `false` | Vulkan-over-virtio on the virtio-gpu-gl device (experimental) |
+| `--gpu-hostmem` | `8G` | Host memory window for Venus blob resources (requires `--gpu-venus`) |
 | `--nic-mode` | `bridge` | `user` for NAT instead of a bridge |
 | `--headless` | `false` | No local display window |
 | `--virtiofs-dir` | `""` | Host directory shared into the guest (tag `Games`) |
@@ -53,6 +56,35 @@ vee create arch-gaming --template gaming-arch \
 - `amd` (default) — `mesa` + `vulkan-radeon` (plus `vulkan-virtio` when not using passthrough)
 - `nvidia` — `nvidia` + `nvidia-utils`, `nvidia-persistenced` enabled
 - `virtio` — AMD base stack for virtio-gpu
+
+## Virtio GPU acceleration
+
+Without passthrough, the guest renders through virtio-gpu against the host's
+GPU: QEMU opens a windowed display with a host GL context and virglrenderer
+forwards guest rendering onto it. On Linux this is `virtio-vga-gl` with
+`-display gtk,gl=on`; the host windowing system (Wayland or X11) makes no
+difference.
+
+`--gpu-gl-backend` overrides the host GL backend — `on` for the Linux EGL
+stack, `es` (ANGLE onto Metal, stable) or `core` (native, unstable) on macOS.
+Leave it unset to take the host default.
+
+`--gpu-venus` adds the Vulkan-over-virtio (Venus) path on top, so guest Vulkan
+reaches the host GPU instead of falling back to software. It is experimental:
+it needs a QEMU and virglrenderer built with Venus, a host Vulkan driver, and a
+guest carrying Mesa's `vulkan-virtio` ICD — which `gaming-arch` installs for
+non-passthrough VMs. Desktop Vulkan compositing is still unreliable; prefer
+plain virgl OpenGL for the desktop session.
+
+`--gpu-hostmem` sizes the host memory window Venus uses for blob resources, the
+shared buffers that carry Vulkan allocations between host and guest. It
+defaults to `8G`. Raise it for high render resolutions or heavy texture loads —
+it tracks the GPU working set, not guest RAM, so changing `--memory` does not
+change what this should be.
+
+All three apply only to `--gpu-mode=virtio` (and `--gpu-hostmem` only with
+`--gpu-venus`); combining them with `passthrough` or `none` is rejected rather
+than quietly ignored.
 
 ## Streaming & tuning
 

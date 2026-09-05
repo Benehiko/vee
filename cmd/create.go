@@ -18,6 +18,7 @@ import (
 	"github.com/Benehiko/vee/internal/images"
 	"github.com/Benehiko/vee/internal/media"
 	"github.com/Benehiko/vee/internal/platform"
+	"github.com/Benehiko/vee/internal/qemu"
 	"github.com/Benehiko/vee/internal/runnercreds"
 	"github.com/Benehiko/vee/internal/runnersetup"
 	"github.com/Benehiko/vee/internal/templates"
@@ -61,6 +62,9 @@ var (
 	createOVMFVars      string
 	createNICMAC        string
 	createGPUVendor     string
+	createGPUGLBackend  string
+	createGPUVenus      bool
+	createGPUHostMem    string
 	createMedia         []string
 	createDNSAdminUser  string
 
@@ -595,6 +599,16 @@ func optsFromFlags(cmd *cobra.Command, name string) build.Opts {
 	if cmd.Flags().Changed("gpu-vendor") {
 		opts.GPUVendor = createGPUVendor
 	}
+	if cmd.Flags().Changed("gpu-gl-backend") {
+		opts.GLBackend = createGPUGLBackend
+	}
+	if cmd.Flags().Changed("gpu-venus") {
+		v := createGPUVenus
+		opts.Venus = &v
+	}
+	if cmd.Flags().Changed("gpu-hostmem") {
+		opts.HostMem = createGPUHostMem
+	}
 	if cmd.Flags().Changed("virtiofs-dir") {
 		opts.VirtiofsDir = createVirtiofsDir
 	}
@@ -675,6 +689,9 @@ func init() {
 	createCmd.Flags().StringVar(&createOVMFVars, "ovmf-vars", "", "Path to existing OVMF_VARS.fd to reuse for UEFI state (passthrough template)")
 	createCmd.Flags().StringVar(&createNICMAC, "nic-mac", "", "Fixed MAC address for the bridge NIC (passthrough template; empty = deterministic)")
 	createCmd.Flags().StringVar(&createGPUVendor, "gpu-vendor", "amd", "Guest GPU vendor for driver selection: amd, nvidia, virtio (gaming-arch/gaming-bazzite templates)")
+	createCmd.Flags().StringVar(&createGPUGLBackend, "gpu-gl-backend", "", "Host OpenGL backend for --gpu-mode=virtio: on (Linux EGL), es (ANGLE/Metal, macOS default) or core (native macOS, unstable). Empty picks the host default")
+	createCmd.Flags().BoolVar(&createGPUVenus, "gpu-venus", false, "Enable Vulkan-over-virtio (Venus) on the virtio-gpu-gl device (--gpu-mode=virtio). Experimental: needs a Venus-capable QEMU and a host Vulkan driver; the guest needs the Mesa vulkan-virtio ICD, so Linux guests only")
+	createCmd.Flags().StringVar(&createGPUHostMem, "gpu-hostmem", "", "Host memory window for Venus blob resources, e.g. 8G (requires --gpu-venus; default "+qemu.DefaultVenusHostMem+"). Scales with GPU working set — resolution and texture load — not guest RAM")
 	createCmd.Flags().StringArrayVar(&createMedia, "media", nil, "Media source for jellyfin template (repeatable). Forms: hostdir:/host@/guest[:ro], nfs://server/export@/guest[:ro], smb://[user@]server/share@/guest[:ro], block:/dev/disk/by-id/...@/guest[:fstype], usb:VENDOR:PRODUCT@/guest[:fstype]")
 	createCmd.Flags().StringVar(&createDNSAdminUser, "dns-admin-user", "admin", "AdGuard Home web UI username (dns-sink template); the password is prompted for")
 	createCmd.Flags().StringVar(&createBitmagnetPGDir, "pg-data-dir", "", "host directory bind-mounted as PostgreSQL's data directory (bitmagnet template); empty keeps the database on the VM's own disk")
@@ -751,6 +768,13 @@ func init() {
 			return []string{"latest"}, cobra.ShellCompDirectiveNoFileComp
 		}
 		return append([]string{"latest"}, versions...), cobra.ShellCompDirectiveNoFileComp
+	})
+	_ = createCmd.RegisterFlagCompletionFunc("gpu-gl-backend", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+		return []string{
+			"on\tHost EGL (Linux)",
+			"es\tGLES via ANGLE onto Metal (macOS, stable)",
+			"core\tNative OpenGL core profile (macOS, unstable)",
+		}, cobra.ShellCompDirectiveNoFileComp
 	})
 	_ = createCmd.RegisterFlagCompletionFunc("gpu-mode", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 		return []string{"none", "virtio", "passthrough"}, cobra.ShellCompDirectiveNoFileComp

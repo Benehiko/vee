@@ -25,6 +25,14 @@ const (
 	GLBackendCore GLBackend = "core"
 )
 
+// DefaultVenusHostMem is the host memory window applied to the virtio-gpu-gl
+// device when Venus is enabled without an explicit size. It sizes the window
+// for blob resources (the shared buffers virglrenderer uses to hand Vulkan
+// allocations between host and guest), so it scales with the GPU working set —
+// render resolution, texture sizes, buffers in flight — and deliberately not
+// with guest RAM, which is unrelated.
+const DefaultVenusHostMem = "8G"
+
 // VirtioGPUDevice returns the -device value for a virtio-gpu adapter suitable
 // for the given guest architecture.
 //
@@ -35,8 +43,9 @@ const (
 //
 // When gl is true the GL-capable variant is selected. When venus is also true
 // the Vulkan-over-virtio (Venus) path is enabled, which requires blob resources
-// and a host memory window sized by hostMem (e.g. "8G"); an empty hostMem omits
-// the suboption and lets QEMU pick its default.
+// and a host memory window sized by hostMem (e.g. "8G"); an empty hostMem falls
+// back to DefaultVenusHostMem, since QEMU's own default window is often too
+// small and Venus then fails in ways that are hard to trace back to sizing.
 func VirtioGPUDevice(arch string, gl, venus bool, hostMem string) string {
 	var dev string
 	switch {
@@ -48,10 +57,10 @@ func VirtioGPUDevice(arch string, gl, venus bool, hostMem string) string {
 		dev = "virtio-vga-gl"
 	}
 	if gl && venus {
-		opts := []string{"blob=true", "venus=true"}
-		if hostMem != "" {
-			opts = append(opts, "hostmem="+hostMem)
+		if hostMem == "" {
+			hostMem = DefaultVenusHostMem
 		}
+		opts := []string{"blob=true", "venus=true", "hostmem=" + hostMem}
 		dev += "," + strings.Join(opts, ",")
 	}
 	return dev
