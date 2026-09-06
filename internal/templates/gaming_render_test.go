@@ -90,3 +90,34 @@ func TestGamingInstallWritesIntoTargetRoot(t *testing.T) {
 		}
 	}
 }
+
+// kwin's udmabuf import of wl_shm client buffers is fatal on virtio-gpu: the
+// host virgl renderer cannot type a guest-memory blob, so the first texture
+// sampled from one kills kwin's GL context ("Illegal resource") and the
+// compositor freezes. The env file that disables it belongs only to the
+// virtio (non-passthrough) install; a passthrough GPU imports udmabuf fine.
+func TestGamingDisablesKwinUdmabufOnlyForVirtio(t *testing.T) {
+	const conf = "/mnt/etc/environment.d/98-vee-kwin-udmabuf.conf"
+	const setting = "KWIN_DISABLE_UDMABUF_IMPORT=1"
+
+	files, _ := archGamingSetup("alano", "s3cr3t", nil, "vm", GamingOptions{
+		GPUVendor:   GPUVendorAMD,
+		Passthrough: false,
+	})
+	body := files[0].Content
+	if !strings.Contains(body, "cat > "+conf) {
+		t.Errorf("virtio install does not write %s", conf)
+	}
+	if !strings.Contains(body, setting) {
+		t.Errorf("virtio install is missing %s", setting)
+	}
+
+	files, _ = archGamingSetup("alano", "s3cr3t", nil, "vm", GamingOptions{
+		GPUVendor:   GPUVendorAMD,
+		Passthrough: true,
+		PCIAddr:     "08:00.0",
+	})
+	if body := files[0].Content; strings.Contains(body, setting) {
+		t.Error("passthrough install disables kwin's udmabuf import; a real GPU handles it and the workaround costs upload bandwidth")
+	}
+}

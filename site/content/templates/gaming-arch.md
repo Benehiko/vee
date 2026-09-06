@@ -86,6 +86,30 @@ All three apply only to `--gpu-mode=virtio` (and `--gpu-hostmem` only with
 `--gpu-venus`); combining them with `passthrough` or `none` is rejected rather
 than quietly ignored.
 
+### Guest-side settings on virtio
+
+The installer writes three files into the guest that only make sense when
+virtio-gpu is the sole GPU; a passthrough install gets none of them:
+
+- `/etc/udev/rules.d/90-vee-virtio-render.rules` keeps the virtio render node
+  readable by the `render` group.
+- `/etc/environment.d/99-vee-venus-icd.conf` pins the Vulkan loader to Mesa's
+  virtio (Venus) ICD, so RADV does not grab the node and fail.
+- `/etc/environment.d/98-vee-kwin-udmabuf.conf` sets
+  `KWIN_DISABLE_UDMABUF_IMPORT=1`. KWin 6.7 and later wrap client `wl_shm`
+  buffers (cursor images, software-rendered windows) in udmabuf dma-bufs and
+  import them into EGL. On virtio-gpu the kernel turns such an import into a
+  guest-memory blob resource that the host virgl renderer cannot use as a
+  texture; the first time kwin samples one, virglrenderer raises a fatal
+  `Illegal resource` context error and the compositor stops rendering while
+  the guest stays alive over SSH. Hovering a Steam or Chromium window, or any
+  Xwayland client, is enough to trigger it. With the import disabled kwin
+  uploads shm buffers through `glTexImage2D` as it did before 6.7.
+
+If a VM created before this setting existed freezes its display when Steam
+or a browser opens, add the same line to `/etc/environment.d/` in the guest
+and reboot it.
+
 ## Streaming & tuning
 
 The guest installs Sunshine (HTTPS on port `47991`) for Moonlight streaming, plus gaming performance tuning: real-time priority / memlock limits, hugepages, a low-latency PipeWire quantum, SDDM autologin, and a serial console. A self-verifying `vee-check` health script is installed for [`vee check`]({{< relref "/commands/check" >}}).
