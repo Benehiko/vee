@@ -3,6 +3,8 @@ package templates
 import (
 	"strings"
 	"testing"
+
+	"github.com/Benehiko/vee/internal/vm"
 )
 
 func TestGamingInstallScriptRender(t *testing.T) {
@@ -119,5 +121,19 @@ func TestGamingDisablesKwinUdmabufOnlyForVirtio(t *testing.T) {
 	})
 	if body := files[0].Content; strings.Contains(body, setting) {
 		t.Error("passthrough install disables kwin's udmabuf import; a real GPU handles it and the workaround costs upload bandwidth")
+	}
+}
+
+// Gaming VMs exist to run games, and games need relative mouse deltas for
+// mouse-look, so the template's virtio configuration asks for the relative
+// pointer by default. Passthrough keeps its own GPU block (real GPU, no
+// virtio pointer concern).
+func TestGamingDefaultsToRelativePointer(t *testing.T) {
+	cfg := gamingGPUConfig(GamingOptions{GPUVendor: GPUVendorAMD})
+	if cfg.Mode != vm.GPUVirtio {
+		t.Fatalf("gaming GPU mode = %q, want %q", cfg.Mode, vm.GPUVirtio)
+	}
+	if cfg.Pointer != "mouse" {
+		t.Errorf("gaming pointer = %q, want mouse", cfg.Pointer)
 	}
 }

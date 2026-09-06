@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Benehiko/vee/internal/images"
+	"github.com/Benehiko/vee/internal/qemu"
 	"github.com/Benehiko/vee/internal/vm"
 	"github.com/Benehiko/vee/provider"
 )
@@ -92,8 +93,7 @@ func NewGamingArchConfig(ctx context.Context, p provider.Provider, name string, 
 	}
 	writeFiles, runCmds := archGamingSetup(user, password, sshKeys, name, opts)
 
-	gpuMode := vm.GPUVirtio
-	gpuCfg := vm.GPUConfig{Mode: gpuMode}
+	gpuCfg := gamingGPUConfig(opts)
 	if opts.Passthrough {
 		gpuCfg = vm.GPUConfig{
 			Mode:       vm.GPUPassthrough,
@@ -215,7 +215,7 @@ func NewGamingBazziteConfig(ctx context.Context, p provider.Provider, name strin
 	conf := p.Config()
 	vmDir := filepath.Join(conf.StoragePath, name)
 
-	gpuCfg := vm.GPUConfig{Mode: vm.GPUVirtio}
+	gpuCfg := gamingGPUConfig(opts)
 	if opts.Passthrough {
 		gpuCfg = vm.GPUConfig{
 			Mode:       vm.GPUPassthrough,
@@ -1005,4 +1005,14 @@ poweroff`, user, password, gpuPkgs, hostname, hostname, strings.Join(sshKeys, "\
 	runCmds := []string{`bash /install.sh`}
 
 	return writeFiles, runCmds
+}
+
+// gamingGPUConfig is the virtio-GPU configuration a gaming VM starts from
+// before any passthrough override. Games lock the pointer for mouse-look and
+// read relative deltas, which the default absolute tablet never produces on a
+// Wayland guest, so the gaming template defaults to the relative mouse (and
+// with it QEMU's SDL window, which can lock the host pointer). --pointer
+// tablet on create puts the desktop-style pointer back.
+func gamingGPUConfig(_ GamingOptions) vm.GPUConfig {
+	return vm.GPUConfig{Mode: vm.GPUVirtio, Pointer: string(qemu.PointerMouse)}
 }

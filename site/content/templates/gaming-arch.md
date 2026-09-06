@@ -45,7 +45,7 @@ vee create arch-gaming --template gaming-arch \
 | `--gpu-gl-backend` | *(host default)* | Host OpenGL backend for `--gpu-mode=virtio`: `on`, `es`, or `core` |
 | `--gpu-venus` | `false` | Vulkan-over-virtio on the virtio-gpu-gl device (experimental) |
 | `--gpu-hostmem` | `8G` | Host memory window for Venus blob resources (requires `--gpu-venus`) |
-| `--pointer` | `tablet` | Guest pointing device for `--gpu-mode=virtio`: `tablet` (absolute) or `mouse` (relative, for mouse-look in games) |
+| `--pointer` | `mouse` | Guest pointing device for `--gpu-mode=virtio`: `mouse` (relative, for mouse-look in games — the gaming default) or `tablet` (absolute, the desktop default elsewhere) |
 | `--nic-mode` | `bridge` | `user` for NAT instead of a bridge |
 | `--headless` | `false` | No local display window |
 | `--virtiofs-dir` | `""` | Host directory shared into the guest (tag `Games`) |
@@ -114,7 +114,8 @@ and reboot it.
 ### Pointer device
 
 `--pointer` picks the virtio pointing device next to the virtio keyboard.
-The default `tablet` is an absolute pointer: the host cursor maps straight
+Gaming VMs default to `mouse`; every other template defaults to `tablet`.
+`tablet` is an absolute pointer: the host cursor maps straight
 onto the guest screen and the QEMU window never grabs it, which is what you
 want for a desktop. Wayland compositors (kwin included) deliver absolute
 motion with a zero relative delta, though, and a game that locks the pointer
