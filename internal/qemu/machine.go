@@ -75,6 +75,7 @@ type BaseMachine struct {
 	bootOrder    string   // e.g. "c" for disk-first; empty = firmware default
 	globals      []string // extra -global args, e.g. "driver=cfi.pflash01,property=secure,value=on"
 	nested       bool     // expose EL2 to aarch64 guests (-machine virt,virtualization=on)
+	vmportOff    bool     // -machine ...,vmport=off: no VMware backdoor, so no vmmouse (x86 only)
 }
 
 var (
@@ -176,6 +177,19 @@ func WithBinary(path string) QemuOptions {
 func WithNested(nested bool) QemuOptions {
 	return func(q *BaseMachine) {
 		q.nested = nested
+	}
+}
+
+// WithVMPortOff disables the VMware backdoor port on x86 boards
+// (-machine ...,vmport=off). QEMU's pc/q35 boards expose it by default, and
+// the Linux psmouse driver probes it and binds VMware's vmmouse to the PS/2
+// port; QEMU's vmmouse is an absolute pointer and, once the guest driver
+// activates it, becomes QEMU's current mouse. Host motion then arrives in the
+// guest as absolute coordinates again, which defeats a relative virtio-mouse.
+// Ignored off x86 and when the machine type already pins a vmport= value.
+func WithVMPortOff(off bool) QemuOptions {
+	return func(q *BaseMachine) {
+		q.vmportOff = off
 	}
 }
 
@@ -314,6 +328,10 @@ func (q *BaseMachine) Validate() error {
 // machine-type configuration is respected.
 func (q *BaseMachine) effectiveMachineType() string {
 	mt := q.machineType
+	if q.vmportOff && (strings.HasPrefix(mt, "q35") || strings.HasPrefix(mt, "pc")) &&
+		!strings.Contains(mt, "vmport=") {
+		mt += ",vmport=off"
+	}
 	if (q.architecture == "aarch64" || q.architecture == "arm64") &&
 		strings.HasPrefix(mt, "virt") && !strings.Contains(mt, "gic-version") {
 		mt += ",gic-version=max"

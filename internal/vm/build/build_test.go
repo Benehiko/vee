@@ -364,6 +364,7 @@ func TestApplyOverridesGPUAccelRequiresVirtio(t *testing.T) {
 		{"gl backend", Opts{Name: "t1", GPUMode: "passthrough", GLBackend: "on"}, "--gpu-gl-backend"},
 		{"venus", Opts{Name: "t1", GPUMode: "passthrough", Venus: &venus}, "--gpu-venus"},
 		{"hostmem", Opts{Name: "t1", GPUMode: "none", HostMem: "8G"}, "--gpu-hostmem"},
+		{"pointer", Opts{Name: "t1", GPUMode: "passthrough", Pointer: "mouse"}, "--pointer"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -507,5 +508,21 @@ func TestApplyOverridesVirtiofsDirDistinctIsAppended(t *testing.T) {
 
 	if len(cfg.VirtiofsMounts) != 2 {
 		t.Fatalf("VirtiofsMounts: got %d entries, want 2: %+v", len(cfg.VirtiofsMounts), cfg.VirtiofsMounts)
+	}
+}
+
+// The pointer device is a virtio-GPU setting like the GL knobs: it lands on
+// the config verbatim, and a name QEMU has no device for is refused up front.
+func TestApplyOverridesPointer(t *testing.T) {
+	cfg := &vm.VMConfig{Name: "t1"}
+	if err := applyOverrides(context.Background(), cfg, Opts{Name: "t1", GPUMode: "virtio", Pointer: "mouse"}, nil); err != nil {
+		t.Fatalf("applyOverrides(pointer=mouse): %v", err)
+	}
+	if cfg.GPU.Pointer != "mouse" {
+		t.Errorf("cfg.GPU.Pointer = %q, want mouse", cfg.GPU.Pointer)
+	}
+	err := applyOverrides(context.Background(), &vm.VMConfig{Name: "t1"}, Opts{Name: "t1", GPUMode: "virtio", Pointer: "trackball"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "trackball") {
+		t.Fatalf("applyOverrides(pointer=trackball): got %v, want an error naming the value", err)
 	}
 }

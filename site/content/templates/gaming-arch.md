@@ -45,6 +45,7 @@ vee create arch-gaming --template gaming-arch \
 | `--gpu-gl-backend` | *(host default)* | Host OpenGL backend for `--gpu-mode=virtio`: `on`, `es`, or `core` |
 | `--gpu-venus` | `false` | Vulkan-over-virtio on the virtio-gpu-gl device (experimental) |
 | `--gpu-hostmem` | `8G` | Host memory window for Venus blob resources (requires `--gpu-venus`) |
+| `--pointer` | `mouse` | Guest pointing device for `--gpu-mode=virtio`: `mouse` (relative, for mouse-look in games — the gaming default) or `tablet` (absolute, the desktop default elsewhere) |
 | `--nic-mode` | `bridge` | `user` for NAT instead of a bridge |
 | `--headless` | `false` | No local display window |
 | `--virtiofs-dir` | `""` | Host directory shared into the guest (tag `Games`) |
@@ -109,6 +110,27 @@ virtio-gpu is the sole GPU; a passthrough install gets none of them:
 If a VM created before this setting existed freezes its display when Steam
 or a browser opens, add the same line to `/etc/environment.d/` in the guest
 and reboot it.
+
+### Pointer device
+
+`--pointer` picks the virtio pointing device next to the virtio keyboard.
+Gaming VMs default to `mouse`; every other template defaults to `tablet`.
+`tablet` is an absolute pointer: the host cursor maps straight
+onto the guest screen and the QEMU window never grabs it, which is what you
+want for a desktop. Wayland compositors (kwin included) deliver absolute
+motion with a zero relative delta, though, and a game that locks the pointer
+for mouse-look reads only relative deltas, so the camera never moves.
+`--pointer mouse` attaches a relative `virtio-mouse-pci` instead: the QEMU
+window grabs the cursor on click and forwards deltas, and Ctrl+Alt+G releases
+the grab. On Linux this also switches the VM window from QEMU's GTK display
+to its SDL display, because GTK3 cannot lock or warp the pointer on a
+Wayland host and its grab never captures motion; SDL2 locks the pointer
+natively on Wayland and X11. It also boots the x86 board with `vmport=off`:
+otherwise the guest's `psmouse` driver finds VMware's vmmouse behind QEMU's
+backdoor port, QEMU makes that absolute device its current mouse, and host
+motion turns absolute again. Change it on an existing VM with
+`vee config <vm> --pointer mouse`; QEMU cannot swap input devices live, so it
+applies on the next start.
 
 ## Streaming & tuning
 

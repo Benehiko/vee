@@ -1687,6 +1687,11 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 		machineType = platform.MachineTypeForArch(guestArch)
 	}
 	opts = append(opts, qemu.WithMachineType(machineType))
+	// A relative pointer only stays relative if the guest cannot bind VMware's
+	// absolute vmmouse through the vmport backdoor; see qemu.WithVMPortOff.
+	if cfg.GPU.Mode == GPUVirtio && qemu.PointerDevice(cfg.GPU.Pointer) == qemu.PointerMouse {
+		opts = append(opts, qemu.WithVMPortOff(true))
+	}
 	if cfg.Nested {
 		// Create() refused non-aarch64 configs, but a hand-edited vm.yaml can
 		// still carry the field anywhere; WithNested is a no-op off aarch64.
@@ -1954,7 +1959,7 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 			// QEMU whose build cannot be assumed to carry virglrenderer, and GL
 			// forwarding buys little under TCG anyway.
 			if emulated && !cfg.Headless {
-				opts = append(opts, qemu.WithDisplay(qemu.DisplayArg(platform.HostOS(), false, "")))
+				opts = append(opts, qemu.WithDisplay(qemu.DisplayArgFor(platform.HostOS(), false, "", qemu.PointerDevice(cfg.GPU.Pointer))))
 			}
 			opts = append(opts, qemu.WithDevice(qemu.VirtioGPUDevice(arch, false, false, "")))
 		case cfg.GPU.disableGL:
@@ -1962,7 +1967,7 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 			// backend was built without OpenGL. Boot windowed with the plain
 			// 2D adapter (the guest renders in software) and a fixed EDID
 			// mode so the desktop comes up at a sane resolution.
-			disp := qemu.DisplayArg(platform.HostOS(), false, "")
+			disp := qemu.DisplayArgFor(platform.HostOS(), false, "", qemu.PointerDevice(cfg.GPU.Pointer))
 			if platform.IsMacOS() {
 				disp += ",show-cursor=on"
 			}
@@ -1978,7 +1983,7 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 			// of virtio-gpu's 1024x768 default.
 			dev := qemu.VirtioGPUDevice(arch, true, cfg.GPU.Venus, cfg.GPU.HostMem) + ",edid=on,xres=1920,yres=1080"
 			opts = append(opts, qemu.WithDevice(dev))
-			opts = append(opts, qemu.WithDisplay(qemu.DisplayArg(platform.HostOS(), true, qemu.GLBackend(cfg.GPU.GLBackend))))
+			opts = append(opts, qemu.WithDisplay(qemu.DisplayArgFor(platform.HostOS(), true, qemu.GLBackend(cfg.GPU.GLBackend), qemu.PointerDevice(cfg.GPU.Pointer))))
 			if platform.IsMacOS() {
 				m.provider.Logger().Info("virtio-gpu GL enabled — accelerated only with a virglrenderer-capable QEMU (vee-qemu, UTM, or a qemu-virgl tap); stock/Homebrew QEMU renders in software",
 					zap.String("vm", cfg.Name),
@@ -1993,7 +1998,7 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 		// has PS/2), so a guest with a display but no input devices renders
 		// fine while dropping every click and keystroke.
 		if !cfg.Headless {
-			for _, dev := range qemu.VirtioInputDevices() {
+			for _, dev := range qemu.VirtioInputDevicesFor(qemu.PointerDevice(cfg.GPU.Pointer)) {
 				opts = append(opts, qemu.WithDevice(dev))
 			}
 		}

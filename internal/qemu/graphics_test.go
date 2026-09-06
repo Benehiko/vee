@@ -51,6 +51,17 @@ func TestDisplayArg(t *testing.T) {
 		{"linux no gl", "linux", false, "", "gtk"},
 		{"explicit es on linux", "linux", true, qemu.GLBackendES, "gtk,gl=es"},
 	}
+	// The relative pointer swaps the Linux window for SDL, which can lock the
+	// pointer under Wayland; macOS keeps cocoa.
+	for _, c := range []struct {
+		hostOS string
+		gl     bool
+		want   string
+	}{{"linux", true, "sdl,gl=on"}, {"linux", false, "sdl"}, {"darwin", true, "cocoa,gl=es"}} {
+		if got := qemu.DisplayArgFor(c.hostOS, c.gl, "", qemu.PointerMouse); got != c.want {
+			t.Errorf("DisplayArgFor(%q, gl=%v, mouse) = %q, want %q", c.hostOS, c.gl, got, c.want)
+		}
+	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			got := qemu.DisplayArg(c.hostOS, c.gl, c.backend)
@@ -93,5 +104,20 @@ func TestAppleGFXDevice(t *testing.T) {
 	}
 	if got := qemu.AppleGFXDevice("x86_64"); got != "apple-gfx-pci" {
 		t.Errorf("x86_64 apple-gfx device: got %q, want apple-gfx-pci", got)
+	}
+}
+
+func TestVirtioInputDevicesFor(t *testing.T) {
+	cases := map[qemu.PointerDevice]string{
+		qemu.PointerTablet: "virtio-tablet-pci",
+		qemu.PointerMouse:  "virtio-mouse-pci",
+		"":                 "virtio-tablet-pci",
+		"bogus":            "virtio-tablet-pci",
+	}
+	for p, want := range cases {
+		got := qemu.VirtioInputDevicesFor(p)
+		if len(got) != 2 || got[0] != "virtio-keyboard-pci" || got[1] != want {
+			t.Errorf("VirtioInputDevicesFor(%q) = %v, want [virtio-keyboard-pci %s]", p, got, want)
+		}
 	}
 }

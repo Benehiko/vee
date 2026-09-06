@@ -66,24 +66,65 @@ func VirtioGPUDevice(arch string, gl, venus bool, hostMem string) string {
 	return dev
 }
 
+// PointerDevice selects the virtio pointing device attached next to the
+// virtio keyboard.
+type PointerDevice string
+
+const (
+	// PointerTablet is an absolute pointer (virtio-tablet-pci): the host cursor
+	// maps 1:1 onto the guest screen and the host window never grabs it, which
+	// is right for a desktop. Wayland compositors deliver absolute motion with
+	// a zero relative delta, so a pointer-locked game (mouse-look) sees the
+	// cursor but no movement.
+	PointerTablet PointerDevice = "tablet"
+	// PointerMouse is a relative pointer (virtio-mouse-pci): the host window
+	// grabs the cursor on click and forwards motion deltas, which is what
+	// pointer-locked games read. Ctrl+Alt+G releases the grab in the QEMU
+	// window.
+	PointerMouse PointerDevice = "mouse"
+)
+
 // VirtioInputDevices returns the -device values for a virtio keyboard and
-// tablet (absolute pointer). Boards without built-in input — the aarch64
-// "virt" board has no PS/2 controller, unlike x86 "q35" — drop every host
-// window click and keystroke unless explicit input devices are attached.
-// The virtio-input drivers ship in the Linux kernel; Windows guests need USB
-// HID devices instead.
+// tablet (absolute pointer), the desktop default; see VirtioInputDevicesFor.
 func VirtioInputDevices() []string {
-	return []string{"virtio-keyboard-pci", "virtio-tablet-pci"}
+	return VirtioInputDevicesFor(PointerTablet)
 }
 
-// DisplayArg returns the -display value for the given host OS. macOS only has
-// the cocoa windowed backend; Linux uses gtk. When gl is true the gl= suboption
-// is appended using backend (empty picks the host default: es on macOS, on
-// Linux). When gl is false a plain windowed display is returned.
+// VirtioInputDevicesFor returns the -device values for a virtio keyboard and
+// the given pointer. Boards without built-in input — the aarch64 "virt" board
+// has no PS/2 controller, unlike x86 "q35" — drop every host window click and
+// keystroke unless explicit input devices are attached. The virtio-input
+// drivers ship in the Linux kernel; Windows guests need USB HID devices
+// instead. An empty or unknown pointer selects the tablet.
+func VirtioInputDevicesFor(pointer PointerDevice) []string {
+	dev := "virtio-tablet-pci"
+	if pointer == PointerMouse {
+		dev = "virtio-mouse-pci"
+	}
+	return []string{"virtio-keyboard-pci", dev}
+}
+
+// DisplayArg returns the -display value for the given host OS with the
+// default (tablet) pointer; see DisplayArgFor.
 func DisplayArg(hostOS string, gl bool, backend GLBackend) string {
+	return DisplayArgFor(hostOS, gl, backend, PointerTablet)
+}
+
+// DisplayArgFor returns the -display value for the given host OS and pointer
+// device. macOS only has the cocoa windowed backend. Linux uses gtk, except
+// with a relative pointer: GTK3 cannot lock or warp the cursor on a Wayland
+// host, so its mouse grab never captures motion and a virtio-mouse gets no
+// deltas — the SDL2 display locks the pointer properly (relative mouse mode
+// on both Wayland and X11), so PointerMouse selects sdl. When gl is true the
+// gl= suboption is appended using backend (empty picks the host default: es
+// on macOS, on elsewhere). When gl is false a plain windowed display is
+// returned.
+func DisplayArgFor(hostOS string, gl bool, backend GLBackend, pointer PointerDevice) string {
 	base := "gtk"
 	if hostOS == "darwin" {
 		base = "cocoa"
+	} else if pointer == PointerMouse {
+		base = "sdl"
 	}
 	if !gl {
 		return base
