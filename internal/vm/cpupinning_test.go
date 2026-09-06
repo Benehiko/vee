@@ -4,6 +4,8 @@ import (
 	"runtime"
 	"testing"
 	"time"
+
+	"github.com/Benehiko/vee/internal/platform"
 )
 
 func TestParseCPUPinning(t *testing.T) {
@@ -46,25 +48,35 @@ func TestParseCPUPinning(t *testing.T) {
 }
 
 func TestSetCPUPinningPersistsWhenStopped(t *testing.T) {
+	if !platform.SupportsCPUPinning() {
+		t.Skip("CPU pinning not supported on this platform")
+	}
+	if runtime.NumCPU() < 2 {
+		t.Skip("test requires at least 2 host CPUs")
+	}
 	m := newTestManager(t)
 	cfg := &VMConfig{Name: "gaming", Template: "gaming-arch", CreatedAt: time.Now()}
 	if err := m.saveConfig(cfg); err != nil {
 		t.Fatalf("save config: %v", err)
 	}
 
-	if err := m.SetCPUPinning("gaming", []int{2, 3, 4, 5}); err != nil {
+	want := []int{0, 1}
+	if err := m.SetCPUPinning("gaming", want); err != nil {
 		t.Fatalf("SetCPUPinning: %v", err)
 	}
 	got, err := m.loadConfig("gaming")
 	if err != nil {
 		t.Fatalf("reload config: %v", err)
 	}
-	if len(got.CPUPinning) != 4 {
-		t.Errorf("persisted CPUPinning = %v, want [2 3 4 5]", got.CPUPinning)
+	if len(got.CPUPinning) != len(want) {
+		t.Errorf("persisted CPUPinning = %v, want %v", got.CPUPinning, want)
 	}
 }
 
 func TestSetCPUPinningRejectsOutOfRange(t *testing.T) {
+	if !platform.SupportsCPUPinning() {
+		t.Skip("CPU pinning not supported on this platform")
+	}
 	m := newTestManager(t)
 	cfg := &VMConfig{Name: "gaming", Template: "gaming-arch", CreatedAt: time.Now()}
 	if err := m.saveConfig(cfg); err != nil {
@@ -76,8 +88,25 @@ func TestSetCPUPinningRejectsOutOfRange(t *testing.T) {
 }
 
 func TestSetCPUPinningUnknownVM(t *testing.T) {
+	if !platform.SupportsCPUPinning() {
+		t.Skip("CPU pinning not supported on this platform")
+	}
 	m := newTestManager(t)
 	if err := m.SetCPUPinning("ghost", []int{0, 1}); err == nil {
 		t.Error("unknown VM: want a not-found error")
+	}
+}
+
+func TestSetCPUPinningUnsupportedPlatform(t *testing.T) {
+	if platform.SupportsCPUPinning() {
+		t.Skip("this test targets platforms without CPU pinning support")
+	}
+	m := newTestManager(t)
+	cfg := &VMConfig{Name: "gaming", Template: "gaming-arch", CreatedAt: time.Now()}
+	if err := m.saveConfig(cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	if err := m.SetCPUPinning("gaming", []int{0, 1}); err == nil {
+		t.Error("unsupported platform: want error")
 	}
 }
