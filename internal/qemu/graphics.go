@@ -66,14 +66,42 @@ func VirtioGPUDevice(arch string, gl, venus bool, hostMem string) string {
 	return dev
 }
 
+// PointerDevice selects the virtio pointing device attached next to the
+// virtio keyboard.
+type PointerDevice string
+
+const (
+	// PointerTablet is an absolute pointer (virtio-tablet-pci): the host cursor
+	// maps 1:1 onto the guest screen and the host window never grabs it, which
+	// is right for a desktop. Wayland compositors deliver absolute motion with
+	// a zero relative delta, so a pointer-locked game (mouse-look) sees the
+	// cursor but no movement.
+	PointerTablet PointerDevice = "tablet"
+	// PointerMouse is a relative pointer (virtio-mouse-pci): the host window
+	// grabs the cursor on click and forwards motion deltas, which is what
+	// pointer-locked games read. Ctrl+Alt+G releases the grab in the QEMU
+	// window.
+	PointerMouse PointerDevice = "mouse"
+)
+
 // VirtioInputDevices returns the -device values for a virtio keyboard and
-// tablet (absolute pointer). Boards without built-in input — the aarch64
-// "virt" board has no PS/2 controller, unlike x86 "q35" — drop every host
-// window click and keystroke unless explicit input devices are attached.
-// The virtio-input drivers ship in the Linux kernel; Windows guests need USB
-// HID devices instead.
+// tablet (absolute pointer), the desktop default; see VirtioInputDevicesFor.
 func VirtioInputDevices() []string {
-	return []string{"virtio-keyboard-pci", "virtio-tablet-pci"}
+	return VirtioInputDevicesFor(PointerTablet)
+}
+
+// VirtioInputDevicesFor returns the -device values for a virtio keyboard and
+// the given pointer. Boards without built-in input — the aarch64 "virt" board
+// has no PS/2 controller, unlike x86 "q35" — drop every host window click and
+// keystroke unless explicit input devices are attached. The virtio-input
+// drivers ship in the Linux kernel; Windows guests need USB HID devices
+// instead. An empty or unknown pointer selects the tablet.
+func VirtioInputDevicesFor(pointer PointerDevice) []string {
+	dev := "virtio-tablet-pci"
+	if pointer == PointerMouse {
+		dev = "virtio-mouse-pci"
+	}
+	return []string{"virtio-keyboard-pci", dev}
 }
 
 // DisplayArg returns the -display value for the given host OS. macOS only has

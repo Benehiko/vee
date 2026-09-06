@@ -9,7 +9,10 @@ import (
 	"github.com/Benehiko/vee/internal/vm"
 )
 
-var configSSHPort int
+var (
+	configSSHPort int
+	configPointer string
+)
 
 var configCmd = &cobra.Command{
 	Use:               "config [name]",
@@ -45,10 +48,22 @@ so no restart is needed.`,
 			}
 			return nil
 		}
+		if cmd.Flags().Changed("pointer") {
+			if name == "" {
+				return fmt.Errorf("--pointer requires a VM name")
+			}
+			mgr := vm.NewManager(prov)
+			if err := mgr.SetPointer(name, configPointer); err != nil {
+				return err
+			}
+			fmt.Printf("pointer set to %s; takes effect the next time %s starts\n", configPointer, name)
+			return nil
+		}
 		return tui.RunConfigEditor(cmd.Context(), prov, name)
 	},
 }
 
 func init() {
+	configCmd.Flags().StringVar(&configPointer, "pointer", "", "Set the guest pointing device for a virtio-GPU VM: tablet (absolute, desktop default) or mouse (relative, for pointer-locked games); applies on the next start")
 	configCmd.Flags().IntVar(&configSSHPort, "ssh-port", 0, "Set the host port forwarded to VM port 22 (applied live to a running user-mode NAT VM)")
 }

@@ -115,6 +115,12 @@ type GPUConfig struct {
 	// HostMem sizes the host memory window for blob resources used by Venus
 	// (e.g. "8G"). Only relevant when Venus is true.
 	HostMem string `yaml:"host_mem,omitempty" json:"host_mem,omitempty"`
+	// Pointer selects the virtio pointing device on the virtio-GPU path:
+	// "tablet" (absolute, the default — the host cursor maps onto the guest
+	// screen with no grab) or "mouse" (relative — the host window grabs the
+	// cursor and forwards deltas, which pointer-locked games need for
+	// mouse-look; Wayland compositors turn absolute motion into a zero delta).
+	Pointer string `yaml:"pointer,omitempty" json:"pointer,omitempty"`
 	// disableGL forces the plain 2D adapter for one boot; set by the
 	// start-time GL-crash retry when the resolved QEMU's windowed display
 	// backend was built without OpenGL. Unexported so it never persists —

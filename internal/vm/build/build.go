@@ -94,6 +94,10 @@ type Opts struct {
 	Venus *bool
 	// HostMem sizes the host memory window for Venus blob resources (e.g. "8G").
 	HostMem string
+	// Pointer selects the guest pointing device on the virtio-GPU path:
+	// "tablet" (absolute, default) or "mouse" (relative, for pointer-locked
+	// games).
+	Pointer string
 
 	// Virtiofs share.
 	VirtiofsDir string
@@ -594,6 +598,9 @@ func applyOverrides(ctx context.Context, cfg *vm.VMConfig, opts Opts, prov provi
 	if opts.Venus != nil {
 		cfg.GPU.Venus = *opts.Venus
 	}
+	if opts.Pointer != "" {
+		cfg.GPU.Pointer = opts.Pointer
+	}
 	if opts.HostMem != "" {
 		cfg.GPU.HostMem = opts.HostMem
 	}
@@ -784,8 +791,13 @@ func applyOverrides(ctx context.Context, cfg *vm.VMConfig, opts Opts, prov provi
 // without any signal at start. host_mem additionally only reaches the device
 // string alongside venus.
 func validateGPUAccel(cfg *vm.VMConfig, opts Opts) error {
+	if err := vm.ValidatePointer(opts.Pointer); err != nil {
+		return err
+	}
 	if cfg.GPU.Mode != vm.GPUVirtio {
 		switch {
+		case opts.Pointer != "":
+			return fmt.Errorf("--pointer applies to GPU mode %q only (got %q) — add --gpu-mode=virtio", vm.GPUVirtio, cfg.GPU.Mode)
 		case opts.GLBackend != "":
 			return fmt.Errorf("--gpu-gl-backend applies to GPU mode %q only (got %q) — add --gpu-mode=virtio", vm.GPUVirtio, cfg.GPU.Mode)
 		case opts.Venus != nil && *opts.Venus:

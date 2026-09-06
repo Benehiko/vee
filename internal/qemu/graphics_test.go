@@ -95,3 +95,18 @@ func TestAppleGFXDevice(t *testing.T) {
 		t.Errorf("x86_64 apple-gfx device: got %q, want apple-gfx-pci", got)
 	}
 }
+
+func TestVirtioInputDevicesFor(t *testing.T) {
+	cases := map[qemu.PointerDevice]string{
+		qemu.PointerTablet: "virtio-tablet-pci",
+		qemu.PointerMouse:  "virtio-mouse-pci",
+		"":                 "virtio-tablet-pci",
+		"bogus":            "virtio-tablet-pci",
+	}
+	for p, want := range cases {
+		got := qemu.VirtioInputDevicesFor(p)
+		if len(got) != 2 || got[0] != "virtio-keyboard-pci" || got[1] != want {
+			t.Errorf("VirtioInputDevicesFor(%q) = %v, want [virtio-keyboard-pci %s]", p, got, want)
+		}
+	}
+}

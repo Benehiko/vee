@@ -64,6 +64,7 @@ var (
 	createGPUVendor     string
 	createGPUGLBackend  string
 	createGPUVenus      bool
+	createPointer       string
 	createGPUHostMem    string
 	createVirtiofsRO    bool
 	createMedia         []string
@@ -610,6 +611,9 @@ func optsFromFlags(cmd *cobra.Command, name string) build.Opts {
 	if cmd.Flags().Changed("gpu-hostmem") {
 		opts.HostMem = createGPUHostMem
 	}
+	if cmd.Flags().Changed("pointer") {
+		opts.Pointer = createPointer
+	}
 	if cmd.Flags().Changed("virtiofs-dir") {
 		opts.VirtiofsDir = createVirtiofsDir
 	}
@@ -696,6 +700,7 @@ func init() {
 	createCmd.Flags().StringVar(&createGPUVendor, "gpu-vendor", "amd", "Guest GPU vendor for driver selection: amd, nvidia, virtio (gaming-arch/gaming-bazzite templates)")
 	createCmd.Flags().StringVar(&createGPUGLBackend, "gpu-gl-backend", "", "Host OpenGL backend for --gpu-mode=virtio: on (Linux EGL), es (ANGLE/Metal, macOS default) or core (native macOS, unstable). Empty picks the host default")
 	createCmd.Flags().BoolVar(&createGPUVenus, "gpu-venus", false, "Enable Vulkan-over-virtio (Venus) on the virtio-gpu-gl device (--gpu-mode=virtio). Experimental: needs a Venus-capable QEMU and a host Vulkan driver; the guest needs the Mesa vulkan-virtio ICD, so Linux guests only")
+	createCmd.Flags().StringVar(&createPointer, "pointer", "", "Guest pointing device for --gpu-mode=virtio: tablet (absolute, default: host cursor maps onto the guest, no grab) or mouse (relative: the window grabs the cursor and sends deltas, which pointer-locked games need for mouse-look; Ctrl+Alt+G releases)")
 	createCmd.Flags().StringVar(&createGPUHostMem, "gpu-hostmem", "", "Host memory window for Venus blob resources, e.g. 8G (requires --gpu-venus; default "+qemu.DefaultVenusHostMem+"). Scales with GPU working set — resolution and texture load — not guest RAM")
 	createCmd.Flags().StringArrayVar(&createMedia, "media", nil, "Media source for jellyfin template (repeatable). Forms: hostdir:/host@/guest[:ro], nfs://server/export@/guest[:ro], smb://[user@]server/share@/guest[:ro], block:/dev/disk/by-id/...@/guest[:fstype], usb:VENDOR:PRODUCT@/guest[:fstype]")
 	createCmd.Flags().StringVar(&createDNSAdminUser, "dns-admin-user", "admin", "AdGuard Home web UI username (dns-sink template); the password is prompted for")

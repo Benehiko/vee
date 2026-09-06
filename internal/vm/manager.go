@@ -1993,7 +1993,7 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 		// has PS/2), so a guest with a display but no input devices renders
 		// fine while dropping every click and keystroke.
 		if !cfg.Headless {
-			for _, dev := range qemu.VirtioInputDevices() {
+			for _, dev := range qemu.VirtioInputDevicesFor(qemu.PointerDevice(cfg.GPU.Pointer)) {
 				opts = append(opts, qemu.WithDevice(dev))
 			}
 		}
