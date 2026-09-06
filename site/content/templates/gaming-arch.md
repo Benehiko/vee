@@ -124,7 +124,10 @@ window grabs the cursor on click and forwards deltas, and Ctrl+Alt+G releases
 the grab. On Linux this also switches the VM window from QEMU's GTK display
 to its SDL display, because GTK3 cannot lock or warp the pointer on a
 Wayland host and its grab never captures motion; SDL2 locks the pointer
-natively on Wayland and X11. Change it on an existing VM with
+natively on Wayland and X11. It also boots the x86 board with `vmport=off`:
+otherwise the guest's `psmouse` driver finds VMware's vmmouse behind QEMU's
+backdoor port, QEMU makes that absolute device its current mouse, and host
+motion turns absolute again. Change it on an existing VM with
 `vee config <vm> --pointer mouse`; QEMU cannot swap input devices live, so it
 applies on the next start.
 

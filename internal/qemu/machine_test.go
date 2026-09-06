@@ -330,3 +330,46 @@ func TestMachineArchitectureDefault(t *testing.T) {
 		t.Errorf("-accel should immediately follow the -machine pair; args: %s", strings.Join(args, " "))
 	}
 }
+
+// A relative virtio-mouse is only relative while the guest cannot activate
+// QEMU's absolute vmmouse, so the pointer option turns the vmport backdoor
+// off on x86 boards — and leaves an explicit vmport= value alone.
+func TestMachineVMPortOff(t *testing.T) {
+	for _, c := range []struct{ mt, want string }{
+		{"q35", "q35,vmport=off"},
+		{"pc", "pc,vmport=off"},
+		{"q35,vmport=on", "q35,vmport=on"},
+		{"virt", "virt"},
+	} {
+		p := newTestProvider(t)
+		m, err := qemu.NewEmptyMachine(p)
+		if err != nil {
+			t.Fatalf("NewEmptyMachine: %v", err)
+		}
+		disk := qemu.NewDisk(p, m, qemu.WithCustomPath("/data/disk.qcow2"))
+		arch := "x86_64"
+		if c.mt == "virt" {
+			arch = "aarch64"
+		}
+		built, err := m.BuildMachine(
+			qemu.AddDisk(disk),
+			qemu.WithArchitecture(arch),
+			qemu.WithMachineType(c.mt),
+			qemu.WithAccelerator(qemu.AccelTCG),
+			qemu.WithVMPortOff(true),
+		)
+		if err != nil {
+			t.Fatalf("BuildMachine(%s): %v", c.mt, err)
+		}
+		got := argValue(built.Args(), "-machine")
+		if arch == "aarch64" {
+			if strings.Contains(got, "vmport") {
+				t.Errorf("machine %q: vmport leaked onto a non-x86 board: %q", c.mt, got)
+			}
+			continue
+		}
+		if got != c.want {
+			t.Errorf("machine %q with vmport off: got %q, want %q", c.mt, got, c.want)
+		}
+	}
+}

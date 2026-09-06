@@ -1687,6 +1687,11 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 		machineType = platform.MachineTypeForArch(guestArch)
 	}
 	opts = append(opts, qemu.WithMachineType(machineType))
+	// A relative pointer only stays relative if the guest cannot bind VMware's
+	// absolute vmmouse through the vmport backdoor; see qemu.WithVMPortOff.
+	if cfg.GPU.Mode == GPUVirtio && qemu.PointerDevice(cfg.GPU.Pointer) == qemu.PointerMouse {
+		opts = append(opts, qemu.WithVMPortOff(true))
+	}
 	if cfg.Nested {
 		// Create() refused non-aarch64 configs, but a hand-edited vm.yaml can
 		// still carry the field anywhere; WithNested is a no-op off aarch64.
