@@ -51,6 +51,17 @@ func TestDisplayArg(t *testing.T) {
 		{"linux no gl", "linux", false, "", "gtk"},
 		{"explicit es on linux", "linux", true, qemu.GLBackendES, "gtk,gl=es"},
 	}
+	// The relative pointer swaps the Linux window for SDL, which can lock the
+	// pointer under Wayland; macOS keeps cocoa.
+	for _, c := range []struct {
+		hostOS string
+		gl     bool
+		want   string
+	}{{"linux", true, "sdl,gl=on"}, {"linux", false, "sdl"}, {"darwin", true, "cocoa,gl=es"}} {
+		if got := qemu.DisplayArgFor(c.hostOS, c.gl, "", qemu.PointerMouse); got != c.want {
+			t.Errorf("DisplayArgFor(%q, gl=%v, mouse) = %q, want %q", c.hostOS, c.gl, got, c.want)
+		}
+	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			got := qemu.DisplayArg(c.hostOS, c.gl, c.backend)

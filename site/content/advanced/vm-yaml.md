@@ -130,7 +130,7 @@ Only for `backend: vz` guests (see [macOS guests](../../getting-started/macos-gu
 | `gl_backend` | Host GL backend for `virtio` mode: `es` (ANGLE/Metal, macOS default, stable), `core` (native, unstable), `on` (Linux EGL). Empty picks the host default. |
 | `venus` | Enable Vulkan-over-virtio (Venus) on the virtio-gpu-gl device. Experimental; needs a Venus-capable QEMU and a host Vulkan driver. The guest needs the Mesa `vulkan-virtio` ICD, so this is a Linux-guest path. |
 | `host_mem` | Host memory window for Venus blob resources, e.g. `8G` (only with `venus: true`; defaults to `8G` when Venus is on and this is unset). Size it against the GPU working set — render resolution, texture sizes, buffers in flight — not against guest RAM. |
-| `pointer` | Guest pointing device for `virtio` mode: `tablet` (absolute; the host cursor maps onto the guest, no grab — the default) or `mouse` (relative; the QEMU window grabs the cursor and forwards deltas, which pointer-locked games need for mouse-look). Applies on the next start. |
+| `pointer` | Guest pointing device for `virtio` mode: `tablet` (absolute; the host cursor maps onto the guest, no grab — the default) or `mouse` (relative; the QEMU window grabs the cursor and forwards deltas, which pointer-locked games need for mouse-look). On Linux `mouse` also uses QEMU's SDL window instead of GTK, since GTK cannot lock the pointer on Wayland. Applies on the next start. |
 
 `gl_backend`, `venus` and `host_mem` are only read when `mode: virtio`, and
 `host_mem` only alongside `venus: true`. Setting them anywhere else is rejected

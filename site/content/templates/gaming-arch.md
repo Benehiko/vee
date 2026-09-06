@@ -121,8 +121,12 @@ motion with a zero relative delta, though, and a game that locks the pointer
 for mouse-look reads only relative deltas, so the camera never moves.
 `--pointer mouse` attaches a relative `virtio-mouse-pci` instead: the QEMU
 window grabs the cursor on click and forwards deltas, and Ctrl+Alt+G releases
-the grab. Change it on an existing VM with `vee config <vm> --pointer mouse`;
-QEMU cannot swap input devices live, so it applies on the next start.
+the grab. On Linux this also switches the VM window from QEMU's GTK display
+to its SDL display, because GTK3 cannot lock or warp the pointer on a
+Wayland host and its grab never captures motion; SDL2 locks the pointer
+natively on Wayland and X11. Change it on an existing VM with
+`vee config <vm> --pointer mouse`; QEMU cannot swap input devices live, so it
+applies on the next start.
 
 ## Streaming & tuning
 

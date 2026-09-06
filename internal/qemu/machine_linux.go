@@ -29,14 +29,22 @@ func qemuEnv(binary string) []string {
 		val = binDir + string(os.PathListSeparator) + prev
 	}
 	// Replace any inherited LD_LIBRARY_PATH with the augmented value.
-	out := make([]string, 0, len(env)+1)
+	out := make([]string, 0, len(env)+2)
 	for _, e := range env {
 		if strings.HasPrefix(e, "LD_LIBRARY_PATH=") {
 			continue
 		}
 		out = append(out, e)
 	}
-	return append(out, "LD_LIBRARY_PATH="+val)
+	out = append(out, "LD_LIBRARY_PATH="+val)
+	// The SDL display (relative pointer, see DisplayArgFor) must run on the
+	// Wayland driver to lock the pointer natively; left to its own device
+	// SDL2 may pick X11 through Xwayland. Only set when the session is
+	// Wayland and the user has not chosen a driver themselves.
+	if os.Getenv("WAYLAND_DISPLAY") != "" && os.Getenv("SDL_VIDEODRIVER") == "" {
+		out = append(out, "SDL_VIDEODRIVER=wayland")
+	}
+	return out
 }
 
 // applyVFIOLimits raises RLIMIT_MEMLOCK on the child process when VFIO devices

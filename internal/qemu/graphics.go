@@ -104,14 +104,27 @@ func VirtioInputDevicesFor(pointer PointerDevice) []string {
 	return []string{"virtio-keyboard-pci", dev}
 }
 
-// DisplayArg returns the -display value for the given host OS. macOS only has
-// the cocoa windowed backend; Linux uses gtk. When gl is true the gl= suboption
-// is appended using backend (empty picks the host default: es on macOS, on
-// Linux). When gl is false a plain windowed display is returned.
+// DisplayArg returns the -display value for the given host OS with the
+// default (tablet) pointer; see DisplayArgFor.
 func DisplayArg(hostOS string, gl bool, backend GLBackend) string {
+	return DisplayArgFor(hostOS, gl, backend, PointerTablet)
+}
+
+// DisplayArgFor returns the -display value for the given host OS and pointer
+// device. macOS only has the cocoa windowed backend. Linux uses gtk, except
+// with a relative pointer: GTK3 cannot lock or warp the cursor on a Wayland
+// host, so its mouse grab never captures motion and a virtio-mouse gets no
+// deltas — the SDL2 display locks the pointer properly (relative mouse mode
+// on both Wayland and X11), so PointerMouse selects sdl. When gl is true the
+// gl= suboption is appended using backend (empty picks the host default: es
+// on macOS, on elsewhere). When gl is false a plain windowed display is
+// returned.
+func DisplayArgFor(hostOS string, gl bool, backend GLBackend, pointer PointerDevice) string {
 	base := "gtk"
 	if hostOS == "darwin" {
 		base = "cocoa"
+	} else if pointer == PointerMouse {
+		base = "sdl"
 	}
 	if !gl {
 		return base
