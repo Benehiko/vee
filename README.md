@@ -295,6 +295,23 @@ drift. A typical agent flow: `vm_create {template: "devbox", start: true}` →
 `vm_exec {command: "docker run --rm alpine echo ok"}` → `vm_delete`. See
 [docs/mcp.md](docs/mcp.md) for the full tool reference.
 
+### Claude Code skill
+
+The repo also ships a Claude Code *skill* at
+[.claude/skills/vee-vm/SKILL.md](.claude/skills/vee-vm/SKILL.md): prose that
+teaches the agent how to drive the CLI as a test bench (create or reuse a VM,
+wait for SSH, copy a tree in, run Go tests in Linux and Windows guests,
+screenshot, tear down) plus the gotchas that bite along the way. It loads
+automatically in a vee checkout. To use it from any project, copy or symlink
+it into `~/.claude/skills/vee-vm`:
+
+```sh
+mkdir -p ~/.claude/skills
+ln -s /path/to/vee/.claude/skills/vee-vm ~/.claude/skills/vee-vm
+```
+
+See [docs/claude-skill.md](docs/claude-skill.md) for details.
+
 ## Shell completion
 
 ```sh
@@ -393,6 +410,7 @@ docs also live in this repo:
 - [docs/windows-24h2-install.md](docs/windows-24h2-install.md) — full writeup of the Windows 11 24H2 install debugging
 - [docs/qmp.md](docs/qmp.md) — `vee qmp`, `vee screenshot`, and the daemon-routed QMP transport
 - [docs/mcp.md](docs/mcp.md) — the MCP server: tool reference and agent registration
+- [docs/claude-skill.md](docs/claude-skill.md): the Claude Code skill for driving vee VMs, and how to install it globally
 - [docs/gpu-passthrough-gaming.md](docs/gpu-passthrough-gaming.md) — Sunshine + Moonlight streaming over GPU passthrough
 - [docs/media-sources.md](docs/media-sources.md) — attaching NFS/SMB/host-dir/block/USB media to VMs
 - [docs/pacman-mirror.md](docs/pacman-mirror.md) — host-side pacman caching proxy for Arch VMs
