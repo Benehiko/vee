@@ -195,8 +195,17 @@ func NordLynxConfig(ctx context.Context, token, country string) (*WireGuardConfi
 		// Nord's own DNS, inside the tunnel. Leaving this empty would let the
 		// guest keep using the LAN resolver, which leaks lookups around the VPN
 		// even while the traffic itself is tunnelled.
-		DNS:       "103.86.96.100",
-		Endpoint:  fmt.Sprintf("%s:51820", server.Station),
+		DNS: "103.86.96.100",
+		// The hostname, not server.Station's literal IP. Nord retires and
+		// re-addresses servers, and a pinned IP has no indirection to follow
+		// when it does: the guest keeps dialling an address nothing answers on
+		// and the tunnel never comes back. It fails closed, so nothing leaks,
+		// but it is a silent permanent outage.
+		//
+		// A hostname is also what activates the endpoint-refresh machinery --
+		// wgEndpointIsLiteralIP gates it, so a literal IP ships a guest with no
+		// refresh script, no timer and no way to notice.
+		Endpoint:  fmt.Sprintf("%s:51820", server.Hostname),
 		PublicKey: server.PublicKey,
 	}, nil
 }

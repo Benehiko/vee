@@ -115,7 +115,8 @@ func TestVMTorrentWireGuard(t *testing.T) {
 		clientWGConf,
 		"wireguard",
 		0,
-		"", // default Ubuntu base
+		"",    // default Ubuntu base
+		false, // no TCG emulation; the suite runs on an x86_64 runner
 	)
 	if err != nil {
 		t.Fatalf("NewTorrentConfig: %v", err)

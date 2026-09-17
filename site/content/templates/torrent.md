@@ -180,9 +180,19 @@ clearing the rules first would leave a window with no kill-switch at all. New
 holes are installed before superseded ones are withdrawn, so the handshake is
 never without a way out.
 
-An endpoint given as a literal IP skips all of this — an address that cannot
-change needs no refresh — and remains the simplest choice where your provider
+An endpoint given as a literal IP skips all of this, because there is no name to
+re-resolve. That makes it the more fragile choice, not the safer one: the
+address cannot follow the server. When a provider retires that server outright
+the guest keeps dialling an address nothing answers on, and nothing is installed
+that could notice. It fails closed, so nothing leaks, but the tunnel stays down
+until someone edits the config by hand. Prefer a hostname wherever your provider
 offers one.
+
+NordLynx configs built from `--nordvpn-token` use the server's hostname for this
+reason. Earlier releases pinned them to the IP the API reports alongside it,
+which left every NordVPN guest without the refresh machinery described above; a
+guest created by one of those releases keeps its literal-IP config until it is
+recreated.
 
 **A tunnel that fails at boot retries itself.** `wg-quick@wg0` is enabled, so
 systemd starts it on every boot, but the upstream unit sets no `Restart=` and

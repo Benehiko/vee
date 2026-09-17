@@ -3,6 +3,7 @@ package vpn
 import (
 	"context"
 	"encoding/base64"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -66,11 +67,15 @@ func TestNordLynxConfigAssemblesBothHalves(t *testing.T) {
 	if cfg.PublicKey != "c2VydmVyLXB1YmxpYy1rZXktZm9yLXRlc3Rpbmc=" {
 		t.Errorf("server public key = %q", cfg.PublicKey)
 	}
-	// The endpoint must be the station IP, not the hostname: the guest's
-	// kill-switch pins the handshake hole to resolved addresses, and once
-	// OUTPUT is DROP there is no DNS left to resolve a hostname with.
-	if cfg.Endpoint != "192.0.2.10:51820" {
-		t.Errorf("endpoint = %q, want the station IP with the WireGuard port", cfg.Endpoint)
+	// The endpoint must be the hostname, not the station IP. The kill-switch
+	// still pins the handshake hole to resolved addresses, but the guest now
+	// re-resolves them: the refresh script opens a temporary, narrowly-scoped
+	// DNS hole, so a deny policy is no longer a reason to freeze an IP into the
+	// config. Pinning one instead strands the guest for good the day Nord
+	// retires the server, and suppresses the refresh machinery that would
+	// otherwise notice -- wgEndpointIsLiteralIP gates it on exactly this.
+	if cfg.Endpoint != "nl1254.nordvpn.com:51820" {
+		t.Errorf("endpoint = %q, want the hostname with the WireGuard port", cfg.Endpoint)
 	}
 	if cfg.DNS == "" {
 		t.Error("no DNS set; the guest would keep using the LAN resolver and leak lookups around the tunnel")
@@ -144,5 +149,34 @@ func TestNordLynxPrivateKeyIsUsable(t *testing.T) {
 		if _, err := base64.StdEncoding.DecodeString(key); err != nil {
 			t.Errorf("%s key is not valid base64: %v", name, err)
 		}
+	}
+}
+
+// TestNordLynxEndpointIsNotALiteralIP is the regression guard for a silent
+// permanent outage. The endpoint was built from the API's "station" field, an
+// IP address, which had two consequences: the guest kept dialling an address
+// Nord had retired, and -- because the templates gate the endpoint-refresh
+// machinery on whether the endpoint parses as an IP -- it shipped with no
+// refresh script, no timer and no way to ever notice. Observed in the field as
+// a tunnel that had not handshaked for three weeks.
+//
+// Asserting "not an IP" rather than a specific hostname keeps this honest if
+// the stub's fixture changes: the property that matters is that something
+// downstream can still re-resolve it.
+func TestNordLynxEndpointIsNotALiteralIP(t *testing.T) {
+	stubNord(t, "good-token")
+
+	cfg, err := NordLynxConfig(context.Background(), "good-token", "")
+	if err != nil {
+		t.Fatalf("NordLynxConfig: %v", err)
+	}
+
+	host, _, err := net.SplitHostPort(cfg.Endpoint)
+	if err != nil {
+		t.Fatalf("endpoint %q is not host:port: %v", cfg.Endpoint, err)
+	}
+	if net.ParseIP(host) != nil {
+		t.Errorf("endpoint host = %q, a literal IP; a retired server then strands "+
+			"the guest for good and suppresses the endpoint refresh", host)
 	}
 }
