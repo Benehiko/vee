@@ -150,6 +150,7 @@ func testEndpointRotation(t *testing.T, distro, guestUser, sudo string, wgHostPo
 		"wireguard",
 		0,
 		distro,
+		false, // no TCG emulation; the suite runs on an x86_64 runner
 	)
 	if err != nil {
 		t.Fatalf("NewTorrentConfig: %v", err)
