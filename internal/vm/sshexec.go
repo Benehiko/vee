@@ -55,7 +55,21 @@ func dialSSH(ctx context.Context, addr, user string, privKeyPEM []byte, timeout 
 			time.Sleep(2 * time.Second)
 			continue
 		}
+		// cfg.Timeout only bounds ssh.Dial; NewClientConn has no deadline of
+		// its own. A user-mode NAT port forward accepts the TCP connection
+		// before the guest has sshd (or while it drops SYNs mid-install), so
+		// without this the banner read blocks forever and the caller's
+		// timeout is never honoured. Bound the handshake by the remaining
+		// budget, then clear the deadline for the session.
+		hsDeadline := time.Now().Add(cfg.Timeout)
+		if deadline.Before(hsDeadline) {
+			hsDeadline = deadline
+		}
+		_ = conn.SetDeadline(hsDeadline)
 		c, chans, reqs, herr := ssh.NewClientConn(conn, addr, cfg)
+		if herr == nil {
+			_ = conn.SetDeadline(time.Time{})
+		}
 		if herr != nil {
 			_ = conn.Close()
 			lastErr = herr
@@ -78,13 +92,40 @@ func (c *sshExecClient) Close() error {
 	return c.client.Close()
 }
 
+// newSession opens a session, bounded by ctx. ssh.Client.NewSession waits for
+// the server to confirm the channel and has no deadline of its own: a guest
+// that completes the handshake and then goes down (Windows rebooting under a
+// live sshd) leaves it blocked forever. On ctx expiry the client is closed,
+// which fails the pending channel open, so the client is unusable afterwards.
+func (c *sshExecClient) newSession(ctx context.Context) (*ssh.Session, error) {
+	type result struct {
+		s   *ssh.Session
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		s, err := c.client.NewSession()
+		ch <- result{s, err}
+	}()
+	select {
+	case r := <-ch:
+		if r.err != nil {
+			return nil, fmt.Errorf("new ssh session: %w", r.err)
+		}
+		return r.s, nil
+	case <-ctx.Done():
+		_ = c.client.Close()
+		return nil, fmt.Errorf("new ssh session: %w", ctx.Err())
+	}
+}
+
 // Run executes cmd on the guest and waits for it to finish, returning captured
 // stdout and stderr. A non-zero exit status is returned as an error with stderr
 // attached. ctx cancellation closes the session, unblocking a hung command.
 func (c *sshExecClient) Run(ctx context.Context, cmd string) (stdout, stderr []byte, err error) {
-	session, err := c.client.NewSession()
+	session, err := c.newSession(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("new ssh session: %w", err)
+		return nil, nil, err
 	}
 	defer func() { _ = session.Close() }()
 
@@ -114,9 +155,9 @@ func (c *sshExecClient) Run(ctx context.Context, cmd string) (stdout, stderr []b
 // FetchFile streams the remote file at path to w by running `cat` in a session.
 // Used to pull a compiled binary out of the build VM without an SFTP dependency.
 func (c *sshExecClient) FetchFile(ctx context.Context, path string, w io.Writer) error {
-	session, err := c.client.NewSession()
+	session, err := c.newSession(ctx)
 	if err != nil {
-		return fmt.Errorf("new ssh session: %w", err)
+		return err
 	}
 	defer func() { _ = session.Close() }()
 
