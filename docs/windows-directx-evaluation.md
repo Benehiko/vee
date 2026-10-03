@@ -172,4 +172,7 @@ Mod tests there still need the Windows launcher from item 5 above.
   guest reboot becomes a QEMU relaunch by whichever vee process watches the VM,
   and an older daemon relaunches without the Helios GPU.
 - Run `vee helios verify --timeout 20m`: probes take one to two minutes each.
+- vee deliberately does not ship or build `qemu-helios` (decided 2026-10-03):
+  you build the fork and pass `--qemu-binary`. Reconsider a managed release
+  asset, or an on-demand build like `virtiofsd`'s, once D3D12 works.
 - Host setup, flags and troubleshooting are in [windows-helios.md](windows-helios.md).

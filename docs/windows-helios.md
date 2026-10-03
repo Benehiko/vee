@@ -51,6 +51,16 @@ Linux, x86_64, KVM. From Helios' `HOST.md`:
 
 ### Building the host pieces
 
+**vee does not download or build `qemu-helios`; you build it and pass it with
+`--qemu-binary`.** This is deliberate. vee's managed QEMU (`qemubin`, released
+by `qemu-release.yml`) is stock QEMU with vee's own patches, pinned by checksum.
+Helios' fork is pre-release, changes daily, and in testing could not run D3D12
+(see [windows-directx-evaluation.md](windows-directx-evaluation.md)), so
+publishing and re-pinning a bundle for it is not worth the upkeep yet. A Helios
+VM without `qemu_binary` refuses to start rather than falling back to the
+managed QEMU, which cannot show the Helios display. Revisit a managed bundle,
+or an on-demand build like vee's `virtiofsd`, if Helios' D3D12 matures.
+
 Build from a Helios checkout so the submodule revisions stay paired:
 
 ```sh
