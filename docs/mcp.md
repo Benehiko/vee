@@ -88,6 +88,8 @@ switch, each link guarded by a test.
 | `vm_backup` | mutating | rsync guest directories to the host over SSH; `dirs` are explicit guest paths |
 | `vm_backup_list` | read-only | Past and in-progress backup runs |
 | `vm_cp` | mutating | Copy a file/directory between host and guest over scp (`direction`: `to_guest`/`from_guest`) |
+| `vm_helios_status` | read-only | Helios GPU Windows guest's driver provisioning state; `wait` polls until finished/failed through the guest's reboots |
+| `vm_helios_verify` | mutating | Run Helios' D3D11/D3D12/Vulkan/OpenGL/OpenCL smoke tests in the guest's desktop session; returns the log and `passed` |
 | `vm_wait` | read-only | Block until the guest answers an authenticated SSH round-trip (`cloud_init` also waits for first-boot provisioning) |
 | `gpu_list` | read-only | PCI devices by IOMMU group with drivers (Linux) |
 | `gpu_status` | read-only | VFIO passthrough pre-flight for one device |
