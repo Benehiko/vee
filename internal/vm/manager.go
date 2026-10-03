@@ -1495,8 +1495,22 @@ func (m *Manager) Delete(name string) error {
 	if err == nil && state.Running && isAlive(state.PID) {
 		return fmt.Errorf("VM %q is running; stop it first", name)
 	}
+	// Resolve the relocated boot disk before the config row goes away.
+	var relocated string
+	if cfg, cerr := m.LoadConfig(name); cerr == nil {
+		relocated = relocatedBootDisk(name, m.vmDir(name), cfg)
+	}
 	if m.db != nil {
 		_ = dbDeleteVM(m.db, name)
+	}
+	if relocated != "" {
+		if rerr := os.Remove(relocated); rerr != nil && !os.IsNotExist(rerr) {
+			m.provider.Logger().Warn("could not delete relocated boot disk",
+				zap.String("vm", name), zap.String("path", relocated), zap.Error(rerr))
+		} else {
+			m.provider.Logger().Info("deleted relocated boot disk",
+				zap.String("vm", name), zap.String("path", relocated))
+		}
 	}
 	// Drop any background tunnels for this VM; the registry outlives the VM
 	// directory, so leaving them would have the daemon keep reporting tunnels
@@ -1506,6 +1520,32 @@ func (m *Manager) Delete(name string) error {
 			zap.String("vm", name), zap.Error(err))
 	}
 	return deleteVMDir(m.vmDir(name))
+}
+
+// relocatedBootDisk returns the managed boot disk file that lives outside the
+// VM directory — placed there by --boot-disk-path — or "" when there is none.
+// deleteVMDir only clears the VM directory, so without this a deleted VM's
+// relocated disk is orphaned. Only a file carrying vee's generated name
+// (disk-<vm>-<size>.<format>) qualifies, i.e. one vee created inside a
+// directory the user named: an explicit file path, a passthrough device or an
+// adopted image is never vee's to delete.
+func relocatedBootDisk(name, vmDir string, cfg *VMConfig) string {
+	i := findManagedBootDisk(cfg)
+	if i < 0 {
+		return ""
+	}
+	d := cfg.Disks[i]
+	if d.Path == "" {
+		return ""
+	}
+	path := managedBootDiskAbsPath(name, d)
+	if !filepath.IsAbs(path) || !strings.HasPrefix(filepath.Base(path), "disk-"+name+"-") {
+		return ""
+	}
+	if rel, err := filepath.Rel(vmDir, path); err == nil && !strings.HasPrefix(rel, "..") {
+		return "" // inside the VM directory: deleteVMDir handles it
+	}
+	return path
 }
 
 // deleteScratchDisk removes the backing qcow2 of a one-shot scratch disk once
