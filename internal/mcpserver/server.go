@@ -244,7 +244,7 @@ var templateCatalog = []templateInfo{
 	{Name: "gaming-bazzite", Description: "Bazzite (Fedora Atomic) gaming ISO, 16G / 8 CPUs", Params: "gpu_mode, gpu_pci, gpu_vendor"},
 	{Name: "gaming", Description: "Legacy alias for gaming-arch with GPU passthrough implied when gpu_pci is set", Params: "gpu_pci"},
 	{Name: "passthrough", Description: "Raw NVMe boot + GPU passthrough", Params: "requires nvme_dev and ovmf_vars"},
-	{Name: "windows", Description: "Windows guest, UEFI; secure boot + TPM on x86_64, arm64 supported on Apple Silicon", Params: "distro_version (e.g. win10, win11)"},
+	{Name: "windows", Description: "Windows guest, UEFI; secure boot + TPM on x86_64, arm64 supported on Apple Silicon", Params: "distro_version (e.g. win10, win11); gpu_mode=helios + helios_setup + qemu_binary for D3D11/D3D12 via WinBoat Helios (experimental)"},
 	{Name: "truenas", Description: "TrueNAS SCALE, AHCI OS disk, bridge NIC", Params: "data_disks (host block devices, path[:serial])"},
 	{Name: "macos", Description: "macOS guest on Virtualization.framework (Apple Silicon hosts only; ~14 GB IPSW download on first create)", Params: "ipsw (latest|url|path), macosvm_dir, skip_first_boot"},
 	{Name: "torrent", Description: "qbittorrent-nox with optional VPN kill-switch", Params: "share_mounts, and nordvpn_token/nordvpn_country or wireguard_conf for the kill-switch"},
@@ -308,14 +308,21 @@ type vmCreateIn struct {
 	UEFI      *bool `json:"uefi,omitempty"`
 
 	// GPU.
-	GPUMode    string `json:"gpu_mode,omitempty" jsonschema:"none, virtio, or passthrough"`
+	GPUMode    string `json:"gpu_mode,omitempty" jsonschema:"none, virtio, passthrough, or helios (windows template only: WinBoat Helios D3D11/D3D12 driver over virtio-gpu + Venus, experimental)"`
 	GPUPCI     string `json:"gpu_pci,omitempty" jsonschema:"PCI address of the GPU to pass through"`
 	GPUVendor  string `json:"gpu_vendor,omitempty" jsonschema:"amd, nvidia, or virtio (gaming templates)"`
 	AntiDetect *bool  `json:"anti_detect,omitempty"`
 	GLBackend  string `json:"gpu_gl_backend,omitempty" jsonschema:"host OpenGL backend for gpu_mode=virtio: on (Linux EGL), es (ANGLE/Metal, macOS) or core (native macOS, unstable); empty picks the host default"`
 	Venus      *bool  `json:"gpu_venus,omitempty" jsonschema:"enable Vulkan-over-virtio (Venus) on the virtio-gpu-gl device; requires gpu_mode=virtio, a Venus-capable QEMU and a Linux guest with the Mesa vulkan-virtio ICD"`
-	HostMem    string `json:"gpu_hostmem,omitempty" jsonschema:"host memory window for Venus blob resources, e.g. 8G; requires gpu_venus"`
-	Pointer    string `json:"pointer,omitempty" jsonschema:"guest pointing device for gpu_mode=virtio: tablet (absolute, default) or mouse (relative; pointer-locked games need it for mouse-look)"`
+	HostMem    string `json:"gpu_hostmem,omitempty" jsonschema:"host memory window for Venus blob resources, e.g. 8G; requires gpu_venus or gpu_mode=helios"`
+	// Helios (gpu_mode=helios).
+	HeliosSetup        string   `json:"helios_setup,omitempty" jsonschema:"host path to HeliosSetup.exe (from Helios' helios-windows-x64 zip); required by gpu_mode=helios"`
+	QemuBinary         string   `json:"qemu_binary,omitempty" jsonschema:"per-VM qemu-system binary; gpu_mode=helios needs an installed build of the qemu-helios fork"`
+	QemuEnv            []string `json:"qemu_env,omitempty" jsonschema:"environment entries (KEY=VALUE) added to the QEMU process, e.g. LD_LIBRARY_PATH and RENDER_SERVER_EXEC_PATH for the qemu-helios fork's virglrenderer"`
+	VNC                string   `json:"vnc,omitempty" jsonschema:"VNC address for the gpu_mode=helios display, e.g. 127.0.0.1:3; default derives a stable loopback port from the VM name"`
+	RenderNode         string   `json:"render_node,omitempty" jsonschema:"host DRM render node for gpu_mode=helios, e.g. /dev/dri/renderD129"`
+	HeliosBootstrapVGA bool     `json:"helios_bootstrap_vga,omitempty" jsonschema:"attach a standard VGA adapter during the Windows install only (use if the install screen stays blank)"`
+	Pointer            string   `json:"pointer,omitempty" jsonschema:"guest pointing device for gpu_mode=virtio: tablet (absolute, default) or mouse (relative; pointer-locked games need it for mouse-look)"`
 
 	// Shares and SSH.
 	VirtiofsDir string `json:"virtiofs_dir,omitempty" jsonschema:"host directory shared into the guest via virtiofs"`
@@ -578,45 +585,51 @@ func (s *server) vmCreate(ctx context.Context, _ *mcp.CallToolRequest, in vmCrea
 	}
 
 	opts := build.Opts{
-		Name:             in.Name,
-		Template:         in.Template,
-		Memory:           in.Memory,
-		CPUs:             in.CPUs,
-		Distro:           in.Distro,
-		DistroVersion:    in.DistroVersion,
-		NICMode:          in.NICMode,
-		NICBridge:        in.NICBridge,
-		NICMAC:           in.NICMAC,
-		Disk:             in.Disk,
-		DataDisks:        in.DataDisks,
-		BootDisk:         in.BootDisk,
-		BootDiskPath:     in.BootDiskPath,
-		SPICEPort:        in.SPICEPort,
-		Headless:         in.Headless,
-		UEFI:             in.UEFI,
-		GPUMode:          in.GPUMode,
-		GPUPCI:           in.GPUPCI,
-		GPUVendor:        in.GPUVendor,
-		AntiDetect:       in.AntiDetect,
-		GLBackend:        in.GLBackend,
-		Venus:            in.Venus,
-		HostMem:          in.HostMem,
-		Pointer:          in.Pointer,
-		VirtiofsDir:      in.VirtiofsDir,
-		VirtiofsTag:      in.VirtiofsTag,
-		VirtiofsReadonly: in.VirtiofsRO,
-		SSHKeyFile:       in.SSHKeyFile,
-		SSHShare:         in.SSHShare,
-		Vsock:            in.Vsock,
-		SSHPort:          in.SSHPort,
-		Hostname:         in.Hostname,
-		User:             in.User,
-		Password:         in.Password,
-		NVMeDev:          in.NVMeDev,
-		OVMFVars:         in.OVMFVars,
-		Nested:           in.Nested,
-		Emulate:          in.Emulate,
-		NoAutoInstall:    in.NoAutoInstall,
+		Name:               in.Name,
+		Template:           in.Template,
+		Memory:             in.Memory,
+		CPUs:               in.CPUs,
+		Distro:             in.Distro,
+		DistroVersion:      in.DistroVersion,
+		NICMode:            in.NICMode,
+		NICBridge:          in.NICBridge,
+		NICMAC:             in.NICMAC,
+		Disk:               in.Disk,
+		DataDisks:          in.DataDisks,
+		BootDisk:           in.BootDisk,
+		BootDiskPath:       in.BootDiskPath,
+		SPICEPort:          in.SPICEPort,
+		Headless:           in.Headless,
+		UEFI:               in.UEFI,
+		GPUMode:            in.GPUMode,
+		GPUPCI:             in.GPUPCI,
+		GPUVendor:          in.GPUVendor,
+		AntiDetect:         in.AntiDetect,
+		GLBackend:          in.GLBackend,
+		Venus:              in.Venus,
+		HostMem:            in.HostMem,
+		HeliosSetup:        in.HeliosSetup,
+		QemuBinary:         in.QemuBinary,
+		QemuEnv:            in.QemuEnv,
+		VNC:                in.VNC,
+		RenderNode:         in.RenderNode,
+		HeliosBootstrapVGA: in.HeliosBootstrapVGA,
+		Pointer:            in.Pointer,
+		VirtiofsDir:        in.VirtiofsDir,
+		VirtiofsTag:        in.VirtiofsTag,
+		VirtiofsReadonly:   in.VirtiofsRO,
+		SSHKeyFile:         in.SSHKeyFile,
+		SSHShare:           in.SSHShare,
+		Vsock:              in.Vsock,
+		SSHPort:            in.SSHPort,
+		Hostname:           in.Hostname,
+		User:               in.User,
+		Password:           in.Password,
+		NVMeDev:            in.NVMeDev,
+		OVMFVars:           in.OVMFVars,
+		Nested:             in.Nested,
+		Emulate:            in.Emulate,
+		NoAutoInstall:      in.NoAutoInstall,
 	}
 	runnerPubKey, err := s.templateExtras(ctx, in, &opts)
 	if err != nil {

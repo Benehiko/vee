@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Benehiko/vee/internal/backend"
+	"github.com/Benehiko/vee/internal/qemu"
 	"github.com/Benehiko/vee/internal/vm"
 )
 
@@ -70,6 +71,23 @@ var viewCmd = &cobra.Command{
 			fmt.Printf("\n  Host: %s\n  Port: 47989 (Sunshine default)\n\n", hostIP)
 			fmt.Printf("Make sure Sunshine is running inside the VM.\n")
 			return nil
+		}
+
+		// Helios — egl-headless + VNC; remote-viewer speaks vnc:// too.
+		if cfg.GPU.Mode == vm.GPUHelios {
+			hp, err := qemu.VNCHostPort(cfg.GPU.VNC)
+			if err != nil {
+				return err
+			}
+			uri := "vnc://" + hp
+			fmt.Printf("Opening %s\n", uri)
+			viewer, err := exec.LookPath("remote-viewer")
+			if err != nil {
+				fmt.Printf("remote-viewer not found — point any VNC client at %s\n", hp)
+				return nil
+			}
+			//nolint:gosec // viewer resolved via LookPath; uri is a vee-constructed vnc:// URL.
+			return exec.Command(viewer, uri).Start()
 		}
 
 		// SPICE — open remote-viewer.

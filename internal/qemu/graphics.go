@@ -2,6 +2,8 @@ package qemu
 
 import (
 	"fmt"
+	"net"
+	"strconv"
 	"strings"
 )
 
@@ -64,6 +66,82 @@ func VirtioGPUDevice(arch string, gl, venus bool, hostMem string) string {
 		dev += "," + strings.Join(opts, ",")
 	}
 	return dev
+}
+
+// HeliosGPUDevice returns the -device value for the virtio-gpu adapter the
+// WinBoat Helios Windows display driver binds to. It mirrors the device in
+// Helios' own launcher (tools/launch-helios-gtk.sh): the non-VGA
+// virtio-gpu-gl-pci variant (Helios owns the VidPn, so there is no legacy VGA
+// path to keep), a single output, blob resources + Venus, and a host memory
+// window. max_hostmem is a qemu-helios fork property — stock QEMU rejects it,
+// which is the intended failure: the Helios display path does not work on
+// stock QEMU. An empty hostMem falls back to DefaultVenusHostMem.
+func HeliosGPUDevice(hostMem string) string {
+	if hostMem == "" {
+		hostMem = DefaultVenusHostMem
+	}
+	return strings.Join([]string{
+		"virtio-gpu-gl-pci",
+		"id=heliosgpu",
+		"max_outputs=1",
+		"blob=true",
+		"venus=true",
+		"hostmem=" + hostMem,
+		"max_hostmem=" + hostMem,
+	}, ",")
+}
+
+// HeliosDisplay returns the -display value for GPU mode helios: egl-headless,
+// optionally pinned to a host render node. The windowed gtk/sdl GL consoles
+// cannot show the modifier-less OPTIMAL DWM primary Helios scans out, so the
+// screen goes out over VNC instead (see WithVNC).
+func HeliosDisplay(renderNode string) string {
+	if renderNode == "" {
+		return "egl-headless"
+	}
+	return "egl-headless,rendernode=" + renderNode
+}
+
+// HeliosVNCArg returns the -vnc value for GPU mode helios: addr with
+// share=force-shared appended unless the caller set a share policy. QEMU's
+// default (allow-exclusive) lets any client that asks for exclusive access
+// disconnect every other viewer, and some clients ask by default (gtk-vnc's
+// gvnccapture does), so a screenshot tool would kick a user's open viewer.
+// A Helios test VM routinely has several observers at once.
+func HeliosVNCArg(addr string) string {
+	if addr == "" {
+		addr = DefaultHeliosVNC
+	}
+	if strings.Contains(addr, "share=") {
+		return addr
+	}
+	return addr + ",share=force-shared"
+}
+
+// DefaultHeliosVNC is the VNC address used by GPU mode helios when none is
+// configured: loopback only, display 0 (TCP 5900). Reach it remotely through
+// an SSH tunnel rather than exposing an unauthenticated VNC server.
+const DefaultHeliosVNC = "127.0.0.1:0"
+
+// VNCHostPort converts a QEMU -vnc address ("host:display", display N = TCP
+// 5900+N) into a dialable "host:port". An empty addr means DefaultHeliosVNC.
+func VNCHostPort(addr string) (string, error) {
+	if addr == "" {
+		addr = DefaultHeliosVNC
+	}
+	addr, _, _ = strings.Cut(addr, ",") // drop QEMU options like share=
+	host, disp, ok := strings.Cut(addr, ":")
+	if !ok {
+		return "", fmt.Errorf("vnc address %q: want host:display", addr)
+	}
+	n, err := strconv.Atoi(disp)
+	if err != nil || n < 0 {
+		return "", fmt.Errorf("vnc address %q: display %q is not a non-negative number", addr, disp)
+	}
+	if host == "" {
+		host = "localhost"
+	}
+	return net.JoinHostPort(host, strconv.Itoa(5900+n)), nil
 }
 
 // PointerDevice selects the virtio pointing device attached next to the

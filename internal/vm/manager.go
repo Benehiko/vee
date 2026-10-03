@@ -439,6 +439,7 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool, opts 
 			}
 		}
 		cfg.Disks = filtered
+		cfg.InstallDevices = nil
 		if err := m.saveConfig(cfg); err != nil {
 			return fmt.Errorf("save config (skip install): %w", err)
 		}
@@ -494,6 +495,10 @@ func (m *Manager) Start(ctx context.Context, name string, foreground bool, opts 
 			filtered = append(filtered, d)
 		}
 		cfg.Disks = filtered
+		if len(cfg.InstallDevices) > 0 {
+			cfg.InstallDevices = nil
+			stripped = true
+		}
 		if stripped {
 			if err := m.saveConfig(cfg); err != nil {
 				return fmt.Errorf("save config after stripping install ISOs: %w", err)
@@ -1667,7 +1672,8 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 		guestArch = platform.DefaultGuestArch()
 	}
 	emulated := guestArch != platform.DefaultGuestArch()
-	if emulated {
+	switch {
+	case emulated:
 		qemuPath, err := qemubin.EnsureForArch(guestArch)
 		if err != nil {
 			return nil, nil, fmt.Errorf("emulated %s guest: %w", guestArch, err)
@@ -1682,6 +1688,26 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 			zap.String("guest_arch", guestArch),
 			zap.String("host_arch", platform.HostArch()),
 			zap.String("qemu", qemuPath))
+	case cfg.QemuBinary != "":
+		// Per-VM QEMU override (e.g. the qemu-helios fork for GPU mode
+		// helios). Checked here so a typo fails at start with the path in the
+		// error rather than as an opaque exec failure.
+		if _, statErr := os.Stat(cfg.QemuBinary); statErr != nil {
+			return nil, nil, fmt.Errorf("qemu_binary %q: %w", cfg.QemuBinary, statErr)
+		}
+		opts = append(opts, qemu.WithBinary(cfg.QemuBinary))
+		m.provider.Logger().Info("using per-VM QEMU binary",
+			zap.String("vm", cfg.Name),
+			zap.String("qemu", cfg.QemuBinary))
+	case cfg.GPU.Mode == GPUHelios:
+		return nil, nil, fmt.Errorf("GPU mode helios needs the qemu-helios QEMU fork: set qemu_binary in vm.yaml (vee config %s) — stock QEMU has no max_hostmem and cannot display the Helios scanout", cfg.Name)
+	}
+
+	if len(cfg.QemuEnv) > 0 {
+		if err := ValidateQemuEnv(cfg.QemuEnv); err != nil {
+			return nil, nil, err
+		}
+		opts = append(opts, qemu.WithEnv(cfg.QemuEnv))
 	}
 
 	// CPU — gaming passthrough merges GamingCPUFlags before building.
@@ -2042,6 +2068,28 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 				opts = append(opts, qemu.WithDevice(dev))
 			}
 		}
+	case GPUHelios:
+		// WinBoat Helios: Windows WDDM driver over virtio-gpu + Venus. Unlike
+		// the virtio path there is no 2D fallback — a Helios VM without its
+		// device is just a Windows VM with no GPU, which is never what was
+		// asked for — so emulated guests are refused outright.
+		if emulated || guestArch != "x86_64" {
+			return nil, nil, fmt.Errorf("GPU mode helios needs a KVM-accelerated x86_64 guest (Helios ships an x64 Windows driver only); got guest arch %s", guestArch)
+		}
+		if !platform.IsLinux() {
+			return nil, nil, fmt.Errorf("GPU mode helios needs a Linux host (virglrenderer + Venus + egl-headless); got %s", platform.HostOS())
+		}
+		opts = append(opts, qemu.WithVGA("none"))
+		opts = append(opts, qemu.WithDevice(qemu.HeliosGPUDevice(cfg.GPU.HostMem)))
+		opts = append(opts, qemu.WithDisplay(qemu.HeliosDisplay(cfg.GPU.RenderNode)))
+		vnc := cfg.GPU.VNC
+		if vnc == "" {
+			vnc = qemu.DefaultHeliosVNC
+		}
+		opts = append(opts, qemu.WithVNC(qemu.HeliosVNCArg(vnc)))
+		m.provider.Logger().Warn("GPU mode helios is experimental (Helios is pre-release); the guest screen is on VNC",
+			zap.String("vm", cfg.Name),
+			zap.String("vnc", vnc))
 	case GPUAppleGFX:
 		// apple-gfx (ParavirtualizedGraphics.framework) accelerates macOS guests
 		// only and needs the vmapple machine, AVPBooter firmware, and a
@@ -2093,6 +2141,11 @@ func (m *Manager) buildMachine(ctx context.Context, cfg *VMConfig) (*qemu.BaseMa
 
 	// Extra devices (e.g. virtio-serial-pci for guest agent)
 	for _, dev := range cfg.ExtraDevices {
+		opts = append(opts, qemu.WithDevice(dev))
+	}
+	// Install-only devices; Start strips them from the config once the
+	// install is ready, so their presence here means the install is pending.
+	for _, dev := range cfg.InstallDevices {
 		opts = append(opts, qemu.WithDevice(dev))
 	}
 

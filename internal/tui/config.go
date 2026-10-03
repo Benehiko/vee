@@ -72,7 +72,7 @@ var editFieldLabels = [efCount]string{
 // cycleFields are fields whose value cycles through a fixed set (←/→).
 var cycleOptions = map[editField][]string{
 	efNICMode:       {"user", "bridge"},
-	efGPUMode:       {"none", "virtio", "passthrough"},
+	efGPUMode:       {"none", "virtio", "passthrough", "helios"},
 	efGPUAntiDetect: {"false", "true"},
 	efHeadless:      {"false", "true"},
 	efUEFI:          {"false", "true"},

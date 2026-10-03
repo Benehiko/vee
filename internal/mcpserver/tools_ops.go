@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -27,6 +28,7 @@ import (
 	"github.com/Benehiko/vee/internal/images"
 	"github.com/Benehiko/vee/internal/mirror"
 	"github.com/Benehiko/vee/internal/monitor"
+	"github.com/Benehiko/vee/internal/qemu"
 	"github.com/Benehiko/vee/internal/runnercreds"
 	"github.com/Benehiko/vee/internal/runnerssh"
 	"github.com/Benehiko/vee/internal/vm"
@@ -134,6 +136,19 @@ func (s *server) registerOps(srv *mcp.Server) []string {
 			"whose probe only checks the SSH port accepts). Set cloud_init=true to also wait for first-boot provisioning (POSIX guests).",
 		Annotations: readOnly,
 	}, s.vmWait)
+
+	addTool(srv, &names, &mcp.Tool{
+		Name: "vm_helios_status",
+		Description: "Report a Helios GPU Windows guest's driver provisioning state (not-started, waiting, test-signing-restart-required, " +
+			"driver-restart-required, finished, failed). Set wait=true to poll until finished or failed, retrying through the guest's provisioning reboots.",
+		Annotations: readOnly,
+	}, s.vmHeliosStatus)
+
+	addTool(srv, &names, &mcp.Tool{
+		Name: "vm_helios_verify",
+		Description: "Run the Helios driver's own smoke tests in a Helios GPU Windows guest (D3D11/D3D12 device + readback, Vulkan, OpenGL, OpenCL; " +
+			"x64 and x86) in the guest's desktop session. Returns the log and whether all probes passed.",
+	}, s.vmHeliosVerify)
 
 	addTool(srv, &names, &mcp.Tool{
 		Name:        "image_catalog",
@@ -390,6 +405,20 @@ func (s *server) vmDisplay(ctx context.Context, _ *mcp.CallToolRequest, in vmNam
 			Kind: "moonlight",
 			URL:  fmt.Sprintf("%s:47989", hostLANIP(ctx)),
 			Hint: "pair a Moonlight client with the Sunshine server running in the guest",
+		}, nil
+	}
+
+	if cfg.GPU.Mode == vm.GPUHelios {
+		hp, err := qemu.VNCHostPort(cfg.GPU.VNC)
+		if err != nil {
+			return nil, vmDisplayOut{}, err
+		}
+		reachable := probeTCP(ctx, hp)
+		return nil, vmDisplayOut{
+			Kind:      "vnc",
+			URL:       "vnc://" + hp,
+			Reachable: &reachable,
+			Hint:      "Helios guest: egl-headless display exported over VNC (loopback; tunnel over SSH for remote access)",
 		}, nil
 	}
 
@@ -751,6 +780,67 @@ func (s *server) vmWait(ctx context.Context, _ *mcp.CallToolRequest, in vmWaitIn
 		return nil, vmWaitOut{Name: in.Name}, err
 	}
 	return nil, vmWaitOut{Name: in.Name, Ready: true}, nil
+}
+
+// ---- vm_helios_status / vm_helios_verify ----
+
+type vmHeliosStatusIn struct {
+	Name           string `json:"name" jsonschema:"name of the Helios VM"`
+	Wait           bool   `json:"wait,omitempty" jsonschema:"poll until provisioning is finished or failed"`
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty" jsonschema:"with wait, give up after this long; default 1800"`
+}
+
+type vmHeliosStatusOut struct {
+	Name    string `json:"name"`
+	Status  string `json:"status"`
+	Message string `json:"message,omitempty"`
+}
+
+func (s *server) vmHeliosStatus(ctx context.Context, _ *mcp.CallToolRequest, in vmHeliosStatusIn) (*mcp.CallToolResult, vmHeliosStatusOut, error) {
+	var st vm.HeliosStatus
+	var err error
+	if in.Wait {
+		timeout := 30 * time.Minute
+		if in.TimeoutSeconds > 0 {
+			timeout = time.Duration(in.TimeoutSeconds) * time.Second
+		}
+		st, err = s.mgr.WaitHelios(ctx, in.Name, timeout, nil)
+	} else {
+		st, err = s.mgr.ReadHeliosStatus(ctx, in.Name)
+	}
+	if err != nil {
+		return nil, vmHeliosStatusOut{Name: in.Name, Status: st.Status}, err
+	}
+	return nil, vmHeliosStatusOut{Name: in.Name, Status: st.Status, Message: st.Message}, nil
+}
+
+type vmHeliosVerifyIn struct {
+	Name           string `json:"name" jsonschema:"name of the Helios VM"`
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty" jsonschema:"give up on the smoke tests after this long; default 900 (each probe can take 1-2 minutes)"`
+}
+
+type vmHeliosVerifyOut struct {
+	Name   string `json:"name"`
+	Passed bool   `json:"passed"`
+	Log    string `json:"log"`
+	Error  string `json:"error,omitempty"`
+}
+
+func (s *server) vmHeliosVerify(ctx context.Context, _ *mcp.CallToolRequest, in vmHeliosVerifyIn) (*mcp.CallToolResult, vmHeliosVerifyOut, error) {
+	timeout := 15 * time.Minute
+	if in.TimeoutSeconds > 0 {
+		timeout = time.Duration(in.TimeoutSeconds) * time.Second
+	}
+	log, err := s.mgr.VerifyHelios(ctx, in.Name, timeout)
+	if err != nil && !errors.Is(err, vm.ErrHeliosVerifyFailed) {
+		return nil, vmHeliosVerifyOut{Name: in.Name, Log: log}, err
+	}
+	out := vmHeliosVerifyOut{Name: in.Name, Passed: err == nil, Log: log}
+	if err != nil {
+		// A failing probe is a result, not a tool error: the log is the payload.
+		out.Error = err.Error()
+	}
+	return nil, out, nil
 }
 
 // backupSSHConn resolves the SSH connection for a backup like the CLI does,

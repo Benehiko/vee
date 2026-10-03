@@ -66,6 +66,12 @@ var (
 	createGPUVenus      bool
 	createPointer       string
 	createGPUHostMem    string
+	createHeliosSetup   string
+	createQemuBinary    string
+	createQemuEnv       []string
+	createVNC           string
+	createRenderNode    string
+	createHeliosBootVGA bool
 	createVirtiofsRO    bool
 	createMedia         []string
 	createDNSAdminUser  string
@@ -614,6 +620,24 @@ func optsFromFlags(cmd *cobra.Command, name string) build.Opts {
 	if cmd.Flags().Changed("pointer") {
 		opts.Pointer = createPointer
 	}
+	if cmd.Flags().Changed("helios-setup") {
+		opts.HeliosSetup = createHeliosSetup
+	}
+	if cmd.Flags().Changed("qemu-binary") {
+		opts.QemuBinary = createQemuBinary
+	}
+	if cmd.Flags().Changed("qemu-env") {
+		opts.QemuEnv = createQemuEnv
+	}
+	if cmd.Flags().Changed("vnc") {
+		opts.VNC = createVNC
+	}
+	if cmd.Flags().Changed("render-node") {
+		opts.RenderNode = createRenderNode
+	}
+	if cmd.Flags().Changed("helios-bootstrap-vga") {
+		opts.HeliosBootstrapVGA = createHeliosBootVGA
+	}
 	if cmd.Flags().Changed("virtiofs-dir") {
 		opts.VirtiofsDir = createVirtiofsDir
 	}
@@ -671,7 +695,7 @@ func init() {
 	createCmd.Flags().BoolVar(&createUEFI, "uefi", false, "Enable UEFI boot (OVMF)")
 	createCmd.Flags().BoolVar(&createNested, "nested", false, "Expose nested virtualization (EL2) to the guest so it can run KVM — Docker Desktop, KubeVirt, etc. (arm64 QEMU guests; under HVF needs QEMU >= 11.1 and an M3+ Mac on macOS 15+)")
 	createCmd.Flags().BoolVar(&createEmulate, "emulate", false, "Run a guest whose image does not support this host's CPU architecture under TCG emulation — x86_64-only images (arch, bazzite, truenas, alpine, omarchy) on Apple Silicon. Functional but slower than a native guest; needs the matching system qemu (e.g. brew install qemu)")
-	createCmd.Flags().StringVar(&createGPUMode, "gpu-mode", "none", "GPU mode: none, virtio, passthrough")
+	createCmd.Flags().StringVar(&createGPUMode, "gpu-mode", "none", "GPU mode: none, virtio, passthrough, helios (Windows guests: WinBoat Helios D3D11/D3D12 driver over virtio-gpu + Venus; experimental)")
 	createCmd.Flags().StringVar(&createGPUPCI, "gpu-pci", "", "PCI address for GPU passthrough (e.g. 08:00.0)")
 	createCmd.Flags().BoolVar(&createAntiDetect, "anti-detect", false, "Apply anti-hypervisor-detection CPU flags (gaming passthrough)")
 	createCmd.Flags().StringVar(&createVirtiofsDir, "virtiofs-dir", "", "Host directory to share via virtiofsd (Linux hosts only)")
@@ -701,7 +725,13 @@ func init() {
 	createCmd.Flags().StringVar(&createGPUGLBackend, "gpu-gl-backend", "", "Host OpenGL backend for --gpu-mode=virtio: on (Linux EGL), es (ANGLE/Metal, macOS default) or core (native macOS, unstable). Empty picks the host default")
 	createCmd.Flags().BoolVar(&createGPUVenus, "gpu-venus", false, "Enable Vulkan-over-virtio (Venus) on the virtio-gpu-gl device (--gpu-mode=virtio). Experimental: needs a Venus-capable QEMU and a host Vulkan driver; the guest needs the Mesa vulkan-virtio ICD, so Linux guests only")
 	createCmd.Flags().StringVar(&createPointer, "pointer", "", "Guest pointing device for --gpu-mode=virtio: tablet (absolute, default: host cursor maps onto the guest, no grab) or mouse (relative: the window grabs the cursor and sends deltas, which pointer-locked games need for mouse-look; Ctrl+Alt+G releases)")
-	createCmd.Flags().StringVar(&createGPUHostMem, "gpu-hostmem", "", "Host memory window for Venus blob resources, e.g. 8G (requires --gpu-venus; default "+qemu.DefaultVenusHostMem+"). Scales with GPU working set — resolution and texture load — not guest RAM")
+	createCmd.Flags().StringVar(&createHeliosSetup, "helios-setup", "", "Path to HeliosSetup.exe (from Helios' helios-windows-x64-*.zip) installed unattended in the guest; required by --gpu-mode=helios")
+	createCmd.Flags().StringVar(&createQemuBinary, "qemu-binary", "", "Per-VM qemu-system binary instead of the vee-managed one; --gpu-mode=helios needs an installed build of the qemu-helios fork")
+	createCmd.Flags().StringArrayVar(&createQemuEnv, "qemu-env", nil, "KEY=VALUE added to the QEMU process environment (repeatable), e.g. LD_LIBRARY_PATH / RENDER_SERVER_EXEC_PATH for the qemu-helios fork's paired virglrenderer build")
+	createCmd.Flags().StringVar(&createVNC, "vnc", "", "VNC address for the --gpu-mode=helios display, e.g. 127.0.0.1:3 (TCP 5903); default derives a stable loopback port from the VM name")
+	createCmd.Flags().BoolVar(&createHeliosBootVGA, "helios-bootstrap-vga", false, "With --gpu-mode=helios: attach a standard VGA adapter during the Windows install only (use if the install screen stays blank on VNC)")
+	createCmd.Flags().StringVar(&createRenderNode, "render-node", "", "Host DRM render node for --gpu-mode=helios, e.g. /dev/dri/renderD129 on a multi-GPU host")
+	createCmd.Flags().StringVar(&createGPUHostMem, "gpu-hostmem", "", "Host memory window for Venus blob resources, e.g. 8G (requires --gpu-venus or --gpu-mode=helios; default "+qemu.DefaultVenusHostMem+"). Scales with GPU working set — resolution and texture load — not guest RAM")
 	createCmd.Flags().StringArrayVar(&createMedia, "media", nil, "Media source for jellyfin template (repeatable). Forms: hostdir:/host@/guest[:ro], nfs://server/export@/guest[:ro], smb://[user@]server/share@/guest[:ro], block:/dev/disk/by-id/...@/guest[:fstype], usb:VENDOR:PRODUCT@/guest[:fstype]")
 	createCmd.Flags().StringVar(&createDNSAdminUser, "dns-admin-user", "admin", "AdGuard Home web UI username (dns-sink template); the password is prompted for")
 	createCmd.Flags().StringVar(&createBitmagnetPGDir, "pg-data-dir", "", "host directory bind-mounted as PostgreSQL's data directory (bitmagnet template); empty keeps the database on the VM's own disk")
@@ -787,7 +817,10 @@ func init() {
 		}, cobra.ShellCompDirectiveNoFileComp
 	})
 	_ = createCmd.RegisterFlagCompletionFunc("gpu-mode", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
-		return []string{"none", "virtio", "passthrough"}, cobra.ShellCompDirectiveNoFileComp
+		return []string{"none", "virtio", "passthrough", "helios\tWindows D3D over virtio-gpu + Venus (experimental)"}, cobra.ShellCompDirectiveNoFileComp
+	})
+	_ = createCmd.RegisterFlagCompletionFunc("helios-setup", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+		return []string{"exe"}, cobra.ShellCompDirectiveFilterFileExt
 	})
 	_ = createCmd.RegisterFlagCompletionFunc("nic-mode", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 		return []string{"user", "bridge"}, cobra.ShellCompDirectiveNoFileComp

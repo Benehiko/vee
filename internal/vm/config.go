@@ -77,6 +77,13 @@ const (
 	// GPUAppleGFX uses Apple's ParavirtualizedGraphics.framework (QEMU >= 10.0,
 	// macOS host). It accelerates macOS guests only.
 	GPUAppleGFX GPUMode = "apple-gfx"
+	// GPUHelios attaches the virtio-gpu-gl-pci + Venus device the WinBoat
+	// Helios Windows display driver (https://github.com/winboat-org/helios)
+	// binds to, giving Windows guests D3D11/D3D12 over Vulkan on the host GPU.
+	// It needs the qemu-helios QEMU fork (VMConfig.QemuBinary) and renders
+	// through egl-headless, so the guest screen is reached over VNC.
+	// Experimental — Helios itself is pre-release.
+	GPUHelios GPUMode = "helios"
 )
 
 type GPUConfig struct {
@@ -121,6 +128,15 @@ type GPUConfig struct {
 	// cursor and forwards deltas, which pointer-locked games need for
 	// mouse-look; Wayland compositors turn absolute motion into a zero delta).
 	Pointer string `yaml:"pointer,omitempty" json:"pointer,omitempty"`
+	// VNC is the -vnc display address for GPU mode helios (e.g.
+	// "127.0.0.1:1" = TCP 5901). Helios renders through egl-headless, which
+	// has no window, so VNC is how the guest screen is viewed. Empty picks
+	// 127.0.0.1:0 (TCP 5900).
+	VNC string `yaml:"vnc,omitempty" json:"vnc,omitempty"`
+	// RenderNode pins egl-headless (and so virglrenderer/Venus) to one host
+	// GPU in GPU mode helios, e.g. /dev/dri/renderD129 on a multi-GPU host.
+	// Empty lets Mesa pick the default device.
+	RenderNode string `yaml:"render_node,omitempty" json:"render_node,omitempty"`
 	// disableGL forces the plain 2D adapter for one boot; set by the
 	// start-time GL-crash retry when the resolved QEMU's windowed display
 	// backend was built without OpenGL. Unexported so it never persists —
@@ -253,7 +269,19 @@ type VMConfig struct {
 	// value runs the guest under TCG emulation — functional but much slower —
 	// with the matching system qemu binary, firmware, and machine type resolved
 	// automatically. QEMU backend only.
-	Arch     string   `yaml:"arch,omitempty"          json:"arch,omitempty"`
+	Arch string `yaml:"arch,omitempty"          json:"arch,omitempty"`
+	// QemuBinary overrides the qemu-system binary for this VM only, instead
+	// of the vee-managed build. GPU mode helios needs it: the Helios display
+	// path depends on the qemu-helios fork (max_hostmem, native OPTIMAL
+	// scanout). Point it at an installed build (meson install), not the build
+	// tree, so QEMU finds its modules and firmware data. Ignored for
+	// cross-arch (emulated) guests, which resolve their own binary.
+	QemuBinary string `yaml:"qemu_binary,omitempty"   json:"qemu_binary,omitempty"`
+	// QemuEnv adds KEY=VALUE entries to the QEMU process environment,
+	// overriding inherited values — e.g. LD_LIBRARY_PATH and
+	// RENDER_SERVER_EXEC_PATH for a QEMU fork paired with its own
+	// virglrenderer build (GPU mode helios).
+	QemuEnv  []string `yaml:"qemu_env,omitempty" json:"qemu_env,omitempty"`
 	Memory   string   `yaml:"memory"                  json:"memory"`
 	CPUs     int      `yaml:"cpus"                    json:"cpus"`
 	Sockets  int      `yaml:"sockets"                 json:"sockets"`
@@ -302,17 +330,22 @@ type VMConfig struct {
 	// same device ssh_share enables, with vsock_cid picking the guest CID.
 	// vz backend: a VZVirtioSocketDevice, driven through the helper control
 	// protocol (Manager.VZVsockConnect / VZVsockListen).
-	Vsock         bool     `yaml:"vsock,omitempty"         json:"vsock,omitempty"`
-	VsockCID      uint32   `yaml:"vsock_cid,omitempty"     json:"vsock_cid,omitempty"`
-	Headless      bool     `yaml:"headless,omitempty"      json:"headless,omitempty"`
-	SSHPort       int      `yaml:"ssh_port,omitempty"      json:"ssh_port,omitempty"`
-	GuestAgent    bool     `yaml:"guest_agent,omitempty"   json:"guest_agent,omitempty"`
-	ExtraDevices  []string `yaml:"extra_devices,omitempty" json:"extra_devices,omitempty"`
-	VGA           string   `yaml:"vga,omitempty"           json:"vga,omitempty"`
-	Hostname      string   `yaml:"hostname,omitempty"      json:"hostname,omitempty"`
-	TrueNASAPIKey string   `yaml:"truenas_api_key,omitempty" json:"truenas_api_key,omitempty"`
-	TrueNASUser   string   `yaml:"truenas_user,omitempty"  json:"truenas_user,omitempty"`
-	VPNProvider   string   `yaml:"vpn_provider,omitempty"  json:"vpn_provider,omitempty"`
+	Vsock        bool     `yaml:"vsock,omitempty"         json:"vsock,omitempty"`
+	VsockCID     uint32   `yaml:"vsock_cid,omitempty"     json:"vsock_cid,omitempty"`
+	Headless     bool     `yaml:"headless,omitempty"      json:"headless,omitempty"`
+	SSHPort      int      `yaml:"ssh_port,omitempty"      json:"ssh_port,omitempty"`
+	GuestAgent   bool     `yaml:"guest_agent,omitempty"   json:"guest_agent,omitempty"`
+	ExtraDevices []string `yaml:"extra_devices,omitempty" json:"extra_devices,omitempty"`
+	// InstallDevices are -device values attached only while the install is
+	// pending, then stripped from the config on the first start after it
+	// completes — like InstallISO disks. E.g. a bootstrap VGA adapter that
+	// shows Windows Setup before the guest's real display driver exists.
+	InstallDevices []string `yaml:"install_devices,omitempty" json:"install_devices,omitempty"`
+	VGA            string   `yaml:"vga,omitempty"           json:"vga,omitempty"`
+	Hostname       string   `yaml:"hostname,omitempty"      json:"hostname,omitempty"`
+	TrueNASAPIKey  string   `yaml:"truenas_api_key,omitempty" json:"truenas_api_key,omitempty"`
+	TrueNASUser    string   `yaml:"truenas_user,omitempty"  json:"truenas_user,omitempty"`
+	VPNProvider    string   `yaml:"vpn_provider,omitempty"  json:"vpn_provider,omitempty"`
 	// Services lists named guest services available via vee tunnel.
 	Services []ServiceEntry `yaml:"services,omitempty" json:"services,omitempty"`
 	// CPUPinning is a list of host CPU indices to pin the VM's vCPU threads to
