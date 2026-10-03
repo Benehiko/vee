@@ -49,7 +49,7 @@ Templates apply sane defaults (memory, CPUs, disks, networking, cloud-init) auto
 | `jellyfin` | Jellyfin · NFS/SMB/host-dir/block/USB media · mDNS |
 | `dns-sink` | Alpine Linux · AdGuard Home DNS sinkhole · 512M / 1 CPU · LAN-wide ad and malware blocking · bridge NIC |
 | `bitmagnet` | Alpine Linux · bitmagnet DHT crawler + PostgreSQL · 2G / 2 CPUs · WireGuard kill-switch · web UI over `vee tunnel` only · `--pg-data-dir` keeps the index on the host · `--nordvpn-token` auto-fetches a NordLynx config |
-| `windows` | Windows · UEFI · secure boot + TPM 2.0 on x86_64 · arm64 (Apple Silicon) boots NVMe + ramfb with the hardware checks bypassed |
+| `windows` | Windows · UEFI · secure boot + TPM 2.0 on x86_64 · arm64 (Apple Silicon) boots NVMe + ramfb with the hardware checks bypassed · experimental DirectX via `--gpu-mode=helios` ([WinBoat Helios](docs/windows-helios.md)) |
 | `docker` | Alpine Linux · Docker daemon on `tcp://localhost:2375` |
 | `github-runner` | Self-hosted Actions runner · outbound HTTPS long-polling |
 | `macos` | macOS guest on Apple's Virtualization.framework · 8G / 4 CPUs · Apple Silicon hosts only · restores from an IPSW or imports a [macosvm](https://github.com/s-u/macosvm) bundle |
@@ -408,6 +408,8 @@ docs also live in this repo:
 - [docs/windows.md](docs/windows.md) — Windows (WHPX) host support, feature matrix, and the nested-virtualization limitation
 - [docs/windows-guests.md](docs/windows-guests.md) — the on-demand Windows guest ISO build pipeline
 - [docs/windows-24h2-install.md](docs/windows-24h2-install.md) — full writeup of the Windows 11 24H2 install debugging
+- [docs/windows-helios.md](docs/windows-helios.md) — experimental DirectX in Windows guests via WinBoat Helios (`--gpu-mode=helios`)
+- [docs/windows-directx-evaluation.md](docs/windows-directx-evaluation.md) — the Helios evaluation: what was built and tested, why D3D12 (and Elden Ring) did not work, and the alternatives
 - [docs/qmp.md](docs/qmp.md) — `vee qmp`, `vee screenshot`, and the daemon-routed QMP transport
 - [docs/mcp.md](docs/mcp.md) — the MCP server: tool reference and agent registration
 - [docs/claude-skill.md](docs/claude-skill.md): the Claude Code skill for driving vee VMs, and how to install it globally

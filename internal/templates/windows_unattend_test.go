@@ -62,7 +62,7 @@ func TestAutounattendXMLValid(t *testing.T) {
 // stray Go-raw-string backticks (which would silently truncate the script when
 // embedded).
 func TestGuestSetupPS1(t *testing.T) {
-	s := guestSetupPS1("share", []string{"ssh-ed25519 AAAAtest vee@host"})
+	s := guestSetupPS1("share", []string{"ssh-ed25519 AAAAtest vee@host"}, false)
 	if !strings.Contains(s, winfspMSI) {
 		t.Errorf("guest setup script does not reference WinFsp MSI %q", winfspMSI)
 	}

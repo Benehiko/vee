@@ -28,6 +28,13 @@ vee create <name> [flags]
 | `--gpu-pci` | GPU PCI address for passthrough, e.g. `08:00.0` |
 | `--nic-mode` | Networking mode: `user` or `bridge` |
 | `--virtiofs-dir` | Host directory to share into the VM (Linux hosts only) |
+| `--gpu-mode` | `none`, `virtio`, `passthrough`, or `helios` (windows template: experimental DirectX via [WinBoat Helios](../helios/)) |
+| `--helios-setup` | `--gpu-mode=helios`: path to `HeliosSetup.exe`, installed unattended in the guest |
+| `--helios-bootstrap-vga` | `--gpu-mode=helios`: standard VGA adapter during the Windows install only |
+| `--qemu-binary` | Per-VM qemu-system binary instead of vee's managed build (helios needs the `qemu-helios` fork) |
+| `--qemu-env` | `KEY=VALUE` added to the QEMU process environment (repeatable) |
+| `--vnc` | `--gpu-mode=helios`: VNC address, e.g. `127.0.0.1:3` (default: derived from the VM name) |
+| `--render-node` | `--gpu-mode=helios`: host DRM render node, e.g. `/dev/dri/renderD129` |
 | `--nested` | Expose nested virtualization (EL2) so the guest can run KVM — arm64 QEMU guests only; under HVF needs QEMU ≥ 11.1 plus an M3+ Mac on macOS 15+ |
 
 ## Extra disks

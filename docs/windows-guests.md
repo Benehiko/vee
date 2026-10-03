@@ -117,6 +117,15 @@ every 24H2 failure and its fix, see
 > current, so `bootmgr` page-faults in UEFI firmware before WinPE even loads.
 > 24H2's boot files are self-consistent, so 24H2 is the cleaner-booting base.
 
+## DirectX (experimental): Helios
+
+On x86_64 Linux hosts, `--gpu-mode=helios` installs the WinBoat Helios vGPU
+driver, giving the guest Direct3D 11/12, Vulkan and OpenGL on the host GPU
+over virtio-gpu + Venus, with no passthrough. It runs with Secure Boot off and a
+VNC display, and needs Helios' QEMU fork. See
+[windows-helios.md](windows-helios.md). D3D12 did not work in testing; see
+[windows-directx-evaluation.md](windows-directx-evaluation.md).
+
 ## Unattended install details
 
 The `windows` template runs a fully unattended install:
@@ -241,7 +250,8 @@ platform forces it:
 - **Display is ramfb** — the one device Windows ARM64 drives out of the box
   (EDK2 GOP + Basic Display). The install renders in the host QEMU window; use
   RDP after first boot for a resizable desktop. There is no virtio-gpu 3D
-  driver for Windows on any arch.
+  driver for Windows on arm64; on x86_64, see the experimental Helios mode
+  ([windows-helios.md](windows-helios.md)).
 - **No TPM device.** Windows ARM64 cannot initialize QEMU's sysbus
   `tpm-tis-device` ([QEMU #830](https://gitlab.com/qemu-project/qemu/-/issues/830));
   the working CRB-sysbus device exists only in UTM's fork. The answer file's

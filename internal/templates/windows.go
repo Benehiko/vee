@@ -32,8 +32,17 @@ import (
 //
 // The OVMF secboot firmware path must be set in provider config or overridden
 // in vm.yaml.
-func NewWindowsConfig(ctx context.Context, p provider.Provider, version images.WindowsVersion, name, virtiofsTag string, spicePort int, sshKeys []string) (*vm.VMConfig, error) {
+func NewWindowsConfig(ctx context.Context, p provider.Provider, version images.WindowsVersion, name, virtiofsTag string, spicePort int, sshKeys []string, helios *HeliosOptions) (*vm.VMConfig, error) {
 	conf := p.Config()
+
+	if helios != nil {
+		if err := helios.validate(); err != nil {
+			return nil, err
+		}
+		if images.WindowsHostArch() == "arm64" {
+			return nil, fmt.Errorf("helios: the Helios driver is x64 only; arm64 Windows guests cannot use it")
+		}
+	}
 
 	// The media arch follows the host: UUP dump publishes amd64 and arm64
 	// client builds, and vee assembles whichever the host can accelerate.
@@ -80,7 +89,7 @@ func NewWindowsConfig(ctx context.Context, p provider.Provider, version images.W
 		driverDir = "w11"
 	}
 	autounattend := autounattendXML(version, arch, driverDir, virtiofsTag)
-	setupScript := guestSetupPS1(virtiofsTag, sshKeys)
+	setupScript := guestSetupPS1(virtiofsTag, sshKeys, helios != nil)
 	if arch == "arm64" {
 		setupScript = guestSetupARM64PS1(sshKeys)
 	}
@@ -106,7 +115,11 @@ func NewWindowsConfig(ctx context.Context, p provider.Provider, version images.W
 	// loops WinPE with more than two optical drives. Staged per-VM under the ISO
 	// cache and treated as a one-shot install ISO (stripped post-install).
 	extrasISO := filepath.Join(conf.ISOCachePath, "win-extras-"+name+".iso")
-	if err := buildExtrasISO(ctx, p, extrasISO, virtioISO, autounattend, setupScript, winfspPath); err != nil {
+	heliosSetup := ""
+	if helios != nil {
+		heliosSetup = helios.SetupExe
+	}
+	if err := buildExtrasISO(ctx, p, extrasISO, virtioISO, autounattend, setupScript, winfspPath, heliosSetup); err != nil {
 		return nil, fmt.Errorf("build extras ISO: %w", err)
 	}
 
@@ -121,7 +134,7 @@ func NewWindowsConfig(ctx context.Context, p provider.Provider, version images.W
 		secbootCode = conf.OVMFCodePath
 	}
 
-	return &vm.VMConfig{
+	cfg := &vm.VMConfig{
 		Name:     name,
 		Template: "windows",
 		Memory:   "8G",
@@ -241,7 +254,11 @@ func NewWindowsConfig(ctx context.Context, p provider.Provider, version images.W
 		},
 		RTC:       "base=localtime,clock=host",
 		CreatedAt: time.Now(),
-	}, nil
+	}
+	if helios != nil {
+		applyHelios(cfg, conf, helios)
+	}
+	return cfg, nil
 }
 
 // windowsARM64Config assembles the aarch64 virt-board variant of the Windows

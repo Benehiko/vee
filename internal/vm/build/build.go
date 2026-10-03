@@ -98,6 +98,21 @@ type Opts struct {
 	// "tablet" (absolute, default) or "mouse" (relative, for pointer-locked
 	// games).
 	Pointer string
+	// HeliosSetup is the host path to HeliosSetup.exe for GPU mode helios
+	// (windows template only).
+	HeliosSetup string
+	// QemuBinary overrides the qemu-system binary for this VM (required by
+	// GPU mode helios: the qemu-helios fork).
+	QemuBinary string
+	// QemuEnv adds KEY=VALUE entries to the QEMU process environment.
+	QemuEnv []string
+	// VNC is the VNC address for GPU mode helios (e.g. 127.0.0.1:3).
+	VNC string
+	// RenderNode pins GPU mode helios to one host GPU's DRM render node.
+	RenderNode string
+	// HeliosBootstrapVGA attaches a standard VGA adapter for the Windows
+	// install only (GPU mode helios).
+	HeliosBootstrapVGA bool
 
 	// Virtiofs share.
 	VirtiofsDir string
@@ -481,7 +496,18 @@ func configFromTemplate(ctx context.Context, prov provider.Provider, opts Opts, 
 		if opts.SPICEPort != nil {
 			spicePort = *opts.SPICEPort
 		}
-		return templates.NewWindowsConfig(ctx, prov, winVersion, opts.Name, virtiofsTag, spicePort, sshKeys)
+		var helios *templates.HeliosOptions
+		if opts.GPUMode == string(vm.GPUHelios) {
+			helios = &templates.HeliosOptions{
+				SetupExe:     opts.HeliosSetup,
+				QemuBinary:   opts.QemuBinary,
+				HostMem:      opts.HostMem,
+				VNC:          opts.VNC,
+				RenderNode:   opts.RenderNode,
+				BootstrapVGA: opts.HeliosBootstrapVGA,
+			}
+		}
+		return templates.NewWindowsConfig(ctx, prov, winVersion, opts.Name, virtiofsTag, spicePort, sshKeys, helios)
 	case "docker":
 		return templates.NewDockerConfig(ctx, prov, opts.Name, sshKeys, opts.DistroVersion, opts.Emulate)
 	case "jellyfin":
@@ -562,6 +588,21 @@ func applyOverrides(ctx context.Context, cfg *vm.VMConfig, opts Opts, prov provi
 	}
 	if opts.GPUMode != "" {
 		cfg.GPU.Mode = vm.GPUMode(opts.GPUMode)
+	}
+	if opts.QemuBinary != "" {
+		cfg.QemuBinary = opts.QemuBinary
+	}
+	if len(opts.QemuEnv) > 0 {
+		if err := vm.ValidateQemuEnv(opts.QemuEnv); err != nil {
+			return err
+		}
+		cfg.QemuEnv = opts.QemuEnv
+	}
+	if opts.VNC != "" {
+		cfg.GPU.VNC = opts.VNC
+	}
+	if opts.RenderNode != "" {
+		cfg.GPU.RenderNode = opts.RenderNode
 	}
 	if opts.GPUPCI != "" {
 		cfg.GPU.PCIAddr = opts.GPUPCI
@@ -784,6 +825,30 @@ func applyOverrides(ctx context.Context, cfg *vm.VMConfig, opts Opts, prov provi
 	return nil
 }
 
+// validateHelios checks GPU mode helios and its helios-only flags. Helios is
+// a Windows driver wired into the windows template (Secure Boot off, the
+// installer on the extras ISO), so any other template is refused rather than
+// producing a GPU nothing in the guest can drive.
+func validateHelios(cfg *vm.VMConfig, opts Opts) error {
+	if cfg.GPU.Mode != vm.GPUHelios {
+		return fmt.Errorf("--helios-setup, --helios-bootstrap-vga, --vnc and --render-node apply to --gpu-mode=%s only", vm.GPUHelios)
+	}
+	if cfg.Template != "windows" {
+		return fmt.Errorf("--gpu-mode=%s is a Windows driver and needs --template windows (got %q)", vm.GPUHelios, cfg.Template)
+	}
+	switch {
+	case cfg.Headless:
+		return fmt.Errorf("--gpu-mode=%s renders through egl-headless + VNC already; drop --headless", vm.GPUHelios)
+	case cfg.SPICE != nil:
+		return fmt.Errorf("--gpu-mode=%s shows the guest on VNC, not SPICE; drop --spice-port", vm.GPUHelios)
+	case opts.GLBackend != "", opts.Venus != nil, opts.Pointer != "":
+		return fmt.Errorf("--gpu-gl-backend/--gpu-venus/--pointer do not apply to --gpu-mode=%s (Venus is always on; input is USB HID)", vm.GPUHelios)
+	case cfg.QemuBinary == "":
+		return fmt.Errorf("--gpu-mode=%s needs --qemu-binary pointing at the qemu-helios fork", vm.GPUHelios)
+	}
+	return nil
+}
+
 // validateGPUAccel rejects virtio-GPU acceleration settings that would be
 // silently ignored. gl_backend, venus and host_mem are only read on the
 // GPUVirtio path (the GL branch of the machine builder), so setting them on a
@@ -793,6 +858,9 @@ func applyOverrides(ctx context.Context, cfg *vm.VMConfig, opts Opts, prov provi
 func validateGPUAccel(cfg *vm.VMConfig, opts Opts) error {
 	if err := vm.ValidatePointer(opts.Pointer); err != nil {
 		return err
+	}
+	if cfg.GPU.Mode == vm.GPUHelios || opts.HeliosSetup != "" || opts.VNC != "" || opts.RenderNode != "" || opts.HeliosBootstrapVGA {
+		return validateHelios(cfg, opts)
 	}
 	if cfg.GPU.Mode != vm.GPUVirtio {
 		switch {

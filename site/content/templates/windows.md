@@ -59,6 +59,37 @@ supported: virtio-win ships no ARM64 guest-tools installer and its ARM64
 ([virtio-win#1337](https://github.com/virtio-win/kvm-guest-drivers-windows/issues/1337)).
 OpenSSH is still enabled at first logon on both arches.
 
+## DirectX with Helios (experimental)
+
+On x86_64 Linux hosts, `--gpu-mode=helios` gives the guest hardware-accelerated
+Direct3D 11/12, Vulkan, OpenGL and OpenCL on the host GPU without GPU
+passthrough. It uses the [WinBoat Helios](https://github.com/winboat-org/helios)
+WDDM driver over virtio-gpu + Venus. Helios is pre-release, and D3D12 is limited
+(feature level 11_0 natively). Use it for game testing where passthrough is not
+an option, not as a stand-in for real hardware.
+
+```sh
+vee create wintest --template windows --distro-version win11 \
+  --gpu-mode helios \
+  --helios-setup ./HeliosSetup.exe \
+  --qemu-binary ~/src/helios/qemu-helios/build-helios/qemu-system-x86_64 \
+  --qemu-env LD_LIBRARY_PATH=$R/lib \
+  --qemu-env RENDER_SERVER_EXEC_PATH=$R/libexec/virgl_render_server
+vee start wintest
+vee helios status wintest --wait
+vee helios verify wintest
+vee view wintest        # VNC
+```
+
+Compared to the table above, the VM runs with Secure Boot **off** (Helios is
+test-signed), 16G / 8 CPUs, and an egl-headless display exported over VNC
+instead of SPICE. It needs Helios' QEMU and virglrenderer forks and its
+`HeliosSetup.exe`, which vee installs unattended at first logon and then reboots
+through provisioning. Host setup, the in-guest flow, running tests in the
+desktop session, and troubleshooting are in
+[docs/windows-helios.md](https://github.com/Benehiko/vee/blob/main/docs/windows-helios.md).
+See also [vee helios](../../commands/helios/).
+
 ## Notes
 
 - x86_64: use `vee view mywindows` to open the SPICE console during Windows

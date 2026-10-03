@@ -57,6 +57,8 @@ type BaseMachine struct {
 	memory       string
 	vga          string
 	display      string
+	vnc          string
+	extraEnv     []string
 	headless     bool
 	extraDevices []string
 	disks        []*Disk
@@ -246,6 +248,39 @@ func WithDevice(device string) QemuOptions {
 func WithDisplay(display string) QemuOptions {
 	return func(q *BaseMachine) {
 		q.display = display
+	}
+}
+
+// WithEnv adds KEY=VALUE entries to QEMU's process environment. They are
+// appended after vee's own (inherited environment plus the Linux
+// LD_LIBRARY_PATH augmentation), and for a duplicate key the last entry wins,
+// so these override — e.g. LD_LIBRARY_PATH / RENDER_SERVER_EXEC_PATH pointing
+// a forked QEMU at its paired virglrenderer build.
+func WithEnv(env []string) QemuOptions {
+	return func(q *BaseMachine) {
+		q.extraEnv = append(q.extraEnv, env...)
+	}
+}
+
+// processEnv returns the QEMU process environment: nil (inherit) unless the
+// host or WithEnv needs changes, with WithEnv entries last so they win.
+func (q *BaseMachine) processEnv(binary string) []string {
+	env := qemuEnv(binary)
+	if len(q.extraEnv) == 0 {
+		return env
+	}
+	if env == nil {
+		env = os.Environ()
+	}
+	return append(env, q.extraEnv...)
+}
+
+// WithVNC adds a -vnc server at addr (e.g. "127.0.0.1:0" = TCP 5900). It is
+// independent of -display, so it pairs with egl-headless for GL guests that
+// have no host window.
+func WithVNC(addr string) QemuOptions {
+	return func(q *BaseMachine) {
+		q.vnc = addr
 	}
 }
 
@@ -450,6 +485,9 @@ func (q *BaseMachine) Args() []string {
 	} else if q.display != "" {
 		args = append(args, "-display", q.display)
 	}
+	if q.vnc != "" {
+		args = append(args, "-vnc", q.vnc)
+	}
 
 	if q.rtc != "" {
 		args = append(args, "-rtc", q.rtc)
@@ -544,7 +582,7 @@ func (q *BaseMachine) start(ctx context.Context, detach bool) (*StartResult, err
 	}
 	//nolint:gosec // binary/args are the operator-configured QEMU command for this VM manager, not user shell input.
 	cmd := exec.CommandContext(spawnCtx, binary, args...)
-	cmd.Env = qemuEnv(binary)
+	cmd.Env = q.processEnv(binary)
 
 	if detach {
 		setDetachAttrs(cmd)

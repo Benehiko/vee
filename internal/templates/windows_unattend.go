@@ -403,7 +403,7 @@ try {
 //
 // arm64 guests get guestSetupARM64PS1 instead — the virtiofs chain is not
 // installable there yet.
-func guestSetupPS1(tag string, sshKeys []string) string {
+func guestSetupPS1(tag string, sshKeys []string, helios bool) string {
 	const tmpl = `$ErrorActionPreference = 'Continue'
 $log = "$env:SystemDrive\vee-guest-setup.log"
 function Log($m) { "$([DateTime]::Now.ToString('s')) $m" | Tee-Object -FilePath $log -Append }
@@ -457,6 +457,7 @@ try {
 } catch { Log "OpenSSH enable skipped: $_" }
 
 {{SSHKEYS}}
+{{HELIOS}}
 Log "vee guest setup complete; rebooting to mount virtiofs share"
 Start-Sleep -Seconds 3
 Restart-Computer -Force
@@ -467,7 +468,13 @@ Restart-Computer -Force
 		"{{WINFSP}}", winfspMSI,
 		"{{SSHKEYS}}", windowsAuthorizedKeysPS1(sshKeys),
 	)
-	return r.Replace(tmpl)
+	heliosBlock := ""
+	if helios {
+		heliosBlock = renderHeliosSetupPS1()
+	}
+	// Spliced after the replacer so the Helios block's own placeholders
+	// (already rendered) are not re-scanned.
+	return strings.Replace(r.Replace(tmpl), "{{HELIOS}}", heliosBlock, 1)
 }
 
 // guestSetupARM64PS1 renders the first-logon script for arm64 guests. The
@@ -514,7 +521,7 @@ Log "vee guest setup complete"
 //
 // The merge runs in a container (mounting the virtio-win ISO read-only and
 // running genisoimage) so the host needs no loopback-mount privileges.
-func buildExtrasISO(ctx context.Context, p provider.Provider, outPath, virtioISOPath, autounattend, setupScript, winfspMSIPath string) error {
+func buildExtrasISO(ctx context.Context, p provider.Provider, outPath, virtioISOPath, autounattend, setupScript, winfspMSIPath, heliosSetupPath string) error {
 	runtime, err := findWindowsContainerRuntime()
 	if err != nil {
 		return err
@@ -540,6 +547,12 @@ func buildExtrasISO(ctx context.Context, p provider.Provider, outPath, virtioISO
 		//nolint:gosec // G703: destination is a program-controlled staging dir joined with the constant winfspMSI filename, not user input.
 		if err := os.WriteFile(filepath.Join(stage, winfspMSI), data, 0o600); err != nil {
 			return fmt.Errorf("stage WinFsp MSI: %w", err)
+		}
+	}
+
+	if heliosSetupPath != "" {
+		if err := stageHelios(stage, heliosSetupPath); err != nil {
+			return err
 		}
 	}
 
