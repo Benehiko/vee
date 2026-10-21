@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"go.uber.org/goleak"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 
 	"github.com/Benehiko/vee/internal/cloudinit"
 )
