@@ -126,8 +126,10 @@ func backgroundRefreshCmd(conn backup.SSHConn, db *sql.DB, vmName string) tea.Cm
 			entries = append(entries, e)
 		}
 		select {
-		case <-errCh:
-			return nil // best-effort; ignore refresh errors
+		case err := <-errCh:
+			if err != nil {
+				return nil // best-effort; ignore refresh errors
+			}
 		default:
 		}
 		sort.Slice(entries, func(i, j int) bool {
