@@ -69,7 +69,7 @@ Wipe the old tree first; deleted files linger otherwise. Fallbacks on an old vee
 Linux: containerized, with a named volume for the build cache.
 
 ```sh
-vee ssh <vm> -- sh -c 'docker run --rm -v /home/dev/myrepo:/src -w /src -v gocache:/root/.cache/go-build golang:1.26 go test -count=1 -run "<Test>" ./<pkg>/'
+vee ssh <vm> -- sh -c 'docker run --rm -v /home/dev/myrepo:/src -w /src -v gocache:/root/.cache/go-build golang:1.27 go test -count=1 -run "<Test>" ./<pkg>/'
 ```
 
 Windows: cross-compile on the host, copy, run. No race detector on windows/arm64.

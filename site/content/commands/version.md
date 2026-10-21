@@ -16,7 +16,7 @@ $ vee version
 vee v0.4.0
   commit: be9ed1a
   built:  2026-05-10T19:37:04Z
-  go:     go1.26.1
+  go:     go1.27.3
   os:     linux/amd64
 ```
 
