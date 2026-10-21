@@ -1,6 +1,6 @@
 module github.com/Benehiko/vee
 
-go 1.26.5
+go 1.27.3
 
 require (
 	filippo.io/age v1.3.1

@@ -9,7 +9,9 @@ formatters:
       local-prefixes:
         - github.com/Benehiko/vee
     gofumpt:
-      extra-rules: true
+      extra:
+        group-params: true
+        clothe-returns: true
 
 linters:
   enable:
