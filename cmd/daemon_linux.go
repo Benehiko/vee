@@ -80,7 +80,6 @@ KillMode=mixed
 # background tunnels published with --host are reachable by name rather than
 # only by port. The daemon still runs as the invoking user.
 AmbientCapabilities=CAP_NET_BIND_SERVICE
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 StandardOutput=journal
 StandardError=journal
 
@@ -248,7 +247,8 @@ func installSystemdUnit() error {
 
 	for _, sargs := range [][]string{
 		{"sudo", "systemctl", "daemon-reload"},
-		{"sudo", "systemctl", "enable", "--now", "vee.service"},
+		{"sudo", "systemctl", "enable", "vee.service"},
+		{"sudo", "systemctl", "restart", "vee.service"},
 	} {
 		//nolint:gosec,noctx // fixed systemctl argument list; install step, no ctx in this call chain.
 		out, cmdErr := exec.Command(sargs[0], sargs[1:]...).CombinedOutput()
@@ -260,7 +260,7 @@ func installSystemdUnit() error {
 	}
 
 	fmt.Printf("vee.service installed at %s\n", systemUnitPath)
-	fmt.Println("Service enabled and started. Check status with: systemctl status vee")
+	fmt.Println("Service enabled and restarted. Check status with: systemctl status vee")
 	return nil
 }
 
