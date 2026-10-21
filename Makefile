@@ -180,7 +180,7 @@ licenses:
 	  printf '\n'; \
 	  printf '%s\n' "vee vendors third-party Go modules under vendor/. This file reproduces the"; \
 	  printf '%s\n' "license and copyright notices of those modules, as required by their"; \
-	  printf '%s\n' "respective licenses (MIT, BSD-3-Clause, and Apache-2.0). It is assembled"; \
+	  printf '%s\n' "respective licenses (MIT, MIT-0, BSD-3-Clause, and Apache-2.0). It is assembled"; \
 	  printf '%s\n' "directly from the LICENSE files shipped in each vendored module."; \
 	  printf '\n'; \
 	  printf '%s\n' "It covers only the Go build dependencies. External programs that vee invokes"; \
@@ -192,7 +192,7 @@ licenses:
 	  printf '\n'; \
 	  printf '%s\n' "$$count vendored modules are listed below."; \
 	  printf '\n\n'; \
-	  find vendor \( -name LICENSE -o -name LICENSE.md -o -name COPYING -o -name LICENSE.txt \) | sort | while read -r f; do \
+	  find vendor \( -name LICENSE -o -name LICENSE.md -o -name COPYING -o -name LICENSE.txt \) | LC_ALL=C sort | while read -r f; do \
 	    mod=$$(dirname "$$f" | sed 's|^vendor/||'); \
 	    printf '%s\n' "================================================================================"; \
 	    printf '%s\n' "$$mod"; \
