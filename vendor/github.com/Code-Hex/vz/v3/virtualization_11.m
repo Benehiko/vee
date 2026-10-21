@@ -448,16 +448,33 @@ void *storageDevicesVZVirtualMachineConfiguration(void *config)
  @discussion
     Each file descriptor must a valid.
 */
-void *newVZFileHandleSerialPortAttachment(int readFileDescriptor, int writeFileDescriptor)
+void *newVZFileHandleSerialPortAttachment(int readFileDescriptor, int writeFileDescriptor, void **error)
 {
     if (@available(macOS 11, *)) {
         VZFileHandleSerialPortAttachment *ret;
         @autoreleasepool {
-            NSFileHandle *fileHandleForReading = [[NSFileHandle alloc] initWithFileDescriptor:readFileDescriptor];
-            NSFileHandle *fileHandleForWriting = [[NSFileHandle alloc] initWithFileDescriptor:writeFileDescriptor];
+            // The Go caller reads and releases errors after this pool drains.
+            NSFileHandle *fileHandleForReading = newFileHandleDupFd(readFileDescriptor, error);
+            if (fileHandleForReading == nil) {
+                if (error != nil) {
+                    [(NSError *)*error retain];
+                }
+                return nil;
+            }
+
+            NSFileHandle *fileHandleForWriting = newFileHandleDupFd(writeFileDescriptor, error);
+            if (fileHandleForWriting == nil) {
+                [fileHandleForReading release];
+                if (error != nil) {
+                    [(NSError *)*error retain];
+                }
+                return nil;
+            }
             ret = [[VZFileHandleSerialPortAttachment alloc]
                 initWithFileHandleForReading:fileHandleForReading
                         fileHandleForWriting:fileHandleForWriting];
+            [fileHandleForReading release];
+            [fileHandleForWriting release];
         }
         return ret;
     }
@@ -602,12 +619,15 @@ void *newVZNATNetworkDeviceAttachment()
  @see VZNetworkDeviceConfiguration
  @see VZVirtioNetworkDeviceConfiguration
  */
-void *newVZFileHandleNetworkDeviceAttachment(int fileDescriptor)
+void *newVZFileHandleNetworkDeviceAttachment(int fileDescriptor, void **error)
 {
     if (@available(macOS 11, *)) {
         VZFileHandleNetworkDeviceAttachment *ret;
         @autoreleasepool {
-            NSFileHandle *fileHandle = [[NSFileHandle alloc] initWithFileDescriptor:fileDescriptor];
+            NSFileHandle *fileHandle = newFileHandleDupFd(fileDescriptor, error);
+            if (fileHandle == nil) {
+                return nil;
+            }
             ret = [[VZFileHandleNetworkDeviceAttachment alloc] initWithFileHandle:fileHandle];
         }
         return ret;
@@ -902,6 +922,18 @@ void setNetworkDevicesVZMACAddress(void *config, void *macAddress)
     if (@available(macOS 11, *)) {
         [(VZNetworkDeviceConfiguration *)config setMACAddress:[(VZMACAddress *)macAddress copy]];
         return;
+    }
+
+    RAISE_UNSUPPORTED_MACOS_EXCEPTION();
+}
+
+/*!
+ @abstract The media access control address of the device.
+ */
+void *getNetworkDevicesVZMACAddress(void *config)
+{
+    if (@available(macOS 11, *)) {
+        return [[(VZNetworkDeviceConfiguration *)config MACAddress] retain];
     }
 
     RAISE_UNSUPPORTED_MACOS_EXCEPTION();

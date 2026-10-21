@@ -2,7 +2,7 @@ package vz
 
 /*
 #cgo darwin CFLAGS: -mmacosx-version-min=11 -x objective-c -fno-objc-arc
-#cgo darwin LDFLAGS: -lobjc -framework Foundation -framework Virtualization
+#cgo darwin LDFLAGS: -framework Foundation -framework Virtualization
 # include "virtualization_11.h"
 # include "virtualization_13.h"
 */
@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"runtime"
 	"syscall"
 
 	"github.com/Code-Hex/vz/v3/internal/objc"
@@ -192,13 +193,19 @@ func NewFileHandleNetworkDeviceAttachment(file *os.File) (*FileHandleNetworkDevi
 		return nil, err
 	}
 
+	nserrPtr := newNSErrorAsNil()
+
 	attachment := &FileHandleNetworkDeviceAttachment{
 		pointer: objc.NewPointer(
 			C.newVZFileHandleNetworkDeviceAttachment(
 				C.int(file.Fd()),
+				&nserrPtr,
 			),
 		),
 		mtu: 1500, // The default MTU is 1500.
+	}
+	if err := newNSError(nserrPtr); err != nil {
+		return nil, err
 	}
 	objc.SetFinalizer(attachment, func(self *FileHandleNetworkDeviceAttachment) {
 		objc.Release(self)
@@ -314,6 +321,22 @@ func newVirtioNetworkDeviceConfiguration(attachment NetworkDeviceAttachment) *Vi
 
 func (v *VirtioNetworkDeviceConfiguration) SetMACAddress(macAddress *MACAddress) {
 	C.setNetworkDevicesVZMACAddress(objc.Ptr(v), objc.Ptr(macAddress))
+}
+
+// GetMACAddress returns the media access control address of the device.
+func (v *VirtioNetworkDeviceConfiguration) GetMACAddress() *MACAddress {
+	ptr := C.getNetworkDevicesVZMACAddress(objc.Ptr(v))
+	runtime.KeepAlive(v)
+	if ptr == nil {
+		return nil
+	}
+	macAddress := &MACAddress{
+		pointer: objc.NewPointer(ptr),
+	}
+	objc.SetFinalizer(macAddress, func(self *MACAddress) {
+		objc.Release(self)
+	})
+	return macAddress
 }
 
 func (v *VirtioNetworkDeviceConfiguration) Attachment() NetworkDeviceAttachment {

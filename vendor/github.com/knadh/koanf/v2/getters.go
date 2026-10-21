@@ -51,7 +51,7 @@ func (ko *Koanf) Int64s(path string) []int64 {
 			out = append(out, i)
 		}
 		return out
-	case []interface{}:
+	case []any:
 		out = make([]int64, 0, len(v))
 		for _, vi := range v {
 			i, err := toInt64(vi)
@@ -91,7 +91,20 @@ func (ko *Koanf) Int64Map(path string) map[string]int64 {
 		return out
 	}
 
-	mp, ok := o.(map[string]interface{})
+	switch mp := o.(type) {
+	case map[string]int64:
+		for k, v := range mp {
+			out[k] = v
+		}
+		return out
+	case map[string]int:
+		for k, v := range mp {
+			out[k] = int64(v)
+		}
+		return out
+	}
+
+	mp, ok := o.(map[string]any)
 	if !ok {
 		return out
 	}
@@ -158,7 +171,7 @@ func (ko *Koanf) Ints(path string) []int {
 			out = append(out, int(vi))
 		}
 		return out
-	case []interface{}:
+	case []any:
 		out = make([]int, 0, len(v))
 		for _, vi := range v {
 			i, err := toInt64(vi)
@@ -243,7 +256,7 @@ func (ko *Koanf) Float64s(path string) []float64 {
 	switch v := o.(type) {
 	case []float64:
 		return v
-	case []interface{}:
+	case []any:
 		out = make([]float64, 0, len(v))
 		for _, vi := range v {
 			i, err := toFloat64(vi)
@@ -283,7 +296,15 @@ func (ko *Koanf) Float64Map(path string) map[string]float64 {
 		return out
 	}
 
-	mp, ok := o.(map[string]interface{})
+	switch mp := o.(type) {
+	case map[string]float64:
+		for k, v := range mp {
+			out[k] = v
+		}
+		return out
+	}
+
+	mp, ok := o.(map[string]any)
 	if !ok {
 		return out
 	}
@@ -316,14 +337,16 @@ func (ko *Koanf) MustFloat64Map(path string) map[string]float64 {
 }
 
 // Duration returns the time.Duration value of a given key path assuming
-// that the key contains a valid numeric value.
+// that the key contains a numeric value or a duration string.
+// Duration strings support time.ParseDuration units and an additional
+// "d" suffix for 24 hour days.
 func (ko *Koanf) Duration(path string) time.Duration {
 	// Look for a parsable string representation first.
 	if v := ko.Int64(path); v != 0 {
 		return time.Duration(v)
 	}
 
-	v, _ := time.ParseDuration(ko.String(path))
+	v, _ := parseDuration(ko.String(path))
 	return v
 }
 
@@ -402,7 +425,7 @@ func (ko *Koanf) Strings(path string) []string {
 
 	var out []string
 	switch v := o.(type) {
-	case []interface{}:
+	case []any:
 		out = make([]string, 0, len(v))
 		for _, u := range v {
 			if s, ok := u.(string); ok {
@@ -449,7 +472,7 @@ func (ko *Koanf) StringMap(path string) map[string]string {
 		for k, v := range mp {
 			out[k] = v
 		}
-	case map[string]interface{}:
+	case map[string]any:
 		out = make(map[string]string, len(mp))
 		for k, v := range mp {
 			switch s := v.(type) {
@@ -493,9 +516,10 @@ func (ko *Koanf) StringsMap(path string) map[string][]string {
 		for k, v := range mp {
 			out[k] = append(out[k], v...)
 		}
-	case map[string][]interface{}:
+	case map[string][]any:
 		out = make(map[string][]string, len(mp))
 		for k, v := range mp {
+			out[k] = nil
 			for _, v := range v {
 				switch sv := v.(type) {
 				case string:
@@ -505,13 +529,14 @@ func (ko *Koanf) StringsMap(path string) map[string][]string {
 				}
 			}
 		}
-	case map[string]interface{}:
+	case map[string]any:
 		out = make(map[string][]string, len(mp))
 		for k, v := range mp {
 			switch s := v.(type) {
 			case []string:
 				out[k] = append(out[k], s...)
-			case []interface{}:
+			case []any:
+				out[k] = nil
 				for _, v := range s {
 					switch sv := v.(type) {
 					case string:
@@ -578,7 +603,7 @@ func (ko *Koanf) Bools(path string) []bool {
 
 	var out []bool
 	switch v := o.(type) {
-	case []interface{}:
+	case []any:
 		out = make([]bool, 0, len(v))
 		for _, u := range v {
 			b, err := toBool(u)
@@ -589,7 +614,7 @@ func (ko *Koanf) Bools(path string) []bool {
 		}
 		return out
 	case []bool:
-		return out
+		return v
 	}
 	return nil
 }
@@ -616,7 +641,15 @@ func (ko *Koanf) BoolMap(path string) map[string]bool {
 		return out
 	}
 
-	mp, ok := o.(map[string]interface{})
+	switch mp := o.(type) {
+	case map[string]bool:
+		for k, v := range mp {
+			out[k] = v
+		}
+		return out
+	}
+
+	mp, ok := o.(map[string]any)
 	if !ok {
 		return out
 	}

@@ -2,7 +2,7 @@ package vz
 
 /*
 #cgo darwin CFLAGS: -mmacosx-version-min=11 -x objective-c -fno-objc-arc
-#cgo darwin LDFLAGS: -lobjc -framework Foundation -framework Virtualization
+#cgo darwin LDFLAGS: -framework Foundation -framework Virtualization
 # include "virtualization_11.h"
 # include "virtualization_12.h"
 */
@@ -104,6 +104,37 @@ func NewVirtioSoundDeviceHostInputStreamConfiguration() (*VirtioSoundDeviceHostI
 		),
 	}
 	objc.SetFinalizer(config, func(self *VirtioSoundDeviceHostInputStreamConfiguration) {
+		objc.Release(self)
+	})
+	return config, nil
+}
+
+// VirtioSoundDeviceOutputStreamConfiguration defines a PCM output stream whose
+// audio is suppressed by the host. Virtualization keeps the stream clocked while
+// discarding the samples when no sink is configured.
+type VirtioSoundDeviceOutputStreamConfiguration struct {
+	*pointer
+
+	*baseVirtioSoundDeviceStreamConfiguration
+}
+
+var _ VirtioSoundDeviceStreamConfiguration = (*VirtioSoundDeviceOutputStreamConfiguration)(nil)
+
+// NewVirtioSoundDeviceOutputStreamConfiguration creates a new sound device
+// output stream configuration without a host audio sink.
+//
+// This is only supported on macOS 12 and newer, error will be returned
+// on older versions.
+func NewVirtioSoundDeviceOutputStreamConfiguration() (*VirtioSoundDeviceOutputStreamConfiguration, error) {
+	if err := macOSAvailable(12); err != nil {
+		return nil, err
+	}
+	config := &VirtioSoundDeviceOutputStreamConfiguration{
+		pointer: objc.NewPointer(
+			C.newVZVirtioSoundDeviceOutputStreamConfiguration(),
+		),
+	}
+	objc.SetFinalizer(config, func(self *VirtioSoundDeviceOutputStreamConfiguration) {
 		objc.Release(self)
 	})
 	return config, nil

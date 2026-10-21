@@ -2,7 +2,7 @@ package vz
 
 /*
 #cgo darwin CFLAGS: -mmacosx-version-min=11 -x objective-c -fno-objc-arc
-#cgo darwin LDFLAGS: -lobjc -framework Foundation -framework Virtualization
+#cgo darwin LDFLAGS: -framework Foundation -framework Virtualization
 # include "virtualization_11.h"
 */
 import "C"
@@ -49,13 +49,19 @@ func NewFileHandleSerialPortAttachment(read, write *os.File) (*FileHandleSerialP
 		return nil, err
 	}
 
+	nserrPtr := newNSErrorAsNil()
 	attachment := &FileHandleSerialPortAttachment{
 		pointer: objc.NewPointer(
 			C.newVZFileHandleSerialPortAttachment(
 				C.int(read.Fd()),
 				C.int(write.Fd()),
+				&nserrPtr,
 			),
 		),
+	}
+	if err := newNSError(nserrPtr); err != nil {
+		objc.Release(objc.NewPointer(nserrPtr))
+		return nil, err
 	}
 	objc.SetFinalizer(attachment, func(self *FileHandleSerialPortAttachment) {
 		objc.Release(self)
